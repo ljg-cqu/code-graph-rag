@@ -497,7 +497,7 @@ NODE_SCHEMAS: tuple[NodeSchema, ...] = (
     ),
     NodeSchema(
         NodeLabel.MODIFIER,
-        "{qualified_name: string, name: string, path: string, absolute_path: string, start_line: int, end_line: int}",
+        "{qualified_name: string, name: string, parameters: list[string], path: string, absolute_path: string, start_line: int, end_line: int}",
     ),
     NodeSchema(
         NodeLabel.STATE_VARIABLE,
@@ -534,7 +534,7 @@ RELATIONSHIP_SCHEMAS: tuple[RelationshipSchema, ...] = (
     RelationshipSchema(
         (NodeLabel.MODULE,),
         RelationshipType.DEFINES,
-        (NodeLabel.CLASS, NodeLabel.FUNCTION),
+        (NodeLabel.CLASS, NodeLabel.FUNCTION, NodeLabel.INTERFACE, NodeLabel.ENUM, NodeLabel.TYPE, NodeLabel.UNION),
     ),
     RelationshipSchema(
         (NodeLabel.CLASS,),
@@ -549,7 +549,7 @@ RELATIONSHIP_SCHEMAS: tuple[RelationshipSchema, ...] = (
     RelationshipSchema(
         (NodeLabel.MODULE,),
         RelationshipType.EXPORTS,
-        (NodeLabel.CLASS, NodeLabel.FUNCTION),
+        (NodeLabel.CLASS, NodeLabel.FUNCTION, NodeLabel.INTERFACE, NodeLabel.ENUM, NodeLabel.TYPE, NodeLabel.UNION),
     ),
     RelationshipSchema(
         (NodeLabel.MODULE,),
@@ -562,12 +562,12 @@ RELATIONSHIP_SCHEMAS: tuple[RelationshipSchema, ...] = (
         (NodeLabel.MODULE_IMPLEMENTATION,),
     ),
     RelationshipSchema(
-        (NodeLabel.CLASS,),
+        (NodeLabel.CLASS, NodeLabel.CONTRACT,),
         RelationshipType.INHERITS,
-        (NodeLabel.CLASS,),
+        (NodeLabel.CLASS, NodeLabel.CONTRACT,),
     ),
     RelationshipSchema(
-        (NodeLabel.CLASS,),
+        (NodeLabel.CLASS, NodeLabel.CONTRACT,),
         RelationshipType.IMPLEMENTS,
         (NodeLabel.INTERFACE,),
     ),
