@@ -13,6 +13,8 @@ from codebase_rag.parsers.handlers.php import PhpHandler
 from codebase_rag.parsers.handlers.python import PythonHandler
 from codebase_rag.parsers.handlers.rust import RustHandler
 
+from codebase_rag.parsers.handlers.solidity import SolidityHandler
+
 
 class TestGetHandler:
     def test_returns_jsts_handler_for_javascript(self) -> None:
@@ -52,6 +54,10 @@ class TestGetHandler:
         handler = get_handler(SupportedLanguage.PHP)
         assert isinstance(handler, PhpHandler)
 
+    def test_returns_solidity_handler_for_solidity(self) -> None:
+        handler = get_handler(SupportedLanguage.SOLIDITY)
+        assert isinstance(handler, SolidityHandler)
+
     def test_returns_base_handler_for_c(self) -> None:
         handler = get_handler(SupportedLanguage.C)
         assert isinstance(handler, BaseLanguageHandler)
@@ -90,6 +96,7 @@ class TestHandlerProtocol:
             SupportedLanguage.GO,
             SupportedLanguage.PHP,
             SupportedLanguage.C,
+            SupportedLanguage.SOLIDITY,
         ],
     )
     def test_handler_has_all_protocol_methods(
@@ -122,6 +129,7 @@ class TestHandlerProtocol:
             SupportedLanguage.PYTHON,
             SupportedLanguage.PHP,
             SupportedLanguage.C,
+            SupportedLanguage.SOLIDITY,
         ],
     )
     def test_handler_methods_are_callable(self, language: SupportedLanguage) -> None:
@@ -162,3 +170,6 @@ class TestHandlerInheritance:
 
     def test_php_handler_extends_base(self) -> None:
         assert issubclass(PhpHandler, BaseLanguageHandler)
+
+    def test_solidity_handler_extends_base(self) -> None:
+        assert issubclass(SolidityHandler, BaseLanguageHandler)

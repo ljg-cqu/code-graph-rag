@@ -482,6 +482,31 @@ NODE_SCHEMAS: tuple[NodeSchema, ...] = (
         "{qualified_name: string, name: string, path: string, absolute_path: string, implements_module: string}",
     ),
     NodeSchema(NodeLabel.EXTERNAL_PACKAGE, "{name: string, version_spec: string}"),
+    # Solidity-specific node schemas
+    NodeSchema(
+        NodeLabel.CONTRACT,
+        "{qualified_name: string, name: string, is_abstract: bool, path: string, absolute_path: string, start_line: int, end_line: int}",
+    ),
+    NodeSchema(
+        NodeLabel.LIBRARY,
+        "{qualified_name: string, name: string, path: string, absolute_path: string, start_line: int, end_line: int}",
+    ),
+    NodeSchema(
+        NodeLabel.EVENT,
+        "{qualified_name: string, name: string, parameters: list[string], is_anonymous: bool, path: string, absolute_path: string, start_line: int, end_line: int}",
+    ),
+    NodeSchema(
+        NodeLabel.MODIFIER,
+        "{qualified_name: string, name: string, path: string, absolute_path: string, start_line: int, end_line: int}",
+    ),
+    NodeSchema(
+        NodeLabel.STATE_VARIABLE,
+        "{qualified_name: string, name: string, type: string, visibility: string, is_constant: bool, is_immutable: bool, path: string, absolute_path: string, start_line: int, end_line: int}",
+    ),
+    NodeSchema(
+        NodeLabel.CUSTOM_ERROR,
+        "{qualified_name: string, name: string, parameters: list[string], path: string, absolute_path: string, start_line: int, end_line: int}",
+    ),
 )
 
 
@@ -565,5 +590,66 @@ RELATIONSHIP_SCHEMAS: tuple[RelationshipSchema, ...] = (
         (NodeLabel.FUNCTION, NodeLabel.METHOD),
         RelationshipType.CALLS,
         (NodeLabel.FUNCTION, NodeLabel.METHOD),
+    ),
+    # Solidity-specific relationship schemas
+    RelationshipSchema(
+        (NodeLabel.FUNCTION, NodeLabel.METHOD),
+        RelationshipType.EMITS,
+        (NodeLabel.EVENT,),
+    ),
+    RelationshipSchema(
+        (NodeLabel.FUNCTION, NodeLabel.METHOD),
+        RelationshipType.MODIFIED_BY,
+        (NodeLabel.MODIFIER,),
+    ),
+    RelationshipSchema(
+        (NodeLabel.CONTRACT,),
+        RelationshipType.USES_LIBRARY,
+        (NodeLabel.LIBRARY,),
+    ),
+    RelationshipSchema(
+        (NodeLabel.FUNCTION, NodeLabel.METHOD),
+        RelationshipType.CALLS_EXTERNAL,
+        (NodeLabel.FUNCTION, NodeLabel.METHOD),
+    ),
+    RelationshipSchema(
+        (NodeLabel.CONTRACT,),
+        RelationshipType.DEFINES_EVENT,
+        (NodeLabel.EVENT,),
+    ),
+    RelationshipSchema(
+        (NodeLabel.CONTRACT,),
+        RelationshipType.DEFINES_MODIFIER,
+        (NodeLabel.MODIFIER,),
+    ),
+    RelationshipSchema(
+        (NodeLabel.CONTRACT,),
+        RelationshipType.DEFINES_STATE,
+        (NodeLabel.STATE_VARIABLE,),
+    ),
+    RelationshipSchema(
+        (NodeLabel.FUNCTION, NodeLabel.METHOD),
+        RelationshipType.CALLS_DELEGATE,
+        (NodeLabel.FUNCTION, NodeLabel.METHOD),
+    ),
+    RelationshipSchema(
+        (NodeLabel.FUNCTION, NodeLabel.METHOD),
+        RelationshipType.CALLS_STATIC,
+        (NodeLabel.FUNCTION, NodeLabel.METHOD),
+    ),
+    RelationshipSchema(
+        (NodeLabel.FUNCTION, NodeLabel.METHOD),
+        RelationshipType.READS_STATE,
+        (NodeLabel.STATE_VARIABLE,),
+    ),
+    RelationshipSchema(
+        (NodeLabel.FUNCTION, NodeLabel.METHOD),
+        RelationshipType.WRITES_STATE,
+        (NodeLabel.STATE_VARIABLE,),
+    ),
+    RelationshipSchema(
+        (NodeLabel.FUNCTION, NodeLabel.METHOD),
+        RelationshipType.REVERTS_WITH,
+        (NodeLabel.CUSTOM_ERROR,),
     ),
 )

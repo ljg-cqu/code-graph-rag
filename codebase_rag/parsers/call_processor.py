@@ -220,6 +220,15 @@ class CallProcessor:
                         return str(field_node.text.decode(cs.ENCODING_UTF8))
                 case cs.TS_PARENTHESIZED_EXPRESSION:
                     return self._get_iife_target_name(func_child)
+                case "expression":
+                    # Handle Solidity's expression wrapper node
+                    for expr_child in func_child.children:
+                        if expr_child.type in (
+                            cs.TS_IDENTIFIER,
+                            cs.TS_MEMBER_EXPRESSION,
+                        ):
+                            if expr_child.text is not None:
+                                return str(expr_child.text.decode(cs.ENCODING_UTF8))
 
         match call_node.type:
             case (
@@ -240,6 +249,14 @@ class CallProcessor:
                         return method_name
                     object_text = str(object_node.text.decode(cs.ENCODING_UTF8))
                     return f"{object_text}{cs.SEPARATOR_DOT}{method_name}"
+            case cs.TS_SOL_EMIT_STATEMENT:
+                # Handle Solidity emit_statement
+                for child in call_node.children:
+                    if child.type == "expression":
+                        for expr_child in child.children:
+                            if expr_child.type == cs.TS_IDENTIFIER:
+                                if expr_child.text is not None:
+                                    return str(expr_child.text.decode(cs.ENCODING_UTF8))
 
         if name_node := call_node.child_by_field_name(cs.FIELD_NAME):
             if name_node.text is not None:

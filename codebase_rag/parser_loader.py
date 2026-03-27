@@ -160,6 +160,12 @@ def _import_language_loaders() -> dict[cs.SupportedLanguage, LanguageLoader]:
             cs.LANG_ATTR_PHP,
             cs.SupportedLanguage.PHP,
         ),
+        LanguageImport(
+            cs.SupportedLanguage.SOLIDITY,
+            cs.TreeSitterModule.SOLIDITY,
+            cs.QUERY_LANGUAGE,
+            cs.SupportedLanguage.SOLIDITY,
+        ),
     ]
 
     loaders: dict[cs.SupportedLanguage, LanguageLoader] = {

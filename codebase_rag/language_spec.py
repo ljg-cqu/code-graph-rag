@@ -108,6 +108,41 @@ def _php_file_to_module(file_path: Path, repo_root: Path) -> list[str]:
         return []
 
 
+def _solidity_get_name(node: Node) -> str | None:
+    """Extract name from Solidity AST node."""
+    name_node = node.child_by_field_name(cs.FIELD_NAME)
+    if name_node and name_node.text:
+        return name_node.text.decode(cs.ENCODING_UTF8)
+
+    # Handle constructor/fallback/receive name
+    if node.type == cs.TS_SOL_CONSTRUCTOR_DEFINITION:
+        return "constructor"
+    if node.type == cs.TS_SOL_FALLBACK_RECEIVE_DEFINITION:
+        # Determine receive vs fallback based on payable modifier presence
+        # receive() has payable modifier, fallback() does not
+        for child in node.children:
+            if child.type == cs.TS_SOL_STATE_MUTABILITY:
+                text = child.text.decode(cs.ENCODING_UTF8) if child.text else ""
+                if text == "payable":
+                    return "receive"
+        return "fallback"
+
+    return None
+
+
+def _solidity_file_to_module(file_path: Path, repo_root: Path) -> list[str]:
+    """Convert Solidity file path to module parts."""
+    try:
+        rel = file_path.relative_to(repo_root)
+        parts = list(rel.with_suffix("").parts)
+        # Handle common src/ or contracts/ prefixes
+        if parts and parts[0] in ("src", "contracts", "script", "test"):
+            parts = parts[1:]
+        return parts
+    except ValueError:
+        return []
+
+
 def _c_unwrap_declarator(declarator: Node | None) -> Node | None:
     while declarator and declarator.type == cs.CppNodeType.POINTER_DECLARATOR:
         declarator = declarator.child_by_field_name(cs.FIELD_DECLARATOR)
@@ -228,6 +263,13 @@ PHP_FQN_SPEC = FQNSpec(
     file_to_module_parts=_php_file_to_module,
 )
 
+SOLIDITY_FQN_SPEC = FQNSpec(
+    scope_node_types=frozenset(cs.FQN_SOL_SCOPE_TYPES),
+    function_node_types=frozenset(cs.FQN_SOL_FUNCTION_TYPES),
+    get_name=_solidity_get_name,
+    file_to_module_parts=_solidity_file_to_module,
+)
+
 LANGUAGE_FQN_SPECS: dict[cs.SupportedLanguage, FQNSpec] = {
     cs.SupportedLanguage.PYTHON: PYTHON_FQN_SPEC,
     cs.SupportedLanguage.JS: JS_FQN_SPEC,
@@ -241,6 +283,7 @@ LANGUAGE_FQN_SPECS: dict[cs.SupportedLanguage, FQNSpec] = {
     cs.SupportedLanguage.SCALA: SCALA_FQN_SPEC,
     cs.SupportedLanguage.CSHARP: CSHARP_FQN_SPEC,
     cs.SupportedLanguage.PHP: PHP_FQN_SPEC,
+    cs.SupportedLanguage.SOLIDITY: SOLIDITY_FQN_SPEC,
 }
 
 
@@ -505,6 +548,37 @@ LANGUAGE_SPECS: dict[cs.SupportedLanguage, LanguageSpec] = {
         module_node_types=cs.SPEC_LUA_MODULE_TYPES,
         call_node_types=cs.SPEC_LUA_CALL_TYPES,
         import_node_types=cs.SPEC_LUA_IMPORT_TYPES,
+    ),
+    cs.SupportedLanguage.SOLIDITY: LanguageSpec(
+        language=cs.SupportedLanguage.SOLIDITY,
+        file_extensions=cs.SOLIDITY_EXTENSIONS,
+        function_node_types=cs.SPEC_SOL_FUNCTION_TYPES,
+        class_node_types=cs.SPEC_SOL_CLASS_TYPES,
+        module_node_types=cs.SPEC_SOL_MODULE_TYPES,
+        call_node_types=cs.SPEC_SOL_CALL_TYPES,
+        import_node_types=cs.SPEC_SOL_IMPORT_TYPES,
+        import_from_node_types=cs.SPEC_SOL_IMPORT_FROM_TYPES,
+        package_indicators=cs.SPEC_SOL_PACKAGE_INDICATORS,
+        function_query="""
+        (function_definition
+            name: (identifier) @name) @function
+        (modifier_definition
+            name: (identifier) @name) @function
+        (constructor_definition) @function
+        (fallback_receive_definition) @function
+        """,
+        class_query="""
+        (contract_declaration
+            name: (identifier) @name) @class
+        (interface_declaration
+            name: (identifier) @name) @class
+        (library_declaration
+            name: (identifier) @name) @class
+        """,
+        call_query="""
+        (call_expression) @call
+        (emit_statement) @call
+        """,
     ),
 }
 

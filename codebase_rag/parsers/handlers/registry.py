@@ -12,6 +12,7 @@ from .php import PhpHandler
 from .protocol import LanguageHandler
 from .python import PythonHandler
 from .rust import RustHandler
+from .solidity import SolidityHandler
 
 _HANDLERS: dict[SupportedLanguage, type[BaseLanguageHandler]] = {
     SupportedLanguage.PYTHON: PythonHandler,
@@ -22,6 +23,7 @@ _HANDLERS: dict[SupportedLanguage, type[BaseLanguageHandler]] = {
     SupportedLanguage.JAVA: JavaHandler,
     SupportedLanguage.LUA: LuaHandler,
     SupportedLanguage.PHP: PhpHandler,
+    SupportedLanguage.SOLIDITY: SolidityHandler,
 }
 
 _DEFAULT_HANDLER = BaseLanguageHandler

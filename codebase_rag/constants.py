@@ -93,6 +93,7 @@ EXT_C = ".c"
 EXT_CS = ".cs"
 EXT_PHP = ".php"
 EXT_LUA = ".lua"
+EXT_SOL = ".sol"
 
 # (H) File extension tuples by language
 PY_EXTENSIONS = (EXT_PY,)
@@ -118,6 +119,7 @@ CPP_EXTENSIONS = (
 CS_EXTENSIONS = (EXT_CS,)
 PHP_EXTENSIONS = (EXT_PHP,)
 LUA_EXTENSIONS = (EXT_LUA,)
+SOLIDITY_EXTENSIONS = (EXT_SOL,)
 
 # (H) Package indicator files
 PKG_INIT_PY = "__init__.py"
@@ -126,6 +128,10 @@ PKG_CMAKE_LISTS = "CMakeLists.txt"
 PKG_MAKEFILE = "Makefile"
 PKG_VCXPROJ_GLOB = "*.vcxproj"
 PKG_CONANFILE = "conanfile.txt"
+PKG_FOUNDRY_TOML = "foundry.toml"
+PKG_HARDHAT_CONFIG_JS = "hardhat.config.js"
+PKG_HARDHAT_CONFIG_TS = "hardhat.config.ts"
+PKG_REMAPPINGS_TXT = "remappings.txt"
 
 DEFAULT_REGION = "us-central1"
 DEFAULT_MODEL = "llama3.2"
@@ -357,6 +363,12 @@ class NodeLabel(StrEnum):
     MODULE_INTERFACE = "ModuleInterface"
     MODULE_IMPLEMENTATION = "ModuleImplementation"
     EXTERNAL_PACKAGE = "ExternalPackage"
+    CONTRACT = "Contract"
+    LIBRARY = "Library"
+    EVENT = "Event"
+    MODIFIER = "Modifier"
+    STATE_VARIABLE = "StateVariable"
+    CUSTOM_ERROR = "CustomError"
 
 
 _NODE_LABEL_UNIQUE_KEYS: dict[NodeLabel, UniqueKeyType] = {
@@ -375,6 +387,12 @@ _NODE_LABEL_UNIQUE_KEYS: dict[NodeLabel, UniqueKeyType] = {
     NodeLabel.MODULE_INTERFACE: UniqueKeyType.QUALIFIED_NAME,
     NodeLabel.MODULE_IMPLEMENTATION: UniqueKeyType.QUALIFIED_NAME,
     NodeLabel.EXTERNAL_PACKAGE: UniqueKeyType.NAME,
+    NodeLabel.CONTRACT: UniqueKeyType.QUALIFIED_NAME,
+    NodeLabel.LIBRARY: UniqueKeyType.QUALIFIED_NAME,
+    NodeLabel.EVENT: UniqueKeyType.QUALIFIED_NAME,
+    NodeLabel.MODIFIER: UniqueKeyType.QUALIFIED_NAME,
+    NodeLabel.STATE_VARIABLE: UniqueKeyType.QUALIFIED_NAME,
+    NodeLabel.CUSTOM_ERROR: UniqueKeyType.QUALIFIED_NAME,
 }
 
 _missing_keys = set(NodeLabel) - set(_NODE_LABEL_UNIQUE_KEYS.keys())
@@ -401,6 +419,19 @@ class RelationshipType(StrEnum):
     OVERRIDES = "OVERRIDES"
     CALLS = "CALLS"
     DEPENDS_ON_EXTERNAL = "DEPENDS_ON_EXTERNAL"
+    # Solidity-specific relationships
+    EMITS = "EMITS"
+    MODIFIED_BY = "MODIFIED_BY"
+    USES_LIBRARY = "USES_LIBRARY"
+    CALLS_EXTERNAL = "CALLS_EXTERNAL"
+    DEFINES_EVENT = "DEFINES_EVENT"
+    DEFINES_MODIFIER = "DEFINES_MODIFIER"
+    DEFINES_STATE = "DEFINES_STATE"
+    CALLS_DELEGATE = "CALLS_DELEGATE"
+    CALLS_STATIC = "CALLS_STATIC"
+    READS_STATE = "READS_STATE"
+    WRITES_STATE = "WRITES_STATE"
+    REVERTS_WITH = "REVERTS_WITH"
 
 
 NODE_PROJECT = NodeLabel.PROJECT
@@ -470,6 +501,7 @@ class SupportedLanguage(StrEnum):
     CSHARP = "c-sharp"
     PHP = "php"
     LUA = "lua"
+    SOLIDITY = "solidity"
 
 
 class LanguageStatus(StrEnum):
@@ -543,6 +575,11 @@ LANGUAGE_METADATA: dict[SupportedLanguage, LanguageMetadata] = {
         LanguageStatus.FULL,
         "Classes, interfaces, traits, enums, namespaces, PHP 8 attributes",
         "PHP",
+    ),
+    SupportedLanguage.SOLIDITY: LanguageMetadata(
+        LanguageStatus.FULL,
+        "Contracts, interfaces, libraries, events, modifiers, state variables",
+        "Solidity",
     ),
 }
 
@@ -774,6 +811,7 @@ class TreeSitterModule(StrEnum):
     CPP = "tree_sitter_cpp"
     LUA = "tree_sitter_lua"
     PHP = "tree_sitter_php"
+    SOLIDITY = "tree_sitter_solidity"
 
 
 # (H) Query dict keys
@@ -1813,6 +1851,38 @@ TS_LUA_CHUNK = "chunk"
 TS_LUA_FUNCTION_DECLARATION = "function_declaration"
 TS_LUA_FUNCTION_DEFINITION = "function_definition"
 TS_LUA_FUNCTION_CALL = "function_call"
+
+# (H) Tree-sitter Solidity node types
+TS_SOL_SOURCE_FILE = "source_file"
+TS_SOL_CONTRACT_DECLARATION = "contract_declaration"
+TS_SOL_INTERFACE_DECLARATION = "interface_declaration"
+TS_SOL_LIBRARY_DECLARATION = "library_declaration"
+TS_SOL_FUNCTION_DEFINITION = "function_definition"
+TS_SOL_MODIFIER_DEFINITION = "modifier_definition"
+TS_SOL_EVENT_DEFINITION = "event_definition"
+TS_SOL_STRUCT_DECLARATION = "struct_declaration"
+TS_SOL_ENUM_DECLARATION = "enum_declaration"
+TS_SOL_ERROR_DECLARATION = "error_declaration"
+TS_SOL_STATE_VARIABLE_DECLARATION = "state_variable_declaration"
+TS_SOL_VARIABLE_DECLARATION = "variable_declaration"
+TS_SOL_CALL_EXPRESSION = "call_expression"
+TS_SOL_MEMBER_EXPRESSION = "member_expression"
+TS_SOL_IMPORT_DIRECTIVE = "import_directive"
+TS_SOL_PRAGMA_DIRECTIVE = "pragma_directive"
+TS_SOL_USING_DIRECTIVE = "using_directive"
+TS_SOL_EMIT_STATEMENT = "emit_statement"
+TS_SOL_FALLBACK_RECEIVE_DEFINITION = "fallback_receive_definition"
+TS_SOL_CONSTRUCTOR_DEFINITION = "constructor_definition"
+TS_SOL_USER_DEFINED_TYPE = "user_defined_type"
+TS_SOL_IDENTIFIER = "identifier"
+TS_SOL_MODIFIER_INVOCATION = "modifier_invocation"
+TS_SOL_INHERITANCE_SPECIFIER = "inheritance_specifier"
+TS_SOL_VISIBILITY = "visibility"
+TS_SOL_STATE_MUTABILITY = "state_mutability"
+
+# (H) Solidity field names
+FIELD_VISIBILITY = "visibility"
+FIELD_STATE_MUTABILITY = "state_mutability"
 
 # (H) Tree-sitter C++ node types for language_spec
 TS_CPP_FUNCTION_DEFINITION = "function_definition"
@@ -2916,6 +2986,47 @@ SPEC_LUA_CLASS_TYPES: tuple[str, ...] = ()
 SPEC_LUA_MODULE_TYPES = (TS_LUA_CHUNK,)
 SPEC_LUA_CALL_TYPES = (TS_LUA_FUNCTION_CALL,)
 SPEC_LUA_IMPORT_TYPES = (TS_LUA_FUNCTION_CALL,)
+
+# (H) FQN node type tuples for Solidity
+FQN_SOL_SCOPE_TYPES = (
+    TS_SOL_CONTRACT_DECLARATION,
+    TS_SOL_INTERFACE_DECLARATION,
+    TS_SOL_LIBRARY_DECLARATION,
+    TS_SOL_SOURCE_FILE,
+)
+FQN_SOL_FUNCTION_TYPES = (
+    TS_SOL_FUNCTION_DEFINITION,
+    TS_SOL_MODIFIER_DEFINITION,
+    TS_SOL_FALLBACK_RECEIVE_DEFINITION,
+    TS_SOL_CONSTRUCTOR_DEFINITION,
+)
+
+# (H) LANGUAGE_SPECS node type tuples for Solidity
+SPEC_SOL_FUNCTION_TYPES = (
+    TS_SOL_FUNCTION_DEFINITION,
+    TS_SOL_MODIFIER_DEFINITION,
+    TS_SOL_CONSTRUCTOR_DEFINITION,
+    TS_SOL_FALLBACK_RECEIVE_DEFINITION,
+)
+SPEC_SOL_CLASS_TYPES = (
+    TS_SOL_CONTRACT_DECLARATION,
+    TS_SOL_INTERFACE_DECLARATION,
+    TS_SOL_LIBRARY_DECLARATION,
+)
+SPEC_SOL_MODULE_TYPES = (TS_SOL_SOURCE_FILE,)
+SPEC_SOL_CALL_TYPES = (
+    TS_SOL_CALL_EXPRESSION,
+    TS_SOL_MEMBER_EXPRESSION,
+    TS_SOL_EMIT_STATEMENT,
+)
+SPEC_SOL_IMPORT_TYPES = (TS_SOL_IMPORT_DIRECTIVE,)
+SPEC_SOL_IMPORT_FROM_TYPES = SPEC_SOL_IMPORT_TYPES
+SPEC_SOL_PACKAGE_INDICATORS = (
+    PKG_FOUNDRY_TOML,
+    PKG_HARDHAT_CONFIG_JS,
+    PKG_HARDHAT_CONFIG_TS,
+    PKG_REMAPPINGS_TXT,
+)
 
 HEALTH_CHECK_DOCKER_RUNNING = "Docker daemon is running"
 HEALTH_CHECK_DOCKER_NOT_RUNNING = "Docker daemon is not running"
