@@ -149,7 +149,7 @@ class OpenAIProvider(ModelProvider):
         self.validate_config()
 
         provider = PydanticOpenAIProvider(api_key=self.api_key, base_url=self.endpoint)
-        return OpenAIResponsesModel(model_id, provider=provider)
+        return OpenAIChatModel(model_id, provider=provider)
 
 
 class OllamaProvider(ModelProvider):
