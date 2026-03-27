@@ -493,7 +493,7 @@ NODE_SCHEMAS: tuple[NodeSchema, ...] = (
     ),
     NodeSchema(
         NodeLabel.EVENT,
-        "{qualified_name: string, name: string, parameters: list[string], is_anonymous: bool, path: string, absolute_path: string, start_line: int, end_line: int}",
+        "{qualified_name: string, name: string, parameters: list[string], is_anonymous: bool, indexed_count: int, path: string, absolute_path: string, start_line: int, end_line: int}",
     ),
     NodeSchema(
         NodeLabel.MODIFIER,
@@ -501,7 +501,7 @@ NODE_SCHEMAS: tuple[NodeSchema, ...] = (
     ),
     NodeSchema(
         NodeLabel.STATE_VARIABLE,
-        "{qualified_name: string, name: string, type: string, visibility: string, is_constant: bool, is_immutable: bool, path: string, absolute_path: string, start_line: int, end_line: int}",
+        "{qualified_name: string, name: string, type: string, visibility: string, is_constant: bool, is_immutable: bool, is_mapped: bool, path: string, absolute_path: string, start_line: int, end_line: int}",
     ),
     NodeSchema(
         NodeLabel.CUSTOM_ERROR,
