@@ -1,3 +1,15 @@
+"""Shell command execution with security restrictions.
+
+This module provides safe shell command execution using asyncio subprocess.
+Commands are validated against an allowlist and dangerous patterns are blocked.
+
+Limitations:
+- Shell syntax (redirects, subshells) is NOT supported because we use
+  create_subprocess_exec() which directly executes binaries without a shell.
+- Redirects like '2>/dev/null', '>', '>>', etc. are rejected with an error.
+- Subshell patterns like '$()' and backticks are blocked.
+- Only commands in the allowlist can be executed.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -199,6 +211,21 @@ def _is_dangerous_command(cmd_parts: list[str], full_segment: str) -> tuple[bool
 
 
 def _validate_segment(segment: str, available_commands: str) -> str | None:
+    """Validate a command segment for security and compatibility.
+
+    Checks that the command:
+    - Has valid shell syntax
+    - Is in the allowlist
+    - Does not contain redirect operators (not supported by create_subprocess_exec)
+    - Does not match dangerous patterns
+
+    Args:
+        segment: A single command segment (not a pipeline)
+        available_commands: Human-readable list of allowed commands
+
+    Returns:
+        None if valid, error message string if invalid.
+    """
     try:
         cmd_parts = shlex.split(segment)
     except ValueError:
@@ -231,6 +258,17 @@ def _validate_segment(segment: str, available_commands: str) -> str | None:
 
 
 def _has_redirect_operators(parts: list[str]) -> bool:
+    """Check if command parts contain shell redirect operators.
+
+    Detects both basic operators (> >> < <<) and file descriptor redirects
+    like 2>/dev/null, 2>&1, &>, 1>&2, etc.
+
+    Args:
+        parts: List of command parts from shlex.split()
+
+    Returns:
+        True if any redirect operator is found, False otherwise.
+    """
     # Check for exact redirect operators (> >> < <<)
     if any(p in cs.SHELL_REDIRECT_OPERATORS for p in parts):
         return True

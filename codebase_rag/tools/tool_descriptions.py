@@ -40,7 +40,9 @@ FILE_WRITER = (
 
 SHELL_COMMAND = (
     "Executes shell commands from allowlist. "
-    "Read-only commands run without approval; write operations require user confirmation."
+    "Read-only commands run without approval; write operations require user confirmation. "
+    "IMPORTANT: Shell redirect operators (> >> < << 2>/dev/null 2>&1 etc.) are NOT supported "
+    "because direct process execution cannot interpret shell syntax."
 )
 
 CODE_RETRIEVAL = (
