@@ -86,6 +86,9 @@ app_context = AppContext()
 
 
 def init_session_log(project_root: Path) -> Path:
+    # If project_root is a file, use its parent directory for .tmp
+    if project_root.is_file():
+        project_root = project_root.parent
     log_dir = project_root / cs.TMP_DIR
     log_dir.mkdir(exist_ok=True)
     app_context.session.log_file = (
