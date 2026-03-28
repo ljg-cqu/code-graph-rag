@@ -260,6 +260,22 @@ class AppConfig(BaseSettings):
     QDRANT_RETRY_BASE_DELAY: float = Field(default=0.5, gt=0)
     QDRANT_URI: str | None = None
     QDRANT_BATCH_SIZE: int = Field(default=50, gt=0)
+
+    # Vector backend selection
+    VECTOR_STORE_BACKEND: str = "memgraph"  # Options: "memgraph" (default), "qdrant"
+
+    # Memgraph native vector settings
+    MEMGRAPH_VECTOR_INDEX_NAME: str = "code_embeddings"
+    MEMGRAPH_VECTOR_DIM: int = 768  # Must match embedding model
+    MEMGRAPH_VECTOR_CAPACITY: int = 100000  # REQUIRED - estimate ~2x function count
+    MEMGRAPH_VECTOR_METRIC: str = "cos"  # Options: l2sq, cos, ip, pearson
+    MEMGRAPH_VECTOR_SCALAR_KIND: str = "f32"  # Options: f32, f64, f16, bf16, f8
+
+    # Unified vector settings
+    VECTOR_SEARCH_TOP_K: int = 5
+    VECTOR_EMBEDDING_BATCH_SIZE: int = 50
+    VECTOR_MIN_SIMILARITY: float = 0.0
+
     EMBEDDING_MAX_LENGTH: int = 512
     EMBEDDING_PROGRESS_INTERVAL: int = 10
 

@@ -28,7 +28,9 @@ def semantic_code_search(query: str, top_k: int = 5) -> list[SemanticSearchResul
 
         query_embedding = embed_code(query)
 
-        search_results = search_embeddings(query_embedding, top_k=top_k)
+        # Use unified top_k setting if not specified
+        effective_top_k = top_k if top_k > 0 else settings.VECTOR_SEARCH_TOP_K
+        search_results = search_embeddings(query_embedding, top_k=effective_top_k)
 
         if not search_results:
             logger.info(ls.SEMANTIC_NO_MATCH.format(query=query))

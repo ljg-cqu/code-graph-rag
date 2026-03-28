@@ -585,7 +585,7 @@ class GraphUpdater:
             embedded_count = 0
             expected_ids: set[int] = set()
             batch_buffer: list[tuple[int, list[float], str]] = []
-            batch_size = settings.QDRANT_BATCH_SIZE
+            batch_size = settings.VECTOR_EMBEDDING_BATCH_SIZE
 
             for row in results:
                 parsed = self._parse_embedding_result(row)

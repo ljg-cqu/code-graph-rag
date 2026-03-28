@@ -712,3 +712,16 @@ MODEL_CURRENT = "Current model: {model}"
 # (H) Progress bar logs
 PROGRESS_INDEXING_LABEL = "[bold blue]Indexing files..."
 PROGRESS_FILES_PROCESSED = "{count} processed"
+
+# (H) Vector backend logs
+MG_VECTOR_INIT = "Initializing Memgraph vector indexes for: {index}"
+MG_VECTOR_INDEX_CREATED = "Created vector index '{index}' for {label} nodes (dim={dim}, capacity={capacity})"
+MG_VECTOR_INDEX_EXISTS = "Vector index '{index}' already exists"
+MG_VECTOR_INDEX_FAILED = "Failed to create vector index '{index}': {error}"
+MG_VECTOR_INDEX_INFO = "Vector index info: {info}"
+MG_VECTOR_CLOSED = "Closed Memgraph vector backend connection"
+QDRANT_COLLECTION_CREATED = "Created Qdrant collection '{collection}' with {dim} dimensions"
+QDRANT_BACKEND_READY = "Qdrant backend ready with collection '{collection}'"
+QDRANT_CLIENT_CLOSED = "Closed Qdrant client connection"
+VECTOR_DELETE_FAILED = "Failed to delete vector embeddings: {error}"
+VECTOR_BACKEND_SELECTED = "Using vector backend: {backend}"
