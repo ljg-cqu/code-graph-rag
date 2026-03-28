@@ -440,7 +440,7 @@ class MCPToolsRegistry:
             parsers=self.parsers,
             queries=self.queries,
         )
-        updater.run()
+        updater.run(force=True)  # Force reindex after clearing project
 
         return cs.MCP_INDEX_SUCCESS_PROJECT.format(
             path=self.project_root, project_name=project_name

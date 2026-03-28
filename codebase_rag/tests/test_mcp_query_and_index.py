@@ -225,7 +225,7 @@ class TestIndexRepository:
     async def test_index_repository_creates_graph_updater(
         self, mcp_registry: MCPToolsRegistry, temp_project_root: Path
     ) -> None:
-        """Test that GraphUpdater is created with correct parameters."""
+        """Test that GraphUpdater is created with correct parameters and force=True."""
         with patch("codebase_rag.mcp.tools.GraphUpdater") as mock_updater_class:
             mock_updater = MagicMock()
             mock_updater.run.return_value = None
@@ -239,6 +239,8 @@ class TestIndexRepository:
             assert call_kwargs["repo_path"] == Path(temp_project_root)
             assert "parsers" in call_kwargs
             assert "queries" in call_kwargs
+            # Verify force=True is passed since index_repository clears the project
+            mock_updater.run.assert_called_once_with(force=True)
 
     async def test_index_repository_handles_errors(
         self, mcp_registry: MCPToolsRegistry, temp_project_root: Path
@@ -308,14 +310,14 @@ class TestIndexRepository:
     async def test_index_repository_deletes_project_before_updater_runs(
         self, mcp_registry: MCPToolsRegistry, temp_project_root: Path
     ) -> None:
-        """Test that project deletion happens before GraphUpdater runs."""
+        """Test that project deletion happens before GraphUpdater runs with force=True."""
         call_order: list[str] = []
 
         def mock_delete(project_name: str) -> None:
             call_order.append("delete")
 
-        def mock_run() -> None:
-            call_order.append("run")
+        def mock_run(force: bool = False) -> None:
+            call_order.append(f"run(force={force})")
 
         mcp_registry.ingestor.delete_project = MagicMock(side_effect=mock_delete)  # type: ignore[method-assign]
 
@@ -326,7 +328,8 @@ class TestIndexRepository:
 
             await mcp_registry.index_repository()
 
-            assert call_order == ["delete", "run"]
+            # Verify deletion happens before run, and force=True is used
+            assert call_order == ["delete", "run(force=True)"]
 
     async def test_sequential_index_only_clears_own_project_data(
         self, tmp_path: Path
