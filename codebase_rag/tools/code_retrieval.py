@@ -20,6 +20,9 @@ class CodeRetriever:
 
     def __init__(self, project_root: str, ingestor: QueryProtocol):
         self.project_root = Path(project_root).resolve()
+        # If project_root is a file, use its parent directory
+        if self.project_root.is_file():
+            self.project_root = self.project_root.parent
         self.ingestor = ingestor
         logger.info(ls.CODE_RETRIEVER_INIT.format(root=self.project_root))
 

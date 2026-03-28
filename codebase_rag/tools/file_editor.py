@@ -24,6 +24,9 @@ class FileEditor:
 
     def __init__(self, project_root: str = ".") -> None:
         self.project_root = Path(project_root).resolve()
+        # If project_root is a file, use its parent directory
+        if self.project_root.is_file():
+            self.project_root = self.project_root.parent
         self.dmp = diff_match_patch.diff_match_patch()
         self.parsers, _ = load_parsers()
         logger.info(ls.FILE_EDITOR_INIT.format(root=self.project_root))

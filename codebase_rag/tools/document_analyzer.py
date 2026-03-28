@@ -32,6 +32,9 @@ class DocumentAnalyzer:
 
     def __init__(self, project_root: str) -> None:
         self.project_root = Path(project_root).resolve()
+        # If project_root is a file, use its parent directory
+        if self.project_root.is_file():
+            self.project_root = self.project_root.parent
 
         orchestrator_config = settings.active_orchestrator_config
         orchestrator_provider = orchestrator_config.provider

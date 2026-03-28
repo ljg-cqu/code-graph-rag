@@ -269,6 +269,9 @@ class ShellCommander:
 
     def __init__(self, project_root: str = ".", timeout: int = 30):
         self.project_root = Path(project_root).resolve()
+        # If project_root is a file, use its parent directory
+        if self.project_root.is_file():
+            self.project_root = self.project_root.parent
         self.timeout = timeout
         logger.info(ls.SHELL_COMMANDER_INIT.format(root=self.project_root))
 
