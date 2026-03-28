@@ -129,19 +129,19 @@ def delete_project_embeddings(project_name: str, node_ids: Sequence[int]) -> Non
 
     try:
         logger.info(
-            ls.QDRANT_DELETE_PROJECT.format(
+            ls.VECTOR_DELETE_PROJECT.format(
                 count=len(node_ids), project=project_name
             )
         )
         deleted_count = backend.delete_batch(node_ids)
-        logger.info(ls.QDRANT_DELETE_PROJECT_DONE.format(project=project_name))
+        logger.info(ls.VECTOR_DELETE_PROJECT_DONE.format(project=project_name))
         if deleted_count < len(node_ids):
             logger.warning(
                 f"Only deleted {deleted_count} of {len(node_ids)} embeddings"
             )
     except Exception as e:
         logger.warning(
-            ls.QDRANT_DELETE_PROJECT_FAILED.format(project=project_name, error=e)
+            ls.VECTOR_DELETE_PROJECT_FAILED.format(project=project_name, error=e)
         )
 
 

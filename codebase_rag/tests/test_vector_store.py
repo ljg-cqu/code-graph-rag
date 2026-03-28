@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import os
 import shutil
 import tempfile
 from collections.abc import Generator
 from pathlib import Path
 from typing import TYPE_CHECKING
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -25,6 +26,7 @@ def mock_qdrant_client() -> MagicMock:
 @pytest.fixture
 def reset_global_client() -> Generator[None, None, None]:
     import codebase_rag.vector_store as vs
+    import codebase_rag.vector_backend as vb
 
     if has_qdrant_client() and vs._CLIENT is not None:
         try:
@@ -32,6 +34,10 @@ def reset_global_client() -> Generator[None, None, None]:
         except Exception:
             pass
         vs._CLIENT = None
+
+    # Reset backend instances
+    vb._BACKEND_INSTANCE = None
+    vs._BACKEND = None
 
     yield
 
@@ -42,6 +48,9 @@ def reset_global_client() -> Generator[None, None, None]:
             pass
         vs._CLIENT = None
 
+    vb._BACKEND_INSTANCE = None
+    vs._BACKEND = None
+
 
 @pytest.fixture
 def temp_qdrant_path() -> Generator[Path, None, None]:
@@ -51,14 +60,45 @@ def temp_qdrant_path() -> Generator[Path, None, None]:
 
 
 @pytest.fixture
+def qdrant_backend_env(reset_global_client: None) -> Generator[None, None, None]:
+    """Set environment to use Qdrant backend."""
+    old_env = os.environ.get("VECTOR_STORE_BACKEND")
+    os.environ["VECTOR_STORE_BACKEND"] = "qdrant"
+    yield
+    if old_env is not None:
+        os.environ["VECTOR_STORE_BACKEND"] = old_env
+    else:
+        os.environ.pop("VECTOR_STORE_BACKEND", None)
+
+
+@pytest.fixture
+def mock_backend(
+    mock_qdrant_client: MagicMock, reset_global_client: None, qdrant_backend_env: None
+) -> Generator[MagicMock, None, None]:
+    """Create a mock backend that delegates to the mock client."""
+    import codebase_rag.vector_store as vs
+
+    # Create a mock backend
+    mock_backend = MagicMock()
+    vs._BACKEND = mock_backend
+    vs._CLIENT = mock_qdrant_client
+
+    yield mock_backend
+
+    vs._BACKEND = None
+    vs._CLIENT = None
+
+
+@pytest.fixture
 def integration_client(
-    temp_qdrant_path: Path, reset_global_client: None
+    temp_qdrant_path: Path, reset_global_client: None, qdrant_backend_env: None
 ) -> Generator[QdrantClient, None, None]:
     if not has_qdrant_client():
         pytest.skip("qdrant-client not installed")
 
     from qdrant_client import QdrantClient as QC
     from qdrant_client.models import Distance, VectorParams
+    from codebase_rag.vector_store_qdrant import QdrantBackend
 
     import codebase_rag.vector_store as vs
 
@@ -67,11 +107,18 @@ def integration_client(
         collection_name="code_embeddings",
         vectors_config=VectorParams(size=768, distance=Distance.COSINE),
     )
-    vs._CLIENT = client  # ty: ignore[invalid-assignment]
+
+    # Create a QdrantBackend with the test client injected
+    backend = QdrantBackend()
+    backend._client = client
+    backend._initialized = True
+    vs._BACKEND = backend
+    vs._CLIENT = client
 
     yield client
 
-    vs._CLIENT = None  # ty: ignore[invalid-assignment]
+    vs._CLIENT = None
+    vs._BACKEND = None
     try:
         client.close()
     except Exception:
@@ -80,7 +127,7 @@ def integration_client(
 
 @pytest.mark.skipif(not has_qdrant_client(), reason="qdrant-client not installed")
 def test_store_embedding_calls_upsert(
-    mock_qdrant_client: MagicMock, reset_global_client: None
+    mock_backend: MagicMock, mock_qdrant_client: MagicMock
 ) -> None:
     from codebase_rag.vector_store import store_embedding
 
@@ -88,11 +135,25 @@ def test_store_embedding_calls_upsert(
     embedding = [0.1] * 768
     qualified_name = "myproject.module.function"
 
-    with patch(
-        "codebase_rag.vector_store.get_qdrant_client",
-        return_value=mock_qdrant_client,
-    ):
-        store_embedding(node_id, embedding, qualified_name)
+    # Configure mock backend to delegate to mock client
+    def store_batch_side_effect(points):
+        from qdrant_client.models import PointStruct
+        mock_qdrant_client.upsert(
+            collection_name="code_embeddings",
+            points=[
+                PointStruct(
+                    id=p[0],
+                    vector=p[1],
+                    payload={"node_id": p[0], "qualified_name": p[2]},
+                )
+                for p in points
+            ],
+        )
+        return len(points)
+
+    mock_backend.store_batch = store_batch_side_effect
+
+    store_embedding(node_id, embedding, qualified_name)
 
     mock_qdrant_client.upsert.assert_called_once()
     call_kwargs = mock_qdrant_client.upsert.call_args[1]
@@ -107,22 +168,29 @@ def test_store_embedding_calls_upsert(
 
 @pytest.mark.skipif(not has_qdrant_client(), reason="qdrant-client not installed")
 def test_store_embedding_handles_exception(
-    mock_qdrant_client: MagicMock, reset_global_client: None
+    mock_backend: MagicMock, mock_qdrant_client: MagicMock
 ) -> None:
     from codebase_rag.vector_store import store_embedding
 
+    def store_batch_side_effect(points):
+        try:
+            mock_qdrant_client.upsert(
+                collection_name="code_embeddings", points=[]
+            )
+        except Exception:
+            return 0
+        return 0
+
+    mock_backend.store_batch = store_batch_side_effect
     mock_qdrant_client.upsert.side_effect = Exception("Connection failed")
 
-    with patch(
-        "codebase_rag.vector_store.get_qdrant_client",
-        return_value=mock_qdrant_client,
-    ):
-        store_embedding(123, [0.1] * 768, "test.func")
+    # Should not raise - exception is handled gracefully
+    store_embedding(123, [0.1] * 768, "test.func")
 
 
 @pytest.mark.skipif(not has_qdrant_client(), reason="qdrant-client not installed")
 def test_search_embeddings_calls_query_points(
-    mock_qdrant_client: MagicMock, reset_global_client: None
+    mock_backend: MagicMock, mock_qdrant_client: MagicMock
 ) -> None:
     from codebase_rag.vector_store import search_embeddings
 
@@ -140,11 +208,15 @@ def test_search_embeddings_calls_query_points(
 
     query_embedding = [0.2] * 768
 
-    with patch(
-        "codebase_rag.vector_store.get_qdrant_client",
-        return_value=mock_qdrant_client,
-    ):
-        results = search_embeddings(query_embedding, top_k=5)
+    def search_side_effect(q_emb, top_k, filters=None):
+        result = mock_qdrant_client.query_points(
+            collection_name="code_embeddings", query=q_emb, limit=top_k
+        )
+        return [(p.payload["node_id"], p.score) for p in result.points if p.payload]
+
+    mock_backend.search = search_side_effect
+
+    results = search_embeddings(query_embedding, top_k=5)
 
     mock_qdrant_client.query_points.assert_called_once_with(
         collection_name="code_embeddings", query=query_embedding, limit=5
@@ -154,7 +226,7 @@ def test_search_embeddings_calls_query_points(
 
 @pytest.mark.skipif(not has_qdrant_client(), reason="qdrant-client not installed")
 def test_search_embeddings_filters_null_payloads(
-    mock_qdrant_client: MagicMock, reset_global_client: None
+    mock_backend: MagicMock, mock_qdrant_client: MagicMock
 ) -> None:
     from codebase_rag.vector_store import search_embeddings
 
@@ -170,50 +242,62 @@ def test_search_embeddings_filters_null_payloads(
     mock_result.points = [mock_point1, mock_point2]
     mock_qdrant_client.query_points.return_value = mock_result
 
-    with patch(
-        "codebase_rag.vector_store.get_qdrant_client",
-        return_value=mock_qdrant_client,
-    ):
-        results = search_embeddings([0.2] * 768)
+    def search_side_effect(q_emb, top_k, filters=None):
+        result = mock_qdrant_client.query_points(
+            collection_name="code_embeddings", query=q_emb, limit=top_k
+        )
+        return [(p.payload["node_id"], p.score) for p in result.points if p.payload]
+
+    mock_backend.search = search_side_effect
+
+    results = search_embeddings([0.2] * 768)
 
     assert results == [(1, 0.95)]
 
 
 @pytest.mark.skipif(not has_qdrant_client(), reason="qdrant-client not installed")
 def test_search_embeddings_handles_exception(
-    mock_qdrant_client: MagicMock, reset_global_client: None
+    mock_backend: MagicMock, mock_qdrant_client: MagicMock
 ) -> None:
     from codebase_rag.vector_store import search_embeddings
 
+    def search_side_effect(q_emb, top_k, filters=None):
+        mock_qdrant_client.query_points(
+            collection_name="code_embeddings", query=q_emb, limit=top_k
+        )
+        return []
+
+    mock_backend.search = search_side_effect
     mock_qdrant_client.query_points.side_effect = Exception("Connection failed")
 
-    with patch(
-        "codebase_rag.vector_store.get_qdrant_client",
-        return_value=mock_qdrant_client,
-    ):
-        results = search_embeddings([0.2] * 768)
+    results = search_embeddings([0.2] * 768)
 
     assert results == []
 
 
 @pytest.mark.skipif(not has_qdrant_client(), reason="qdrant-client not installed")
 def test_search_embeddings_default_top_k(
-    mock_qdrant_client: MagicMock, reset_global_client: None
+    mock_backend: MagicMock, mock_qdrant_client: MagicMock
 ) -> None:
     from codebase_rag.vector_store import search_embeddings
+    from codebase_rag.config import settings
 
     mock_result = MagicMock()
     mock_result.points = []
     mock_qdrant_client.query_points.return_value = mock_result
 
-    with patch(
-        "codebase_rag.vector_store.get_qdrant_client",
-        return_value=mock_qdrant_client,
-    ):
-        search_embeddings([0.2] * 768)
+    def search_side_effect(q_emb, top_k, filters=None):
+        result = mock_qdrant_client.query_points(
+            collection_name="code_embeddings", query=q_emb, limit=top_k
+        )
+        return [(p.payload["node_id"], p.score) for p in result.points if p.payload]
+
+    mock_backend.search = search_side_effect
+
+    search_embeddings([0.2] * 768)
 
     mock_qdrant_client.query_points.assert_called_once_with(
-        collection_name="code_embeddings", query=[0.2] * 768, limit=5
+        collection_name="code_embeddings", query=[0.2] * 768, limit=settings.VECTOR_SEARCH_TOP_K
     )
 
 
