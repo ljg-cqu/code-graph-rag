@@ -153,6 +153,11 @@ class MemgraphBackend(VectorBackend):
         if not points:
             return 0
 
+        logger.debug(
+            f"store_batch called with {len(points)} points, "
+            f"node_ids: {[p[0] for p in points[:5]]}{'...' if len(points) > 5 else ''}"
+        )
+
         # Batch update using UNWIND
         cypher = """
         UNWIND $points AS p
@@ -174,6 +179,7 @@ class MemgraphBackend(VectorBackend):
 
         try:
             results = self._execute_query(cypher, params)
+            logger.debug(f"store_batch query results: {results}")
             stored = results[0].get("stored", 0) if results else 0
             logger.debug(ls.EMBEDDING_BATCH_STORED.format(count=stored))
             return stored

@@ -607,10 +607,16 @@ class GraphUpdater:
                 ):
                     try:
                         embedding = embed_code(source_code)
+                        logger.debug(
+                            f"Generated embedding for {qualified_name} (node_id={node_id})"
+                        )
                         batch_buffer.append((node_id, embedding, qualified_name))
                         expected_ids.add(node_id)
 
                         if len(batch_buffer) >= batch_size:
+                            logger.debug(
+                                f"Flushing batch of {len(batch_buffer)} embeddings"
+                            )
                             embedded_count += store_embedding_batch(batch_buffer)
                             batch_buffer = []
 
@@ -632,6 +638,10 @@ class GraphUpdater:
                     logger.debug(ls.NO_SOURCE_FOR, name=qualified_name)
 
             if batch_buffer:
+                logger.debug(
+                    f"Final batch: storing {len(batch_buffer)} embeddings, "
+                    f"node_ids: {[p[0] for p in batch_buffer]}"
+                )
                 embedded_count += store_embedding_batch(batch_buffer)
 
             logger.info(ls.EMBEDDINGS_COMPLETE, count=embedded_count)
