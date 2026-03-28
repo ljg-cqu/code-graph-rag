@@ -275,6 +275,31 @@ class TestValidateSegment:
         available = ", ".join(sorted(settings.SHELL_COMMAND_ALLOWLIST))
         assert _validate_segment("", available) is None
 
+    def test_redirect_not_supported(self) -> None:
+        available = ", ".join(sorted(settings.SHELL_COMMAND_ALLOWLIST))
+        error = _validate_segment("ls > output.txt", available)
+        assert error is not None
+        assert "redirect" in error.lower()
+        assert "not supported" in error.lower()
+
+    def test_stderr_redirect_not_supported(self) -> None:
+        available = ", ".join(sorted(settings.SHELL_COMMAND_ALLOWLIST))
+        error = _validate_segment("find . -name '*.sol' 2>/dev/null", available)
+        assert error is not None
+        assert "redirect" in error.lower()
+
+    def test_redirect_to_stdout_not_supported(self) -> None:
+        available = ", ".join(sorted(settings.SHELL_COMMAND_ALLOWLIST))
+        error = _validate_segment("ls 2>&1", available)
+        assert error is not None
+        assert "redirect" in error.lower()
+
+    def test_append_redirect_not_supported(self) -> None:
+        available = ", ".join(sorted(settings.SHELL_COMMAND_ALLOWLIST))
+        error = _validate_segment("echo test >> file.txt", available)
+        assert error is not None
+        assert "redirect" in error.lower()
+
 
 class TestHasRedirectOperators:
     def test_output_redirect(self) -> None:
@@ -771,6 +796,21 @@ class TestSecurityIntegration:
         assert result.return_code == -1
         stderr_lower = result.stderr.lower()
         assert "outside project" in stderr_lower or "system directory" in stderr_lower
+
+    async def test_redirect_rejected(
+        self, shell_commander: ShellCommander
+    ) -> None:
+        result = await shell_commander.execute("find . -name '*.sol' 2>/dev/null")
+        assert result.return_code == -1
+        assert "redirect" in result.stderr.lower()
+        assert "not supported" in result.stderr.lower()
+
+    async def test_stderr_redirect_rejected(
+        self, shell_commander: ShellCommander
+    ) -> None:
+        result = await shell_commander.execute("ls 2>&1")
+        assert result.return_code == -1
+        assert "redirect" in result.stderr.lower()
 
 
 class TestAwkSedXargsPatterns:

@@ -48,6 +48,11 @@ COMMAND_DANGEROUS_PATTERN = "Command matches dangerous pattern: {reason}"
 COMMAND_TIMEOUT = "Command '{cmd}' timed out after {timeout} seconds."
 COMMAND_SUBSHELL_NOT_ALLOWED = "Subshell execution not allowed: {pattern}"
 COMMAND_INVALID_SYNTAX = "Invalid command syntax: {segment}"
+COMMAND_REDIRECT_NOT_SUPPORTED = (
+    "Shell redirect operators are not supported: '{redirect}'. "
+    "Direct process execution cannot interpret shell syntax like '2>/dev/null'. "
+    "Remove redirects or use alternative commands."
+)
 
 # (H) Code retrieval errors
 CODE_ENTITY_NOT_FOUND = "Entity not found in graph."

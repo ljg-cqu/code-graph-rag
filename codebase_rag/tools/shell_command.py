@@ -207,6 +207,14 @@ def _validate_segment(segment: str, available_commands: str) -> str | None:
     if not cmd_parts:
         return None
 
+    # Check for shell redirect operators - these cannot be executed properly
+    # since create_subprocess_exec doesn't interpret shell syntax
+    for part in cmd_parts:
+        if part in cs.SHELL_REDIRECT_OPERATORS:
+            return te.COMMAND_REDIRECT_NOT_SUPPORTED.format(redirect=part)
+        if REDIRECT_PATTERN_COMPILED.match(part):
+            return te.COMMAND_REDIRECT_NOT_SUPPORTED.format(redirect=part)
+
     base_cmd = cmd_parts[0]
 
     if base_cmd not in settings.SHELL_COMMAND_ALLOWLIST:
