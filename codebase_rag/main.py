@@ -254,7 +254,9 @@ def _setup_common_initialization(repo_path: str) -> Path:
     logger.add(sys.stdout, format=cs.LOG_FORMAT)
 
     project_root = Path(repo_path).resolve()
-    tmp_dir = project_root / cs.TMP_DIR
+    # Use parent directory if repo_path is a single file
+    tmp_base = project_root.parent if project_root.is_file() else project_root
+    tmp_dir = tmp_base / cs.TMP_DIR
     if tmp_dir.exists():
         if tmp_dir.is_dir():
             shutil.rmtree(tmp_dir)
