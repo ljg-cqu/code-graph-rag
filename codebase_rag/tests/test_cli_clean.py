@@ -194,3 +194,91 @@ class TestCleanWithUpdateGraph:
         assert result.exit_code == 0, result.output
         assert cache_path.exists()
         assert json.loads(cache_path.read_text()) == cache_data
+
+    @patch("codebase_rag.cli.GraphUpdater")
+    @patch("codebase_rag.cli.load_parsers", return_value=({}, {}))
+    @patch("codebase_rag.cli.load_cgrignore_patterns")
+    def test_clean_with_single_file_path_deletes_hash_cache_from_parent(
+        self,
+        mock_cgrignore: MagicMock,
+        mock_load_parsers: MagicMock,
+        mock_graph_updater: MagicMock,
+        mock_memgraph_connect: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """When a single file path is passed with --clean, the hash cache
+        in the parent directory should be deleted."""
+        mock_cgrignore.return_value = CgrignorePatterns(
+            exclude=frozenset(), unignore=frozenset()
+        )
+
+        # Create a file in tmp_path
+        test_file = tmp_path / "test.py"
+        test_file.write_text("def foo(): pass")
+
+        # Create hash cache in the parent directory (tmp_path)
+        cache_path = tmp_path / cs.HASH_CACHE_FILENAME
+        cache_path.write_text(json.dumps({"test.py": "abc123"}))
+
+        result = runner.invoke(
+            app,
+            ["start", "--clean", "--update-graph", "--repo-path", str(test_file)],
+        )
+
+        assert result.exit_code == 0, result.output
+        # Hash cache in parent directory should be deleted
+        assert not cache_path.exists()
+
+    @patch("codebase_rag.cli.GraphUpdater")
+    @patch("codebase_rag.cli.load_parsers", return_value=({}, {}))
+    @patch("codebase_rag.cli.load_cgrignore_patterns")
+    def test_clean_with_update_passes_force_to_updater(
+        self,
+        mock_cgrignore: MagicMock,
+        mock_load_parsers: MagicMock,
+        mock_graph_updater: MagicMock,
+        mock_memgraph_connect: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """When --clean is used, updater.run() should be called with force=True."""
+        mock_cgrignore.return_value = CgrignorePatterns(
+            exclude=frozenset(), unignore=frozenset()
+        )
+
+        mock_updater_instance = MagicMock()
+        mock_graph_updater.return_value = mock_updater_instance
+
+        result = runner.invoke(
+            app,
+            ["start", "--clean", "--update-graph", "--repo-path", str(tmp_path)],
+        )
+
+        assert result.exit_code == 0, result.output
+        mock_updater_instance.run.assert_called_once_with(force=True)
+
+    @patch("codebase_rag.cli.GraphUpdater")
+    @patch("codebase_rag.cli.load_parsers", return_value=({}, {}))
+    @patch("codebase_rag.cli.load_cgrignore_patterns")
+    def test_update_without_clean_passes_force_false(
+        self,
+        mock_cgrignore: MagicMock,
+        mock_load_parsers: MagicMock,
+        mock_graph_updater: MagicMock,
+        mock_memgraph_connect: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """When --clean is not used, updater.run() should be called with force=False."""
+        mock_cgrignore.return_value = CgrignorePatterns(
+            exclude=frozenset(), unignore=frozenset()
+        )
+
+        mock_updater_instance = MagicMock()
+        mock_graph_updater.return_value = mock_updater_instance
+
+        result = runner.invoke(
+            app,
+            ["start", "--update-graph", "--repo-path", str(tmp_path)],
+        )
+
+        assert result.exit_code == 0, result.output
+        mock_updater_instance.run.assert_called_once_with(force=False)

@@ -101,6 +101,12 @@ def _info(msg: str) -> None:
 
 
 def _delete_hash_cache(repo_path: Path) -> None:
+    """Delete hash cache file from repo directory.
+
+    If repo_path is a file, uses its parent directory.
+    """
+    if repo_path.is_file():
+        repo_path = repo_path.parent
     cache_path = repo_path / cs.HASH_CACHE_FILENAME
     if cache_path.exists():
         _info(
@@ -235,7 +241,7 @@ def start(
                 exclude_paths=exclude_paths,
                 project_name=project_name,
             )
-            updater.run()
+            updater.run(force=clean)
 
             if output:
                 _info(style(cs.CLI_MSG_EXPORTING_TO.format(path=output), cs.Color.CYAN))
