@@ -293,6 +293,26 @@ class TestHasRedirectOperators:
         assert _has_redirect_operators(["ls", "-la"]) is False
         assert _has_redirect_operators(["echo", "hello"]) is False
 
+    def test_stderr_redirect(self) -> None:
+        # shlex.split produces single token for 2>/dev/null
+        assert _has_redirect_operators(["find", ".", "2>/dev/null"]) is True
+
+    def test_stderr_redirect_explicit(self) -> None:
+        assert _has_redirect_operators(["cmd", "2>", "/dev/null"]) is True
+
+    def test_stderr_to_stdout(self) -> None:
+        assert _has_redirect_operators(["cmd", "2>&1"]) is True
+
+    def test_both_redirects(self) -> None:
+        assert _has_redirect_operators(["cmd", "&>", "file"]) is True
+
+    def test_stdout_to_stderr(self) -> None:
+        assert _has_redirect_operators(["cmd", "1>&2"]) is True
+
+    def test_fd_redirect_with_path(self) -> None:
+        # Common pattern: stderr redirected to /dev/null
+        assert _has_redirect_operators(["find", "/path", "-name", "*.txt", "2>/dev/null"]) is True
+
 
 class TestSeparateRmFlags:
     def test_separate_r_f_flags(self) -> None:

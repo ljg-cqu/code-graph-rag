@@ -28,6 +28,8 @@ SEGMENT_PATTERNS_COMPILED = tuple(
     (re.compile(pattern, re.IGNORECASE), reason)
     for pattern, reason in cs.SHELL_DANGEROUS_PATTERNS_SEGMENT
 )
+# Compiled pattern for file descriptor redirects (2>/dev/null, 2>&1, &>, etc.)
+REDIRECT_PATTERN_COMPILED = re.compile(cs.SHELL_REDIRECT_PATTERN)
 
 
 def _is_outside_single_quotes(command: str, pos: int) -> bool:
@@ -221,7 +223,11 @@ def _validate_segment(segment: str, available_commands: str) -> str | None:
 
 
 def _has_redirect_operators(parts: list[str]) -> bool:
-    return any(p in cs.SHELL_REDIRECT_OPERATORS for p in parts)
+    # Check for exact redirect operators (> >> < <<)
+    if any(p in cs.SHELL_REDIRECT_OPERATORS for p in parts):
+        return True
+    # Check for file descriptor redirects (2>/dev/null, 2>&1, &>, etc.)
+    return any(REDIRECT_PATTERN_COMPILED.match(p) for p in parts)
 
 
 def _requires_approval(command: str) -> bool:

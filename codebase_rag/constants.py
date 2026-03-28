@@ -1115,6 +1115,8 @@ SHELL_RETURN_CODE_ERROR = -1
 SHELL_PIPE_OPERATORS = ("|", "&&", "||", ";")
 SHELL_SUBSHELL_PATTERNS = ("$(", "`")
 SHELL_REDIRECT_OPERATORS = frozenset({">", ">>", "<", "<<"})
+# Regex pattern for file descriptor redirects: 2>/dev/null, 2>&1, &>, 1>, etc.
+SHELL_REDIRECT_PATTERN = r"^[&\d]*[<>]+|^[&\d]*>&\d+"
 
 # (H) Dangerous commands - absolutely blocked
 SHELL_DANGEROUS_COMMANDS = frozenset(
