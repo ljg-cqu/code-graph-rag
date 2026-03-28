@@ -16,7 +16,11 @@ def determine_node_type(
     language: cs.SupportedLanguage,
 ) -> NodeType:
     match class_node.type:
-        case cs.TS_INTERFACE_DECLARATION | cs.TS_RS_TRAIT_ITEM:
+        case (
+            cs.TS_INTERFACE_DECLARATION
+            | cs.TS_RS_TRAIT_ITEM
+            | cs.TS_SOL_INTERFACE_DECLARATION
+        ):
             logger.info(logs.CLASS_FOUND_INTERFACE.format(name=class_name, qn=class_qn))
             return NodeType.INTERFACE
         case (
@@ -24,13 +28,18 @@ def determine_node_type(
             | cs.TS_ENUM_SPECIFIER
             | cs.TS_ENUM_CLASS_SPECIFIER
             | cs.TS_RS_ENUM_ITEM
+            | cs.TS_SOL_ENUM_DECLARATION
         ):
             logger.info(logs.CLASS_FOUND_ENUM.format(name=class_name, qn=class_qn))
             return NodeType.ENUM
         case cs.TS_TYPE_ALIAS_DECLARATION | cs.TS_RS_TYPE_ITEM:
             logger.info(logs.CLASS_FOUND_TYPE.format(name=class_name, qn=class_qn))
             return NodeType.TYPE
-        case cs.TS_STRUCT_SPECIFIER | cs.TS_RS_STRUCT_ITEM:
+        case (
+            cs.TS_STRUCT_SPECIFIER
+            | cs.TS_RS_STRUCT_ITEM
+            | cs.TS_SOL_STRUCT_DECLARATION
+        ):
             logger.info(logs.CLASS_FOUND_STRUCT.format(name=class_name, qn=class_qn))
             return NodeType.CLASS
         case cs.TS_UNION_SPECIFIER | cs.TS_RS_UNION_ITEM:
@@ -47,6 +56,12 @@ def determine_node_type(
         case cs.CppNodeType.FUNCTION_DEFINITION if language == cs.SupportedLanguage.CPP:
             log_exported_class_type(class_node, class_name, class_qn)
             return NodeType.CLASS
+        case cs.TS_SOL_CONTRACT_DECLARATION:
+            logger.info(logs.CLASS_FOUND_CONTRACT.format(name=class_name, qn=class_qn))
+            return NodeType.CONTRACT
+        case cs.TS_SOL_LIBRARY_DECLARATION:
+            logger.info(logs.CLASS_FOUND_LIBRARY.format(name=class_name, qn=class_qn))
+            return NodeType.LIBRARY
         case _:
             logger.info(logs.CLASS_FOUND_CLASS.format(name=class_name, qn=class_qn))
             return NodeType.CLASS

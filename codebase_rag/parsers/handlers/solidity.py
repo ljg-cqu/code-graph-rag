@@ -57,14 +57,22 @@ class SolidityHandler(BaseLanguageHandler):
         return False
 
     def extract_visibility(self, node: ASTNode) -> str | None:
-        """Extract visibility modifier (public, private, internal, external)."""
+        """Extract visibility modifier (public, private, internal, external).
+
+        Note: In tree-sitter-solidity, visibility is a child node type, not a field.
+        We iterate over children to find nodes with type 'visibility'.
+        """
         for child in node.children:
             if child.type == cs.TS_SOL_VISIBILITY:
                 return safe_decode_text(child)
         return None
 
     def extract_state_mutability(self, node: ASTNode) -> str | None:
-        """Extract state mutability (view, pure, payable)."""
+        """Extract state mutability (view, pure, payable).
+
+        Note: In tree-sitter-solidity, state_mutability is a child node type, not a field.
+        We iterate over children to find nodes with type 'state_mutability'.
+        """
         for child in node.children:
             if child.type == cs.TS_SOL_STATE_MUTABILITY:
                 return safe_decode_text(child)

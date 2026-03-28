@@ -574,10 +574,22 @@ LANGUAGE_SPECS: dict[cs.SupportedLanguage, LanguageSpec] = {
             name: (identifier) @name) @class
         (library_declaration
             name: (identifier) @name) @class
+        (struct_declaration
+            name: (identifier) @name) @class
+        (enum_declaration
+            name: (identifier) @name) @class
         """,
         call_query="""
-        (call_expression) @call
-        (emit_statement) @call
+        (call_expression
+            function: (expression
+                (identifier) @name)) @call
+        (call_expression
+            function: (expression
+                (member_expression
+                    property: (identifier) @name))) @call
+        (emit_statement
+            name: (expression
+                (identifier) @name)) @call
         """,
     ),
 }

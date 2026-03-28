@@ -276,15 +276,22 @@ SOLIDITY_LANGUAGE_SPEC = LanguageSpec(
         name: (identifier) @name) @class
     (library_declaration
         name: (identifier) @name) @class
+    (struct_declaration
+        name: (identifier) @name) @class
+    (enum_declaration
+        name: (identifier) @name) @class
     """,
     call_query="""
     (call_expression
-        expression: (identifier) @name) @call
+        function: (expression
+            (identifier) @name)) @call
     (call_expression
-        expression: (member_expression
-            property: (identifier) @name)) @call
+        function: (expression
+            (member_expression
+                property: (identifier) @name))) @call
     (emit_statement
-        name: (identifier) @name) @call
+        name: (expression
+            (identifier) @name)) @call
     """,
 )
 
@@ -1740,6 +1747,20 @@ RETURN c, collect(DISTINCT f) as functions,
 5. **Cypher indexes** - Added missing `CYPHER_INDEX_LIBRARY_NAME` and `CYPHER_INDEX_CUSTOM_ERROR_NAME`
 6. **SOLIDITY_ENTITY_TYPES prompt** - Added all 12 new relationships to the documentation
 7. **Implementation checklist** - Fixed count from 26 to 27 constants, added FIELD_* constants, expanded Phase 5 tests
+
+### Critical Fixes Applied in Round 15 (Current)
+
+1. **call_query** - Corrected field names based on actual tree-sitter-solidity grammar:
+   - Uses `function:` field (NOT `expression:`) for call_expression
+   - `function` field contains an `expression` wrapper node around the identifier
+   - emit_statement uses `name:` field containing `expression` wrapper
+2. **class_query** - Added `struct_declaration` and `enum_declaration` patterns for consistency with other languages
+3. **SPEC_SOL_CLASS_TYPES** - Added `TS_SOL_STRUCT_DECLARATION` and `TS_SOL_ENUM_DECLARATION`
+4. **NodeType enum** - Added `CONTRACT` and `LIBRARY` values for proper node type determination
+5. **node_type.py** - Added Solidity type handling for contracts, libraries, interfaces, structs, enums
+6. **SolidityHandler** - Fixed `extract_visibility` and `extract_state_mutability` to iterate children instead of using field access
+7. **RELATIONSHIP_SCHEMAS** - Added `LIBRARY` to `USES_LIBRARY` sources, `INTERFACE` to `DEFINES_EVENT` sources
+8. **Import resolution** - Added direct path resolution, separator handling, and prefix guards
 8. **_solidity_get_name** - Updated to handle combined `fallback_receive_definition` node type
 
 ### Critical Fixes Applied in Round 7

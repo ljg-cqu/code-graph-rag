@@ -72,6 +72,8 @@ class NodeType(StrEnum):
     ENUM = "Enum"
     TYPE = "Type"
     UNION = "Union"
+    CONTRACT = "Contract"
+    LIBRARY = "Library"
 
 
 type TrieNode = dict[str, TrieNode | QualifiedName | NodeType]
@@ -603,7 +605,7 @@ RELATIONSHIP_SCHEMAS: tuple[RelationshipSchema, ...] = (
         (NodeLabel.MODIFIER,),
     ),
     RelationshipSchema(
-        (NodeLabel.CONTRACT,),
+        (NodeLabel.CONTRACT, NodeLabel.LIBRARY),
         RelationshipType.USES_LIBRARY,
         (NodeLabel.LIBRARY,),
     ),
@@ -613,7 +615,7 @@ RELATIONSHIP_SCHEMAS: tuple[RelationshipSchema, ...] = (
         (NodeLabel.FUNCTION, NodeLabel.METHOD),
     ),
     RelationshipSchema(
-        (NodeLabel.CONTRACT,),
+        (NodeLabel.CONTRACT, NodeLabel.INTERFACE),
         RelationshipType.DEFINES_EVENT,
         (NodeLabel.EVENT,),
     ),

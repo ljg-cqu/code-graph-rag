@@ -12,7 +12,6 @@ from codebase_rag.parsers.handlers.lua import LuaHandler
 from codebase_rag.parsers.handlers.php import PhpHandler
 from codebase_rag.parsers.handlers.python import PythonHandler
 from codebase_rag.parsers.handlers.rust import RustHandler
-
 from codebase_rag.parsers.handlers.solidity import SolidityHandler
 
 
