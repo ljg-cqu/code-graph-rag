@@ -565,7 +565,7 @@ class GraphUpdater:
         try:
             from .embedder import embed_code, get_embedding_cache
             from .vector_store import (
-                close_qdrant_client,
+                close_vector_backend,
                 store_embedding_batch,
                 verify_stored_ids,
             )
@@ -649,7 +649,7 @@ class GraphUpdater:
             self._reconcile_embeddings(expected_ids, verify_stored_ids)
 
             get_embedding_cache().save()
-            close_qdrant_client()
+            close_vector_backend()
 
         except Exception as e:
             logger.warning(ls.EMBEDDING_GENERATION_FAILED, error=e)

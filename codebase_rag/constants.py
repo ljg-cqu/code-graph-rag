@@ -892,7 +892,8 @@ IGNORE_PATTERNS = frozenset(
         ".nyc_output",
         ".pnpm-store",
         ".pytest_cache",
-        ".qdrant_code_embeddings",
+        ".qdrant_code_embeddings",  # Legacy Qdrant storage
+        ".embedding_cache",  # Backend-agnostic embedding cache
         ".ruff_cache",
         ".svn",
         ".tmp",
