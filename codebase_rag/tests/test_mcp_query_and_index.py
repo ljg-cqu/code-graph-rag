@@ -209,7 +209,7 @@ class TestIndexRepository:
     async def test_index_repository_success(
         self, mcp_registry: MCPToolsRegistry, temp_project_root: Path
     ) -> None:
-        """Test successful repository indexing."""
+        """Test successful repository indexing with force=True."""
         with patch("codebase_rag.mcp.tools.GraphUpdater") as mock_updater_class:
             mock_updater = MagicMock()
             mock_updater.run.return_value = None
@@ -220,7 +220,8 @@ class TestIndexRepository:
             assert "Error:" not in result
             assert "Success" in result or "indexed" in result.lower()
             assert str(temp_project_root) in result
-            mock_updater.run.assert_called_once()
+            # index_repository clears the project first, so force=True is required
+            mock_updater.run.assert_called_once_with(force=True)
 
     async def test_index_repository_creates_graph_updater(
         self, mcp_registry: MCPToolsRegistry, temp_project_root: Path
@@ -274,6 +275,8 @@ class TestIndexRepository:
             result = await empty_registry.index_repository()
 
             assert "Error:" not in result or "Success" in result
+            # Verify force=True is passed since index_repository clears the project
+            mock_updater.run.assert_called_once_with(force=True)
 
     async def test_index_repository_multiple_times(
         self, mcp_registry: MCPToolsRegistry, temp_project_root: Path
@@ -291,11 +294,13 @@ class TestIndexRepository:
             assert "Error:" not in result2
 
             assert mock_updater.run.call_count == 2
+            # Each call should use force=True since index_repository clears the project
+            mock_updater.run.assert_called_with(force=True)
 
     async def test_index_repository_clears_project_data_first(
         self, mcp_registry: MCPToolsRegistry, temp_project_root: Path
     ) -> None:
-        """Test that project data is cleared before indexing."""
+        """Test that project data is cleared before indexing with force=True."""
         with patch("codebase_rag.mcp.tools.GraphUpdater") as mock_updater_class:
             mock_updater = MagicMock()
             mock_updater.run.return_value = None
@@ -306,6 +311,8 @@ class TestIndexRepository:
             project_name = temp_project_root.resolve().name
             mcp_registry.ingestor.delete_project.assert_called_once_with(project_name)  # type: ignore[attr-defined]
             assert "Error:" not in result
+            # Verify force=True since project was cleared
+            mock_updater.run.assert_called_once_with(force=True)
 
     async def test_index_repository_deletes_project_before_updater_runs(
         self, mcp_registry: MCPToolsRegistry, temp_project_root: Path
@@ -360,11 +367,14 @@ class TestIndexRepository:
 
             await registry1.index_repository()
             mock_ingestor.delete_project.assert_called_with("project1")
+            mock_updater.run.assert_called_with(force=True)
 
             await registry2.index_repository()
             mock_ingestor.delete_project.assert_called_with("project2")
 
             assert mock_ingestor.delete_project.call_count == 2
+            # Each index_repository call should use force=True
+            assert mock_updater.run.call_count == 2
 
 
 class TestQueryAndIndexIntegration:
@@ -381,6 +391,8 @@ class TestQueryAndIndexIntegration:
 
             index_result = await mcp_registry.index_repository()
             assert "Error:" not in index_result
+            # Verify force=True since index_repository clears the project
+            mock_updater.run.assert_called_once_with(force=True)
 
             mcp_registry._query_tool.function.return_value = MagicMock(  # ty: ignore[invalid-assignment]
                 model_dump=lambda: {
@@ -403,6 +415,8 @@ class TestQueryAndIndexIntegration:
             mock_updater_class.return_value = mock_updater
 
             await mcp_registry.index_repository()
+            # Verify force=True since index_repository clears the project
+            mock_updater.run.assert_called_once_with(force=True)
 
             mcp_registry._query_tool.function.return_value = MagicMock(  # ty: ignore[invalid-assignment]
                 model_dump=lambda: {
