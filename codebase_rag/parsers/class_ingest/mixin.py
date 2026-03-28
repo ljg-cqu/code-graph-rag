@@ -179,7 +179,7 @@ class ClassIngestMixin:
             self.function_registry,
         )
         self._ingest_class_methods(
-            class_node, class_qn, language, lang_queries, file_path
+            class_node, class_qn, node_type, language, lang_queries, file_path
         )
 
     def _ingest_rust_impl_methods(
@@ -225,6 +225,7 @@ class ClassIngestMixin:
         self,
         class_node: Node,
         class_qn: str,
+        class_type: str,
         language: cs.SupportedLanguage,
         lang_queries: LanguageQueries,
         file_path: Path | None = None,
@@ -256,7 +257,7 @@ class ClassIngestMixin:
             ingest_method(
                 method_node,
                 class_qn,
-                cs.NodeLabel.CLASS,
+                class_type,
                 self.ingestor,
                 self.function_registry,
                 self.simple_name_lookup,

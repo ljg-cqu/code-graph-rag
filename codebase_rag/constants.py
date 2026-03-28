@@ -471,10 +471,17 @@ CSPROJ_SUFFIX = ".csproj"
 # (H) Cypher queries
 CYPHER_DEFAULT_LIMIT = 50
 
+# Base query for embeddings - handles both standalone functions and methods in classes
+# Path 1: Module -> DEFINES -> Function (standalone functions)
+# Path 2: Module -> DEFINES -> Class/Contract -> DEFINES_METHOD -> Method (methods in classes)
 _CYPHER_EMBEDDING_BASE = """
-MATCH (m:Module)-[:DEFINES]->(n)
-WHERE (n:Function OR n:Method)
-  AND m.qualified_name STARTS WITH ($project_name + '.')
+MATCH (m:Module)
+WHERE m.qualified_name STARTS WITH ($project_name + '.')
+OPTIONAL MATCH (m)-[:DEFINES]->(f:Function)
+OPTIONAL MATCH (m)-[:DEFINES]->(c)-[:DEFINES_METHOD]->(meth:Method)
+WITH m, f, meth
+WHERE f IS NOT NULL OR meth IS NOT NULL
+WITH m, COALESCE(f, meth) AS n
 """
 
 CYPHER_QUERY_EMBEDDINGS = (
@@ -485,7 +492,16 @@ CYPHER_QUERY_EMBEDDINGS = (
 """
 )
 
-CYPHER_QUERY_PROJECT_NODE_IDS = _CYPHER_EMBEDDING_BASE + "RETURN id(n) AS node_id\n"
+CYPHER_QUERY_PROJECT_NODE_IDS = """
+MATCH (m:Module)
+WHERE m.qualified_name STARTS WITH ($project_name + '.')
+OPTIONAL MATCH (m)-[:DEFINES]->(f:Function)
+OPTIONAL MATCH (m)-[:DEFINES]->(c)-[:DEFINES_METHOD]->(meth:Method)
+WITH m, f, meth
+WHERE f IS NOT NULL OR meth IS NOT NULL
+WITH COALESCE(f, meth) AS n
+RETURN id(n) AS node_id
+"""
 
 
 class SupportedLanguage(StrEnum):
