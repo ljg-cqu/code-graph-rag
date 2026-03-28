@@ -33,7 +33,7 @@ class MemgraphBackend(VectorBackend):
     - Lower latency: no cross-database coordination
     """
 
-    LABELS_TO_INDEX = ("Function", "Method", "Class", "Interface")
+    LABELS_TO_INDEX = ("Function", "Method", "Class", "Interface", "Contract", "Library")
 
     def __init__(self) -> None:
         self._conn: mgclient.Connection | None = None

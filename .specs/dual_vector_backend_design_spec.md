@@ -529,44 +529,48 @@ from .services.graph_service import MemgraphIngestor
 from .config import settings
 
 class MemgraphBackend(VectorBackend):
-    """Memgraph native vector storage using vector_search."""
+    """Memgraph native vector storage using vector_search.
 
+    Creates per-label indexes for embeddable node types:
+    - Function, Method, Class, Interface, Contract, Library
+
+    This allows searching across all code constructs uniformly.
+    """
+
+    LABELS_TO_INDEX = ("Function", "Method", "Class", "Interface", "Contract", "Library")
     INDEX_NAME = "code_embedding_index"
 
     def __init__(self):
-        self._ingestor: MemgraphIngestor | None = None
-
-    def _get_ingestor(self) -> MemgraphIngestor:
-        if self._ingestor is None:
-            self._ingestor = MemgraphIngestor(
-                host=settings.MEMGRAPH_HOST,
-                port=settings.MEMGRAPH_PORT,
-            )
-        return self._ingestor
+        self._conn: mgclient.Connection | None = None
 
     def initialize(self) -> None:
-        """Create vector index with required capacity."""
-        cypher = """
-        CREATE VECTOR INDEX $index_name
-        ON :Function(embedding)
-        WITH CONFIG {
-            dimension: $dimension,
-            capacity: $capacity,
-            metric: $metric
-        };
+        """Create vector indexes for each embeddable node type.
+
+        Memgraph requires explicit capacity estimation (~2x function count).
+        Per-label indexes allow efficient filtering by node type.
         """
-        params = {
-            "index_name": self.INDEX_NAME,
-            "dimension": settings.MEMGRAPH_VECTOR_DIM,
-            "capacity": settings.MEMGRAPH_VECTOR_CAPACITY,
-            "metric": settings.MEMGRAPH_VECTOR_METRIC,
-        }
-        try:
-            self._get_ingestor().execute_write(cypher, params)
-        except Exception as e:
-            # Index may already exist
-            if "already exists" not in str(e).lower():
-                raise
+        for label in self.LABELS_TO_INDEX:
+            cypher = """
+            CREATE VECTOR INDEX $index_name
+            ON :{label}(embedding)
+            WITH CONFIG {
+                dimension: $dimension,
+                capacity: $capacity,
+                metric: $metric
+            };
+            """.replace("{label}", label)
+
+            params = {
+                "index_name": f"{label.lower()}_embedding_index",
+                "dimension": settings.MEMGRAPH_VECTOR_DIM,
+                "capacity": settings.MEMGRAPH_VECTOR_CAPACITY,
+                "metric": settings.MEMGRAPH_VECTOR_METRIC,
+            }
+            try:
+                self._execute_query(cypher, params)
+            except Exception as e:
+                if "already exists" not in str(e).lower():
+                    raise
 
     def store_batch(
         self,
@@ -594,7 +598,7 @@ class MemgraphBackend(VectorBackend):
             "model_name": "microsoft/unixcoder-base",
         }
 
-        result = self._get_ingestor().fetch_all(cypher, params)
+        result = self._execute_query(cypher, params)
         return result[0]["stored"] if result else 0
 
     def search(
@@ -603,42 +607,57 @@ class MemgraphBackend(VectorBackend):
         top_k: int = 5,
         filters: dict | None = None
     ) -> list[tuple[int, float]]:
-        """Search using native vector_search.
+        """Search across all per-label indexes and combine results.
 
-        Note: Parameter order is (index_name, limit, query_vector)
-        Returns: (node_id, similarity) tuples
+        Queries each label-specific index (function_embedding_index,
+        method_embedding_index, etc.) and merges results by similarity.
+
+        Note: Parameter order for vector_search.search is (index_name, limit, query_vector)
+        Returns: (node_id, similarity) tuples sorted by similarity descending.
         """
-        # Base search query with correct parameter order
-        if filters and "project_prefix" in filters:
-            cypher = """
-            CALL vector_search.search($index_name, $top_k * 2, $embedding)
-            YIELD node, distance, similarity
-            WHERE node.qualified_name STARTS WITH $project_prefix
-            RETURN id(node) as node_id, similarity
-            ORDER BY distance ASC
-            LIMIT $top_k;
-            """
+        results: list[tuple[int, float]] = []
+        project_prefix = filters.get("project_prefix") if filters else None
+
+        for label in self.LABELS_TO_INDEX:
+            index_name = f"{label.lower()}_embedding_index"
+
+            # Fetch more results if filtering by project prefix
+            fetch_count = top_k * 3 if project_prefix else top_k
+
+            if project_prefix:
+                cypher = """
+                CALL vector_search.search($index_name, $fetch_count, $embedding)
+                YIELD node, distance, similarity
+                WHERE node.qualified_name STARTS WITH $project_prefix
+                RETURN id(node) AS node_id, similarity
+                ORDER BY distance ASC;
+                """
+            else:
+                cypher = """
+                CALL vector_search.search($index_name, $top_k, $embedding)
+                YIELD node, distance, similarity
+                RETURN id(node) AS node_id, similarity
+                ORDER BY distance ASC;
+                """
+
             params = {
-                "index_name": self.INDEX_NAME,
+                "index_name": index_name,
                 "embedding": query_embedding,
                 "top_k": top_k,
-                "project_prefix": filters["project_prefix"],
-            }
-        else:
-            cypher = """
-            CALL vector_search.search($index_name, $top_k, $embedding)
-            YIELD node, distance, similarity
-            RETURN id(node) as node_id, similarity
-            ORDER BY distance ASC;
-            """
-            params = {
-                "index_name": self.INDEX_NAME,
-                "embedding": query_embedding,
-                "top_k": top_k,
+                "fetch_count": fetch_count,
+                "project_prefix": project_prefix,
             }
 
-        results = self._get_ingestor().fetch_all(cypher, params)
-        return [(r["node_id"], r["similarity"]) for r in results]
+            try:
+                label_results = self._execute_query(cypher, params)
+                for r in label_results:
+                    results.append((int(r["node_id"]), float(r.get("similarity", 0.0))))
+            except Exception:
+                continue  # Skip if index doesn't exist
+
+        # Sort by similarity and return top_k
+        results.sort(key=lambda x: x[1], reverse=True)
+        return results[:top_k]
 
     def delete_batch(self, node_ids: Sequence[int]) -> int:
         """Remove embeddings from nodes."""
@@ -650,7 +669,7 @@ class MemgraphBackend(VectorBackend):
             n.embedding_version = NULL
         RETURN count(n) as deleted;
         """
-        result = self._get_ingestor().fetch_all(
+        result = self._execute_query(
             cypher, {"node_ids": list(node_ids)}
         )
         return result[0]["deleted"] if result else 0
@@ -662,7 +681,7 @@ class MemgraphBackend(VectorBackend):
         WHERE id(n) IN $node_ids AND n.embedding IS NOT NULL
         RETURN collect(id(n)) as found_ids;
         """
-        result = self._get_ingestor().fetch_all(
+        result = self._execute_query(
             cypher, {"node_ids": list(expected_ids)}
         )
         return set(result[0]["found_ids"]) if result else set()
@@ -677,29 +696,45 @@ class MemgraphBackend(VectorBackend):
           count(DISTINCT labels(n)) as node_types,
           max(size(n.embedding)) as max_dimension;
         """
-        result = self._get_ingestor().fetch_all(cypher)
+        result = self._execute_query(cypher)
         return result[0] if result else {}
 
     def close(self) -> None:
-        if self._ingestor:
-            self._ingestor = None
+        if self._conn:
+            self._conn.close()
+            self._conn = None
 ```
 
 ---
 
 ## 7. Cypher Query Templates
 
-### 7.1 Index Creation
+### 7.1 Index Creation (Per-Label Indexes)
 
 ```cypher
--- Create vector index for Function embeddings (capacity required)
+-- Create vector indexes for each embeddable node type
 CREATE VECTOR INDEX function_embedding_index
 ON :Function(embedding)
 WITH CONFIG {dimension: 768, capacity: 10000, metric: "cos"};
 
--- Create vector index for Method embeddings
 CREATE VECTOR INDEX method_embedding_index
 ON :Method(embedding)
+WITH CONFIG {dimension: 768, capacity: 10000, metric: "cos"};
+
+CREATE VECTOR INDEX class_embedding_index
+ON :Class(embedding)
+WITH CONFIG {dimension: 768, capacity: 10000, metric: "cos"};
+
+CREATE VECTOR INDEX interface_embedding_index
+ON :Interface(embedding)
+WITH CONFIG {dimension: 768, capacity: 10000, metric: "cos"};
+
+CREATE VECTOR INDEX contract_embedding_index
+ON :Contract(embedding)
+WITH CONFIG {dimension: 768, capacity: 10000, metric: "cos"};
+
+CREATE VECTOR INDEX library_embedding_index
+ON :Library(embedding)
 WITH CONFIG {dimension: 768, capacity: 10000, metric: "cos"};
 
 -- Show all vector indexes
@@ -726,7 +761,7 @@ ORDER BY distance ASC;
 
 ```cypher
 -- Find similar functions and their call targets
-CALL vector_search.search("code_embedding_index", $top_k, $query_vector)
+CALL vector_search.search("function_embedding_index", $top_k, $query_vector)
 YIELD node, distance, similarity
 MATCH (node)-[:CALLS*1..3]->(callee:Function|Method)
 RETURN
