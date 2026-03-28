@@ -108,9 +108,10 @@ PointStruct(
 
 ```cypher
 -- Create vector index (stable API since v3.0.0)
+-- Note: CONFIG uses JSON-style quoted keys
 CREATE VECTOR INDEX index_name
 ON :Label(property)
-WITH CONFIG {dimension: 768, capacity: 10000, metric: "cos"};
+WITH CONFIG {"dimension": 768, "capacity": 10000, "metric": "cos"};
 
 -- Drop vector index
 DROP VECTOR INDEX index_name;
@@ -548,26 +549,23 @@ class MemgraphBackend(VectorBackend):
 
         Memgraph requires explicit capacity estimation (~2x function count).
         Per-label indexes allow efficient filtering by node type.
+
+        Note: CONFIG uses JSON-style quoted keys: "dimension" not dimension
         """
         for label in self.LABELS_TO_INDEX:
-            cypher = """
-            CREATE VECTOR INDEX $index_name
+            index_name = f"{label.lower()}_embedding_index"
+            cypher = f"""
+            CREATE VECTOR INDEX {index_name}
             ON :{label}(embedding)
-            WITH CONFIG {
-                dimension: $dimension,
-                capacity: $capacity,
-                metric: $metric
-            };
-            """.replace("{label}", label)
+            WITH CONFIG {{
+                "dimension": {settings.MEMGRAPH_VECTOR_DIM},
+                "capacity": {settings.MEMGRAPH_VECTOR_CAPACITY},
+                "metric": "{settings.MEMGRAPH_VECTOR_METRIC}"
+            }};
+            """
 
-            params = {
-                "index_name": f"{label.lower()}_embedding_index",
-                "dimension": settings.MEMGRAPH_VECTOR_DIM,
-                "capacity": settings.MEMGRAPH_VECTOR_CAPACITY,
-                "metric": settings.MEMGRAPH_VECTOR_METRIC,
-            }
             try:
-                self._execute_query(cypher, params)
+                self._execute_query(cypher)
             except Exception as e:
                 if "already exists" not in str(e).lower():
                     raise
@@ -713,29 +711,30 @@ class MemgraphBackend(VectorBackend):
 
 ```cypher
 -- Create vector indexes for each embeddable node type
+-- Note: CONFIG uses JSON-style quoted keys
 CREATE VECTOR INDEX function_embedding_index
 ON :Function(embedding)
-WITH CONFIG {dimension: 768, capacity: 10000, metric: "cos"};
+WITH CONFIG {"dimension": 768, "capacity": 10000, "metric": "cos"};
 
 CREATE VECTOR INDEX method_embedding_index
 ON :Method(embedding)
-WITH CONFIG {dimension: 768, capacity: 10000, metric: "cos"};
+WITH CONFIG {"dimension": 768, "capacity": 10000, "metric": "cos"};
 
 CREATE VECTOR INDEX class_embedding_index
 ON :Class(embedding)
-WITH CONFIG {dimension: 768, capacity: 10000, metric: "cos"};
+WITH CONFIG {"dimension": 768, "capacity": 10000, "metric": "cos"};
 
 CREATE VECTOR INDEX interface_embedding_index
 ON :Interface(embedding)
-WITH CONFIG {dimension: 768, capacity: 10000, metric: "cos"};
+WITH CONFIG {"dimension": 768, "capacity": 10000, "metric": "cos"};
 
 CREATE VECTOR INDEX contract_embedding_index
 ON :Contract(embedding)
-WITH CONFIG {dimension: 768, capacity: 10000, metric: "cos"};
+WITH CONFIG {"dimension": 768, "capacity": 10000, "metric": "cos"};
 
 CREATE VECTOR INDEX library_embedding_index
 ON :Library(embedding)
-WITH CONFIG {dimension: 768, capacity: 10000, metric: "cos"};
+WITH CONFIG {"dimension": 768, "capacity": 10000, "metric": "cos"};
 
 -- Show all vector indexes
 SHOW VECTOR INDEX INFO;

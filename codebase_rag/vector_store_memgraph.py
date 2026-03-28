@@ -92,25 +92,19 @@ class MemgraphBackend(VectorBackend):
         logger.info(ls.MG_VECTOR_INIT.format(index=settings.MEMGRAPH_VECTOR_INDEX_NAME))
 
         for label in self.LABELS_TO_INDEX:
-            cypher = """
-            CREATE VECTOR INDEX $index_name
+            index_name = f"{label.lower()}_embedding_index"
+            cypher = f"""
+            CREATE VECTOR INDEX {index_name}
             ON :{label}(embedding)
             WITH CONFIG {{
-                dimension: $dimension,
-                capacity: $capacity,
-                metric: $metric
+                "dimension": {settings.MEMGRAPH_VECTOR_DIM},
+                "capacity": {settings.MEMGRAPH_VECTOR_CAPACITY},
+                "metric": "{settings.MEMGRAPH_VECTOR_METRIC}"
             }};
-            """.replace("{label}", label)
-
-            params = {
-                "index_name": f"{label.lower()}_embedding_index",
-                "dimension": settings.MEMGRAPH_VECTOR_DIM,
-                "capacity": settings.MEMGRAPH_VECTOR_CAPACITY,
-                "metric": settings.MEMGRAPH_VECTOR_METRIC,
-            }
+            """
 
             try:
-                self._execute_query(cypher, params)
+                self._execute_query(cypher)
                 logger.info(
                     ls.MG_VECTOR_INDEX_CREATED.format(
                         index=f"{label.lower()}_embedding_index",
