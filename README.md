@@ -66,6 +66,7 @@ An accurate Retrieval-Augmented Generation (RAG) system that analyzes multi-lang
 | PHP | Fully Supported | .php | ✓ | ✓ | ✓ | - | Classes, interfaces, traits, enums, namespaces, PHP 8 attributes |
 | Python | Fully Supported | .py | ✓ | ✓ | ✓ | ✓ | Type inference, decorators, nested functions |
 | Rust | Fully Supported | .rs | ✓ | ✓ | ✓ | ✓ | impl blocks, associated functions |
+| Solidity | Fully Supported | .sol | ✓ | ✓ | ✓ | ✓ | Contracts, interfaces, libraries, events, modifiers, state variables |
 | TypeScript | Fully Supported | .ts, .tsx | ✓ | ✓ | ✓ | - | Interfaces, type aliases, enums, namespaces, ES6/CommonJS modules |
 | C# | In Development | .cs | ✓ | ✓ | ✓ | - | Classes, interfaces, generics (planned) |
 | Go | In Development | .go | ✓ | ✓ | ✓ | - | Methods, type declarations |
@@ -566,6 +567,7 @@ claude mcp add --transport stdio code-graph-rag \
 | `write_file` | Write content to a file, creating it if it doesn't exist. |
 | `list_directory` | List contents of a directory in the project. |
 | `semantic_search` | Performs a semantic search for functions based on a natural language query describing their purpose, returning a list of potential matches with similarity scores. Requires the 'semantic' extra to be installed. |
+| `ask_agent` | Ask the Code Graph RAG agent a question about the codebase. Uses the full RAG pipeline to analyze the code graph and provide a detailed answer. Use this for general questions about architecture, functionality, and code relationships. |
 <!-- /SECTION:mcp_tools -->
 
 ### Example Usage
@@ -602,6 +604,12 @@ The knowledge graph uses the following node types and relationships:
 | ModuleInterface | `{qualified_name: string, name: string, path: string, absolute_path: string}` |
 | ModuleImplementation | `{qualified_name: string, name: string, path: string, absolute_path: string, implements_module: string}` |
 | ExternalPackage | `{name: string, version_spec: string}` |
+| Contract | `{qualified_name: string, name: string, is_abstract: bool, path: string, absolute_path: string, start_line: int, end_line: int}` |
+| Library | `{qualified_name: string, name: string, path: string, absolute_path: string, start_line: int, end_line: int}` |
+| Event | `{qualified_name: string, name: string, parameters: list[string], is_anonymous: bool, indexed_count: int, path: string, absolute_path: string, start_line: int, end_line: int}` |
+| Modifier | `{qualified_name: string, name: string, parameters: list[string], path: string, absolute_path: string, start_line: int, end_line: int}` |
+| StateVariable | `{qualified_name: string, name: string, type: string, visibility: string, is_constant: bool, is_immutable: bool, is_mapped: bool, path: string, absolute_path: string, start_line: int, end_line: int}` |
+| CustomError | `{qualified_name: string, name: string, parameters: list[string], path: string, absolute_path: string, start_line: int, end_line: int}` |
 <!-- /SECTION:node_schemas -->
 
 ### Language-Specific Mappings
@@ -615,6 +623,7 @@ The knowledge graph uses the following node types and relationships:
 - **PHP**: `anonymous_function`, `arrow_function`, `class_declaration`, `enum_declaration`, `function_definition`, `interface_declaration`, `method_declaration`, `trait_declaration`
 - **Python**: `class_definition`, `function_definition`
 - **Rust**: `closure_expression`, `enum_item`, `function_item`, `function_signature_item`, `impl_item`, `struct_item`, `trait_item`, `type_item`, `union_item`
+- **Solidity**: `constructor_definition`, `contract_declaration`, `enum_declaration`, `fallback_receive_definition`, `function_definition`, `interface_declaration`, `library_declaration`, `modifier_definition`, `struct_declaration`
 - **TypeScript**: `abstract_class_declaration`, `arrow_function`, `class`, `class_declaration`, `enum_declaration`, `function_declaration`, `function_expression`, `function_signature`, `generator_function_declaration`, `interface_declaration`, `internal_module`, `method_definition`, `type_alias_declaration`
 - **C#**: `anonymous_method_expression`, `class_declaration`, `constructor_declaration`, `destructor_declaration`, `enum_declaration`, `function_pointer_type`, `interface_declaration`, `lambda_expression`, `local_function_statement`, `method_declaration`, `struct_declaration`
 - **Go**: `function_declaration`, `method_declaration`, `type_declaration`
@@ -630,18 +639,30 @@ The knowledge graph uses the following node types and relationships:
 | Project, Package, Folder | CONTAINS_FOLDER | Folder |
 | Project, Package, Folder | CONTAINS_FILE | File |
 | Project, Package, Folder | CONTAINS_MODULE | Module |
-| Module | DEFINES | Class, Function |
+| Module | DEFINES | Class, Function, Interface, Enum, Type, Union |
 | Class | DEFINES_METHOD | Method |
 | Module | IMPORTS | Module |
-| Module | EXPORTS | Class, Function |
+| Module | EXPORTS | Class, Function, Interface, Enum, Type, Union |
 | Module | EXPORTS_MODULE | ModuleInterface |
 | Module | IMPLEMENTS_MODULE | ModuleImplementation |
-| Class | INHERITS | Class |
-| Class | IMPLEMENTS | Interface |
+| Class, Contract | INHERITS | Class, Contract |
+| Class, Contract | IMPLEMENTS | Interface |
 | Method | OVERRIDES | Method |
 | ModuleImplementation | IMPLEMENTS | ModuleInterface |
 | Project | DEPENDS_ON_EXTERNAL | ExternalPackage |
 | Function, Method | CALLS | Function, Method |
+| Function, Method | EMITS | Event |
+| Function, Method | MODIFIED_BY | Modifier |
+| Contract, Library | USES_LIBRARY | Library |
+| Function, Method | CALLS_EXTERNAL | Function, Method |
+| Contract, Interface | DEFINES_EVENT | Event |
+| Contract | DEFINES_MODIFIER | Modifier |
+| Contract | DEFINES_STATE | StateVariable |
+| Function, Method | CALLS_DELEGATE | Function, Method |
+| Function, Method | CALLS_STATIC | Function, Method |
+| Function, Method | READS_STATE | StateVariable |
+| Function, Method | WRITES_STATE | StateVariable |
+| Function, Method | REVERTS_WITH | CustomError |
 <!-- /SECTION:relationship_schemas -->
 
 ## 🔧 Configuration
@@ -707,9 +728,10 @@ my_build_output
 - **pydantic-settings**: Settings management using Pydantic
 - **pymgclient**: Memgraph database adapter for Python language
 - **python-dotenv**: Read key-value pairs from a .env file and set them as environment variables
-- **tiktoken**: Fast BPE tokeniser used for token counting and context window management
+- **tiktoken**: tiktoken is a fast BPE tokeniser for use with OpenAI's models
 - **toml**: Python Library for Tom's Obvious, Minimal Language
 - **tree-sitter-python**: Python grammar for tree-sitter
+- **tree-sitter-solidity**: Solidity grammar for tree-sitter
 - **tree-sitter**: Python bindings to the Tree-sitter parsing library
 - **watchdog**: Filesystem events monitoring
 - **typer**: Typer, build great CLIs. Easy to code. Based on Python type hints.
@@ -739,7 +761,7 @@ The agent has access to a suite of tools to understand and interact with the cod
 | `replace_code` | Surgically replaces specific code blocks in files. Requires exact target code and replacement. Only modifies the specified block, leaving rest of file unchanged. True surgical patching. |
 | `list_directory` | Lists the contents of a directory to explore the codebase. |
 | `analyze_document` | Analyzes documents (PDFs, images) to answer questions about their content. |
-| `execute_shell` | Executes shell commands from allowlist. Read-only commands run without approval; write operations require user confirmation. |
+| `execute_shell` | Executes shell commands from allowlist. Read-only commands run without approval; write operations require user confirmation. IMPORTANT: Shell redirect operators (> >> < << 2>/dev/null 2>&1 etc.) are NOT supported because direct process execution cannot interpret shell syntax. |
 | `semantic_search` | Performs a semantic search for functions based on a natural language query describing their purpose, returning a list of potential matches with similarity scores. |
 | `get_function_source` | Retrieves the source code for a specific function or method using its internal node ID, typically obtained from a semantic search result. |
 | `get_code_snippet` | Retrieves the source code for a specific function, class, or method using its full qualified name. |

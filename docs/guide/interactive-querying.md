@@ -73,7 +73,7 @@ The interactive agent has access to these tools:
 | `replace_code` | Surgically replace specific code blocks |
 | `list_directory` | List directory contents |
 | `analyze_document` | Analyze documents (PDFs, images) |
-| `execute_shell` | Execute shell commands from allowlist |
+| `execute_shell` | Execute shell commands from allowlist (redirects not supported) |
 | `semantic_search` | Semantic function search by description |
 | `get_function_source` | Retrieve source code by node ID |
 | `get_code_snippet` | Retrieve source code by qualified name |
