@@ -63,7 +63,7 @@ Drop-in hash function replacement in `EmbeddingCache._content_hash()` and `_hash
 ### Integration Overhead
 - **Serialization boundary:** Zero. blake3 Python package is a C extension.
 - **API change:** `hashlib.sha256(content.encode()).hexdigest()` becomes `blake3.blake3(content.encode()).hexdigest()`. One-line change per call site.
-- **Cache invalidation:** Existing embedding caches (`.qdrant_code_embeddings/embedding_cache.json`) and file hash caches (`.file_hashes.json`) will be invalidated because hash values change. This forces a full re-index on first run after the change.
+- **Cache invalidation:** Existing embedding caches (`.embedding_cache/.embedding_cache.json`) and file hash caches (`.file_hashes.json`) will be invalidated because hash values change. This forces a full re-index on first run after the change.
 - **Build system change:** Add `blake3>=1.0.0` to dependencies. blake3 publishes pre-built wheels.
 - **Docker/PyInstaller:** Minimal impact. blake3 is a small native extension.
 

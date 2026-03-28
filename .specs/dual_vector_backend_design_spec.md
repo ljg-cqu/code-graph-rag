@@ -401,6 +401,9 @@ class AppConfig(BaseSettings):
     VECTOR_EMBEDDING_BATCH_SIZE: int = 50
     VECTOR_MIN_SIMILARITY: float = 0.0
 
+    # Embedding cache (backend-agnostic)
+    EMBEDDING_CACHE_DIR: str = "./.embedding_cache"
+
     # Keep Qdrant settings for backward compatibility
     QDRANT_DB_PATH: str = "./.qdrant_code_embeddings"
     QDRANT_COLLECTION_NAME: str = "code_embeddings"
@@ -429,6 +432,9 @@ MEMGRAPH_VECTOR_SCALAR_KIND=f32     # f32 (default), f16 (save memory)
 # Qdrant Settings (when backend=qdrant)
 # QDRANT_URI=http://localhost:6333  # Remote Qdrant server
 # QDRANT_API_KEY=your-api-key       # For Qdrant Cloud
+
+# Embedding Cache (backend-agnostic)
+EMBEDDING_CACHE_DIR=./.embedding_cache
 
 # Unified Settings
 VECTOR_SEARCH_TOP_K=5

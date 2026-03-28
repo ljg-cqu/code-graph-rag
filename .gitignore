@@ -14,6 +14,7 @@ wheels/
 .mypy_cache/
 .pytest_cache/
 .claude/
+.embedding_cache/
 .qdrant_code_embeddings/
 CLAUDE.md
 AGENTS.md

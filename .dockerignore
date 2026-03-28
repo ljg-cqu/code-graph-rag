@@ -17,6 +17,7 @@ wheels
 docs
 site
 .github
+.embedding_cache
 .qdrant_code_embeddings
 CLAUDE.md
 AGENTS.md
