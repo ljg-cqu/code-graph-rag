@@ -9,6 +9,7 @@ from tree_sitter import Node
 from ... import constants as cs
 from ... import logs
 from ..cpp import utils as cpp_utils
+from ..handlers import get_handler
 from ..utils import safe_decode_text
 from .utils import find_child_by_type
 
@@ -50,6 +51,12 @@ def extract_parent_classes(
             extract_interface_parents(
                 class_node, module_qn, import_processor, resolve_to_qn
             )
+        )
+
+    # Solidity contract inheritance
+    if class_node.type == cs.TS_SOL_CONTRACT_DECLARATION:
+        parent_classes.extend(
+            extract_solidity_inheritance(class_node, module_qn, resolve_to_qn)
         )
 
     return parent_classes
@@ -325,3 +332,20 @@ def extract_java_interface_names(
                 if type_child.type == cs.TS_TYPE_IDENTIFIER and type_child.text:
                     if interface_name := safe_decode_text(type_child):
                         interface_list.append(resolve_to_qn(interface_name, module_qn))
+
+
+def extract_solidity_inheritance(
+    contract_node: Node,
+    module_qn: str,
+    resolve_to_qn: Callable[[str, str], str],
+) -> list[str]:
+    """Extract parent contracts from Solidity inheritance specifier.
+
+    Solidity uses 'is' keyword for inheritance:
+        contract Child is Parent1, Parent2 { }
+
+    The inheritance_specifier node contains user_defined_type children.
+    """
+    handler = get_handler(cs.SupportedLanguage.SOLIDITY)
+    base_names = handler.extract_inheritance(contract_node)
+    return [resolve_to_qn(name, module_qn) for name in base_names]
