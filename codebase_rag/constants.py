@@ -471,17 +471,26 @@ CSPROJ_SUFFIX = ".csproj"
 # (H) Cypher queries
 CYPHER_DEFAULT_LIMIT = 50
 
-# Base query for embeddings - handles both standalone functions and methods in classes
-# Path 1: Module -> DEFINES -> Function (standalone functions)
-# Path 2: Module -> DEFINES -> Class/Contract -> DEFINES_METHOD -> Method (methods in classes)
+# Base query for embeddings - retrieves all embeddable node types:
+# - Function: standalone functions (Module -> DEFINES -> Function)
+# - Method: methods in classes (Module -> DEFINES -> Class -> DEFINES_METHOD -> Method)
+# - Class: class definitions (Module -> DEFINES -> Class)
+# - Interface: interface definitions (Module -> DEFINES -> Interface)
+# - Contract: Solidity contracts (Module -> DEFINES -> Contract)
+# - Library: Solidity libraries (Module -> DEFINES -> Library)
 _CYPHER_EMBEDDING_BASE = """
 MATCH (m:Module)
 WHERE m.qualified_name STARTS WITH ($project_name + '.')
 OPTIONAL MATCH (m)-[:DEFINES]->(f:Function)
 OPTIONAL MATCH (m)-[:DEFINES]->(c)-[:DEFINES_METHOD]->(meth:Method)
-WITH m, f, meth
-WHERE f IS NOT NULL OR meth IS NOT NULL
-WITH m, COALESCE(f, meth) AS n
+OPTIONAL MATCH (m)-[:DEFINES]->(cls:Class)
+OPTIONAL MATCH (m)-[:DEFINES]->(iface:Interface)
+OPTIONAL MATCH (m)-[:DEFINES]->(contract:Contract)
+OPTIONAL MATCH (m)-[:DEFINES]->(lib:Library)
+WITH m, f, meth, cls, iface, contract, lib
+WHERE f IS NOT NULL OR meth IS NOT NULL OR cls IS NOT NULL
+      OR iface IS NOT NULL OR contract IS NOT NULL OR lib IS NOT NULL
+WITH m, COALESCE(f, meth, cls, iface, contract, lib) AS n
 """
 
 CYPHER_QUERY_EMBEDDINGS = (
@@ -497,9 +506,14 @@ MATCH (m:Module)
 WHERE m.qualified_name STARTS WITH ($project_name + '.')
 OPTIONAL MATCH (m)-[:DEFINES]->(f:Function)
 OPTIONAL MATCH (m)-[:DEFINES]->(c)-[:DEFINES_METHOD]->(meth:Method)
-WITH m, f, meth
-WHERE f IS NOT NULL OR meth IS NOT NULL
-WITH COALESCE(f, meth) AS n
+OPTIONAL MATCH (m)-[:DEFINES]->(cls:Class)
+OPTIONAL MATCH (m)-[:DEFINES]->(iface:Interface)
+OPTIONAL MATCH (m)-[:DEFINES]->(contract:Contract)
+OPTIONAL MATCH (m)-[:DEFINES]->(lib:Library)
+WITH f, meth, cls, iface, contract, lib
+WHERE f IS NOT NULL OR meth IS NOT NULL OR cls IS NOT NULL
+      OR iface IS NOT NULL OR contract IS NOT NULL OR lib IS NOT NULL
+WITH COALESCE(f, meth, cls, iface, contract, lib) AS n
 RETURN id(n) AS node_id
 """
 

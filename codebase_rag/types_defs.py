@@ -22,7 +22,7 @@ PropertyValue = str | int | float | bool | list[str] | None
 PropertyDict = dict[str, PropertyValue]
 
 type ResultScalar = str | int | float | bool | None
-type ResultValue = ResultScalar | list[ResultScalar] | dict[str, ResultScalar]
+type ResultValue = ResultScalar | list[ResultValue] | dict[str, ResultValue]
 type ResultRow = dict[str, ResultValue]
 
 
@@ -536,10 +536,10 @@ RELATIONSHIP_SCHEMAS: tuple[RelationshipSchema, ...] = (
     RelationshipSchema(
         (NodeLabel.MODULE,),
         RelationshipType.DEFINES,
-        (NodeLabel.CLASS, NodeLabel.FUNCTION, NodeLabel.INTERFACE, NodeLabel.ENUM, NodeLabel.TYPE, NodeLabel.UNION),
+        (NodeLabel.CLASS, NodeLabel.FUNCTION, NodeLabel.INTERFACE, NodeLabel.ENUM, NodeLabel.TYPE, NodeLabel.UNION, NodeLabel.CONTRACT, NodeLabel.LIBRARY),
     ),
     RelationshipSchema(
-        (NodeLabel.CLASS,),
+        (NodeLabel.CLASS, NodeLabel.CONTRACT,),
         RelationshipType.DEFINES_METHOD,
         (NodeLabel.METHOD,),
     ),

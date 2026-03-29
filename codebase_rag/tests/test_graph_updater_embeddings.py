@@ -63,6 +63,23 @@ class TestCypherQueryEmbeddingsStructure:
                     f"$project_name + '.' must be parenthesized in: {stripped!r}"
                 )
 
+    def test_includes_all_embeddable_node_types(self) -> None:
+        """Verify the embedding query includes all node types that should be embedded."""
+        # These are the node types that should have embeddings
+        expected_node_types = ["Function", "Method", "Class", "Interface", "Contract", "Library"]
+        for node_type in expected_node_types:
+            assert node_type in cs.CYPHER_QUERY_EMBEDDINGS, (
+                f"CYPHER_QUERY_EMBEDDINGS should include {node_type} node type"
+            )
+
+    def test_project_node_ids_includes_all_embeddable_types(self) -> None:
+        """Verify CYPHER_QUERY_PROJECT_NODE_IDS includes all embeddable node types."""
+        expected_node_types = ["Function", "Method", "Class", "Interface", "Contract", "Library"]
+        for node_type in expected_node_types:
+            assert node_type in cs.CYPHER_QUERY_PROJECT_NODE_IDS, (
+                f"CYPHER_QUERY_PROJECT_NODE_IDS should include {node_type} node type"
+            )
+
 
 class TestGenerateSemanticEmbeddings:
     @_PATCH_DEPS

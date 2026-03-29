@@ -25,6 +25,12 @@ The knowledge graph uses a unified schema across all supported languages.
 | ModuleInterface | `{qualified_name: string, name: string, path: string}` |
 | ModuleImplementation | `{qualified_name: string, name: string, path: string, implements_module: string}` |
 | ExternalPackage | `{name: string, version_spec: string}` |
+| Contract | `{qualified_name: string, name: string, is_abstract: bool}` |
+| Library | `{qualified_name: string, name: string}` |
+| Event | `{qualified_name: string, name: string, parameters: list[string]}` |
+| Modifier | `{qualified_name: string, name: string, parameters: list[string]}` |
+| StateVariable | `{qualified_name: string, name: string, type: string, visibility: string}` |
+| CustomError | `{qualified_name: string, name: string, parameters: list[string]}` |
 
 ## Relationships
 
@@ -34,18 +40,43 @@ The knowledge graph uses a unified schema across all supported languages.
 | Project, Package, Folder | CONTAINS_FOLDER | Folder |
 | Project, Package, Folder | CONTAINS_FILE | File |
 | Project, Package, Folder | CONTAINS_MODULE | Module |
-| Module | DEFINES | Class, Function |
-| Class | DEFINES_METHOD | Method |
+| Module | DEFINES | Class, Function, Interface, Enum, Type, Union, Contract, Library |
+| Class, Contract | DEFINES_METHOD | Method |
 | Module | IMPORTS | Module |
-| Module | EXPORTS | Class, Function |
+| Module | EXPORTS | Class, Function, Interface, Enum, Type, Union |
 | Module | EXPORTS_MODULE | ModuleInterface |
 | Module | IMPLEMENTS_MODULE | ModuleImplementation |
-| Class | INHERITS | Class |
-| Class | IMPLEMENTS | Interface |
+| Class, Contract | INHERITS | Class, Contract |
+| Class, Contract | IMPLEMENTS | Interface |
 | Method | OVERRIDES | Method |
 | ModuleImplementation | IMPLEMENTS | ModuleInterface |
 | Project | DEPENDS_ON_EXTERNAL | ExternalPackage |
 | Function, Method | CALLS | Function, Method |
+| Contract | DEFINES_EVENT | Event |
+| Contract | DEFINES_MODIFIER | Modifier |
+| Contract | DEFINES_STATE | StateVariable |
+| Function, Method | EMITS | Event |
+| Function, Method | MODIFIED_BY | Modifier |
+| Contract, Library | USES_LIBRARY | Library |
+| Function, Method | CALLS_EXTERNAL | Function, Method |
+| Function, Method | CALLS_DELEGATE | Function, Method |
+| Function, Method | CALLS_STATIC | Function, Method |
+| Function, Method | READS_STATE | StateVariable |
+| Function, Method | WRITES_STATE | StateVariable |
+| Function, Method | REVERTS_WITH | CustomError |
+
+## Embeddable Node Types
+
+The following node types support semantic embeddings for code search:
+
+| Node Type | Description |
+|-----------|-------------|
+| Function | Standalone functions |
+| Method | Class/contract methods |
+| Class | Class definitions |
+| Interface | Interface definitions |
+| Contract | Solidity smart contracts |
+| Library | Solidity libraries |
 
 ## Language-Specific AST Mappings
 

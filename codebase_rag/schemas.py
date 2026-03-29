@@ -1,8 +1,28 @@
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from .types_defs import ResultRow
+
+
+def _normalize_value(val: Any) -> Any:
+    """Recursively normalize a value to ensure Pydantic compatibility.
+
+    Converts any non-standard types to strings while preserving the
+    structure of nested lists and dicts.
+    """
+    if val is None:
+        return None
+    if isinstance(val, str | int | float | bool):
+        return val
+    if isinstance(val, list):
+        return [_normalize_value(item) for item in val]
+    if isinstance(val, dict):
+        return {k: _normalize_value(v) for k, v in val.items()}
+    # Convert any other type to string
+    return str(val)
 
 
 class QueryGraphData(BaseModel):
@@ -18,16 +38,9 @@ class QueryGraphData(BaseModel):
 
         clean_results: list[ResultRow] = []
         for row in v:
-            clean_row: ResultRow = {
-                k: (
-                    val
-                    if isinstance(
-                        val, str | int | float | bool | list | dict | type(None)
-                    )
-                    else str(val)
-                )
-                for k, val in row.items()
-            }
+            if not isinstance(row, dict):
+                continue
+            clean_row: ResultRow = {k: _normalize_value(val) for k, val in row.items()}
             clean_results.append(clean_row)
         return clean_results
 
