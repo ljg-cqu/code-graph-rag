@@ -6,7 +6,7 @@ services:
       - "${MEMGRAPH_HTTP_PORT:-7444}:7444"
     command: ["--schema-info-enabled", "--also-log-to-stderr"]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:7444/health"]
+      test: ["CMD-SHELL", "echo 'RETURN 1;' | mgconsole"]
       interval: 30s
       timeout: 10s
       retries: 3
