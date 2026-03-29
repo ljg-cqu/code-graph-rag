@@ -220,7 +220,7 @@ ORDER BY score DESC;
 
 ### 2.2 MAGE (Memgraph Advanced Graph Extensions)
 
-**Current Docker Image**: `memgraph/memgraph-mage` (already in use)
+**Current Docker Image**: `memgraph/memgraph:latest` (v3.9.0+, lighter, no MAGE crash)
 
 MAGE provides additional algorithms for enhanced search:
 
@@ -997,7 +997,7 @@ version: "3.8"
 
 services:
   memgraph:
-    image: memgraph/memgraph-mage:latest
+    image: memgraph/memgraph:latest
     container_name: memgraph
     ports:
       - "${MEMGRAPH_PORT:-7687}:7687"

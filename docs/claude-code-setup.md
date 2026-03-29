@@ -52,7 +52,7 @@ cd code-graph-rag
 uv sync
 
 # 2. Start Memgraph
-docker run -p 7687:7687 -p 7444:7444 memgraph/memgraph-platform
+docker run -p 7687:7687 -p 7444:7444 memgraph/memgraph:latest
 ```
 
 ## Usage
