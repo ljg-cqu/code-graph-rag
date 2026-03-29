@@ -1,7 +1,7 @@
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, Literal, NamedTuple
 
 from rich.console import Console
 
@@ -92,3 +92,93 @@ class ToolMetadata:
     input_schema: MCPInputSchema
     handler: MCPHandlerType
     returns_json: bool
+
+
+@dataclass
+class CodeChunk:
+    """A semantic chunk of code split at natural boundaries.
+
+    Attributes:
+        content: The source code content of the chunk.
+        start_line: Starting line number (1-indexed).
+        end_line: Ending line number (1-indexed).
+        chunk_type: Type of boundary where chunk was split.
+        parent_scope: Optional scope name (e.g., class name) containing this chunk.
+        parent_fqn: Fully qualified name of parent Function/Method.
+        chunk_index: Position in chunk sequence (0-indexed).
+        token_count: Approximate token count for this chunk.
+        metadata: Additional metadata (e.g., original node type).
+    """
+
+    content: str
+    start_line: int
+    end_line: int
+    chunk_type: Literal["class", "function", "method", "block", "statement", "truncated"]
+    parent_scope: str | None = None
+    parent_fqn: str | None = None
+    chunk_index: int = 0
+    token_count: int = 0
+    metadata: dict = field(default_factory=dict)
+
+
+@dataclass
+class ChunkedEmbeddingMetadata:
+    """Metadata for chunked embeddings.
+
+    Attributes:
+        parent_fqn: Qualified name of parent Function/Method.
+        chunk_index: Position in chunk sequence.
+        total_chunks: Total number of chunks for this parent.
+        start_line: Starting line number.
+        end_line: Ending line number.
+        chunk_type: Type of chunk boundary.
+        is_summary: True if this is a summary chunk (hierarchical strategy).
+    """
+
+    parent_fqn: str
+    chunk_index: int
+    total_chunks: int
+    start_line: int
+    end_line: int
+    chunk_type: str
+    is_summary: bool = False
+
+
+@dataclass
+class EmbeddingResult:
+    """Result of embedding generation.
+
+    Attributes:
+        embedding: The embedding vector.
+        chunk: Optional CodeChunk if the code was split.
+        metadata: Optional ChunkedEmbeddingMetadata for chunked embeddings.
+        is_summary: True if this is a summary embedding (hierarchical strategy).
+        child_embeddings: Optional list of child embeddings (hierarchical strategy).
+    """
+
+    embedding: list[float]
+    chunk: CodeChunk | None = None
+    metadata: ChunkedEmbeddingMetadata | None = None
+    is_summary: bool = False
+    child_embeddings: list[list[float]] | None = None
+
+
+@dataclass
+class TruncationResult:
+    """Result of smart query result truncation.
+
+    Attributes:
+        results: The truncated list of result rows.
+        tokens_used: Total tokens used in the truncated results.
+        was_truncated: True if truncation occurred.
+        dropped_count: Number of rows dropped.
+        truncation_reason: Reason for truncation (token_limit, row_cap, none).
+        dropped_rows: List of dropped rows for debugging.
+    """
+
+    results: list[dict]
+    tokens_used: int
+    was_truncated: bool
+    dropped_count: int
+    truncation_reason: Literal["token_limit", "row_cap", "none"]
+    dropped_rows: list[dict] = field(default_factory=list)

@@ -665,3 +665,169 @@ def embed_code_batch(
         results[orig_i] = new_embeddings[idx]
 
     return results
+
+
+def embed_code_smart(
+    code: str,
+    strategy: Literal["truncate", "chunk", "hierarchical", "error"] | None = None,
+    max_length: int | None = None,
+) -> list["EmbeddingResult"]:
+    """Generate embeddings with semantic-aware chunking.
+
+    This function handles code that exceeds the token limit by applying
+    intelligent chunking strategies instead of simple truncation.
+
+    Args:
+        code: The code string to embed.
+        strategy: Chunking strategy to use.
+            - "truncate": Legacy behavior, truncate at max_length.
+            - "chunk": Split at semantic boundaries (recommended).
+            - "hierarchical": Create summary + chunk embeddings.
+            - "error": Raise error if code exceeds limit.
+        max_length: Maximum token length. Uses config default if not specified.
+
+    Returns:
+        List of EmbeddingResult objects (may be multiple for chunked code).
+
+    Raises:
+        RuntimeError: If semantic dependencies are not installed.
+        ValueError: If strategy is "error" and code exceeds limit.
+    """
+    from typing import Literal
+
+    from .models import ChunkedEmbeddingMetadata, CodeChunk, EmbeddingResult
+    from .utils.code_chunker import SemanticCodeChunker, generate_code_summary
+    from .utils.token_utils import count_tokens
+
+    # Use config default if not specified
+    effective_strategy = strategy or settings.EMBEDDING_CHUNKING_STRATEGY
+    effective_max_length = max_length or settings.EMBEDDING_MAX_LENGTH
+    token_count = count_tokens(code)
+
+    # Validate against absolute context limit
+    if token_count > cs.UNIXCODER_MAX_CONTEXT:
+        if effective_strategy == "error":
+            raise ex.EmbeddingLengthExceededError(
+                f"Code exceeds UniXcoder context limit "
+                f"({token_count} > {cs.UNIXCODER_MAX_CONTEXT}). "
+                f"Use strategy='chunk' to auto-split.",
+                token_count=token_count,
+                max_tokens=cs.UNIXCODER_MAX_CONTEXT,
+            )
+        # Force chunking
+        effective_strategy = "chunk"
+        logger.warning(
+            f"Code ({token_count} tokens) exceeds UniXcoder context limit "
+            f"({cs.UNIXCODER_MAX_CONTEXT}), forcing chunking strategy"
+        )
+
+    # Fast path: already under embedding limit
+    if token_count <= effective_max_length:
+        embedding = embed_code(code, max_length=effective_max_length)
+        return [EmbeddingResult(embedding=embedding)]
+
+    # Handle oversized code based on strategy
+    match effective_strategy:
+        case "truncate":
+            # Legacy behavior: truncate
+            embedding = embed_code(code, max_length=effective_max_length)
+            logger.info(
+                ls.EMBEDDING_TRUNCATED.format(
+                    kept_tokens=effective_max_length,
+                    original_tokens=token_count,
+                )
+            )
+            return [EmbeddingResult(embedding=embedding)]
+
+        case "chunk":
+            # Split at semantic boundaries
+            chunker = SemanticCodeChunker(
+                max_tokens=effective_max_length,
+                language="python",  # Default, could be made configurable
+                overlap_tokens=settings.EMBEDDING_CHUNK_OVERLAP_TOKENS,
+                max_chunks_per_node=settings.EMBEDDING_MAX_CHUNKS_PER_NODE,
+            )
+            chunks = chunker.chunk(code)
+
+            if not chunks:
+                # Fallback to truncate if chunking produces nothing
+                embedding = embed_code(code, max_length=effective_max_length)
+                return [EmbeddingResult(embedding=embedding)]
+
+            logger.info(
+                ls.EMBEDDING_CHUNKED.format(
+                    chunks=len(chunks),
+                    original_tokens=token_count,
+                    strategy=effective_strategy,
+                )
+            )
+
+            results: list[EmbeddingResult] = []
+            for i, chunk in enumerate(chunks):
+                embedding = embed_code(chunk.content, max_length=effective_max_length)
+                metadata = ChunkedEmbeddingMetadata(
+                    parent_fqn=chunk.parent_fqn or "",
+                    chunk_index=i,
+                    total_chunks=len(chunks),
+                    start_line=chunk.start_line,
+                    end_line=chunk.end_line,
+                    chunk_type=chunk.chunk_type,
+                    is_summary=False,
+                )
+                results.append(EmbeddingResult(embedding=embedding, chunk=chunk, metadata=metadata))
+
+            return results
+
+        case "hierarchical":
+            # Create chunk embeddings + summary embedding
+            chunker = SemanticCodeChunker(
+                max_tokens=effective_max_length,
+                language="python",
+                overlap_tokens=settings.EMBEDDING_CHUNK_OVERLAP_TOKENS,
+                max_chunks_per_node=settings.EMBEDDING_MAX_CHUNKS_PER_NODE,
+            )
+            chunks = chunker.chunk(code)
+
+            if not chunks:
+                embedding = embed_code(code, max_length=effective_max_length)
+                return [EmbeddingResult(embedding=embedding)]
+
+            # Generate chunk embeddings
+            chunk_embeddings: list[list[float]] = []
+            for chunk in chunks:
+                emb = embed_code(chunk.content, max_length=effective_max_length)
+                chunk_embeddings.append(emb)
+
+            # Generate summary embedding
+            summary = generate_code_summary(code, max_tokens=effective_max_length // 2)
+            summary_embedding = embed_code(summary, max_length=effective_max_length)
+
+            logger.info(
+                ls.EMBEDDING_CHUNKED.format(
+                    chunks=len(chunks) + 1,  # +1 for summary
+                    original_tokens=token_count,
+                    strategy=effective_strategy,
+                )
+            )
+
+            # Return summary embedding with child embeddings
+            return [
+                EmbeddingResult(
+                    embedding=summary_embedding,
+                    is_summary=True,
+                    child_embeddings=chunk_embeddings,
+                )
+            ]
+
+        case "error":
+            raise ex.EmbeddingLengthExceededError(
+                f"Code exceeds {effective_max_length} tokens ({token_count} tokens). "
+                f"Use strategy='chunk' to auto-split.",
+                token_count=token_count,
+                max_tokens=effective_max_length,
+            )
+
+        case _:
+            # Unknown strategy, fall back to truncate
+            embedding = embed_code(code, max_length=effective_max_length)
+            return [EmbeddingResult(embedding=embedding)]

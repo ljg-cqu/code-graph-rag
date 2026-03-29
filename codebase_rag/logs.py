@@ -271,6 +271,18 @@ QUERY_RESULTS_TRUNCATED = (
     "[Tool:QueryGraph] Results truncated: showing {kept} of {total} rows "
     "({tokens} tokens, limit {max_tokens})"
 )
+QUERY_TRUNCATION_DETAILS = (
+    "[Tool:QueryGraph] Truncation details: kept={kept}, dropped={dropped}, "
+    "tokens={tokens}, strategy={strategy}"
+)
+EMBEDDING_CHUNKED = (
+    "[Embedding] Code chunked for embedding: {chunks} chunks from {original_tokens} tokens, "
+    "strategy={strategy}"
+)
+EMBEDDING_TRUNCATED = (
+    "[Embedding] Code truncated for embedding: {kept_tokens}/{original_tokens} tokens kept, "
+    "strategy=truncate"
+)
 TOOL_SHELL_EXEC = "Executing shell command: {cmd}"
 TOOL_SHELL_RETURN = "Return code: {code}"
 TOOL_SHELL_STDOUT = "Stdout: {stdout}"

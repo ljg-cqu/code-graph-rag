@@ -85,6 +85,7 @@ class EmbeddingErrorCode(StrEnum):
     PROVIDER_NOT_FOUND = "E102"
     MODEL_NOT_SUPPORTED = "E103"
     AUTHENTICATION_FAILED = "E104"
+    LENGTH_EXCEEDED = "E105"
 
     # Runtime errors (2xx)
     CONNECTION_FAILED = "E200"
@@ -135,6 +136,28 @@ class InputValidationError(EmbeddingError):
         )
         self.input_text = input_text
         self.reason = reason
+
+
+class EmbeddingLengthExceededError(EmbeddingError):
+    """Raised when input text exceeds maximum token length for embedding."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+        token_count: int | None = None,
+        max_tokens: int | None = None,
+    ) -> None:
+        super().__init__(
+            message,
+            error_code=EmbeddingErrorCode.LENGTH_EXCEEDED,
+            provider=provider,
+            model=model,
+        )
+        self.token_count = token_count
+        self.max_tokens = max_tokens
 
 
 class EmbeddingModelNotFoundError(EmbeddingError):

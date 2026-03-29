@@ -406,6 +406,7 @@ class NodeLabel(StrEnum):
     MODIFIER = "Modifier"
     STATE_VARIABLE = "StateVariable"
     CUSTOM_ERROR = "CustomError"
+    CODE_CHUNK = "CodeChunk"
 
 
 _NODE_LABEL_UNIQUE_KEYS: dict[NodeLabel, UniqueKeyType] = {
@@ -430,6 +431,7 @@ _NODE_LABEL_UNIQUE_KEYS: dict[NodeLabel, UniqueKeyType] = {
     NodeLabel.MODIFIER: UniqueKeyType.QUALIFIED_NAME,
     NodeLabel.STATE_VARIABLE: UniqueKeyType.QUALIFIED_NAME,
     NodeLabel.CUSTOM_ERROR: UniqueKeyType.QUALIFIED_NAME,
+    NodeLabel.CODE_CHUNK: UniqueKeyType.QUALIFIED_NAME,
 }
 
 _missing_keys = set(NodeLabel) - set(_NODE_LABEL_UNIQUE_KEYS.keys())
@@ -469,6 +471,8 @@ class RelationshipType(StrEnum):
     READS_STATE = "READS_STATE"
     WRITES_STATE = "WRITES_STATE"
     REVERTS_WITH = "REVERTS_WITH"
+    # Chunking relationships
+    HAS_CHUNK = "HAS_CHUNK"
 
 
 NODE_PROJECT = NodeLabel.PROJECT

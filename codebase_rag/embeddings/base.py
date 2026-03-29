@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
 
 from .. import constants as cs
+
+if TYPE_CHECKING:
+    from ..utils.token_utils import count_tokens
 
 
 class EmbeddingProvider(ABC):
@@ -87,3 +91,113 @@ class EmbeddingProvider(ABC):
     def get_config(self, key: str, default: str | int | None = None) -> str | int | None:
         """Get a configuration value."""
         return self._config.get(key, default)
+
+    def embed_batch_with_token_limit(
+        self,
+        texts: list[str],
+        batch_size: int = 32,
+        max_batch_tokens: int | None = None,
+    ) -> list[list[float]]:
+        """Generate embeddings for multiple texts with token-aware batching.
+
+        This method creates batches that respect both text count and token limits,
+        providing more efficient API usage and preventing limit violations.
+
+        Args:
+            texts: List of strings to embed.
+            batch_size: Maximum number of texts per batch.
+            max_batch_tokens: Maximum tokens per batch. If None, uses provider default.
+
+        Returns:
+            List of embeddings in the same order as input texts.
+        """
+        if not texts:
+            return []
+
+        if max_batch_tokens is None:
+            max_batch_tokens = self._default_max_batch_tokens()
+
+        # Group texts into token-aware batches
+        batches = self._create_token_aware_batches(
+            texts,
+            max_texts=batch_size,
+            max_tokens=max_batch_tokens,
+        )
+
+        all_embeddings: list[list[float]] = []
+        for batch in batches:
+            batch_embeddings = self.embed_batch(batch, batch_size=len(batch))
+            all_embeddings.extend(batch_embeddings)
+
+        return all_embeddings
+
+    def _create_token_aware_batches(
+        self,
+        texts: list[str],
+        max_texts: int,
+        max_tokens: int,
+    ) -> list[list[str]]:
+        """Create batches that respect both text count and token limits.
+
+        Uses a greedy algorithm to pack texts efficiently.
+
+        Args:
+            texts: List of texts to batch.
+            max_texts: Maximum number of texts per batch.
+            max_tokens: Maximum tokens per batch.
+
+        Returns:
+            List of batches, each containing texts.
+        """
+        from ..utils.token_utils import count_tokens
+
+        batches: list[list[str]] = []
+        current_batch: list[str] = []
+        current_tokens = 0
+
+        for text in texts:
+            text_tokens = count_tokens(text)
+
+            # Check if adding this text would exceed limits
+            would_exceed_count = len(current_batch) >= max_texts
+            would_exceed_tokens = current_tokens + text_tokens > max_tokens
+
+            if would_exceed_count or would_exceed_tokens:
+                # Start new batch
+                if current_batch:
+                    batches.append(current_batch)
+                current_batch = [text]
+                current_tokens = text_tokens
+            else:
+                current_batch.append(text)
+                current_tokens += text_tokens
+
+        # Don't forget the last batch
+        if current_batch:
+            batches.append(current_batch)
+
+        return batches
+
+    def _default_max_batch_tokens(self) -> int:
+        """Default max tokens per batch based on provider.
+
+        Returns conservative estimates based on typical provider limits.
+        """
+        provider = self.provider_name.value if hasattr(self.provider_name, "value") else str(self.provider_name)
+
+        # Conservative estimates based on typical provider limits
+        match provider:
+            case "openai":
+                return 500_000  # OpenAI allows ~500k tokens per batch
+            case "google":
+                # Distinguish between GLA and Vertex AI
+                provider_type = self.get_config("provider_type", "gla")
+                if provider_type == "vertex":
+                    return 7_500_000  # Vertex AI: 250 texts * 30k tokens each
+                return 2_000_000  # GLA: 100 texts * 20k tokens each
+            case "ollama":
+                return 100_000  # Conservative for local models
+            case "local":
+                return 100_000  # Conservative for local models
+            case _:
+                return 100_000  # Default conservative value

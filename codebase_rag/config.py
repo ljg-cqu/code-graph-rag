@@ -3,11 +3,11 @@ from __future__ import annotations
 import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import TypedDict, Unpack
+from typing import Literal, TypedDict, Unpack
 
 from dotenv import load_dotenv
 from loguru import logger
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from . import constants as cs
@@ -333,6 +333,12 @@ class AppConfig(BaseSettings):
     EMBEDDING_MAX_LENGTH: int = 512
     EMBEDDING_PROGRESS_INTERVAL: int = 10
 
+    # Embedding chunking strategy
+    EMBEDDING_CHUNKING_STRATEGY: Literal["truncate", "chunk", "hierarchical", "error"] = "chunk"
+    EMBEDDING_CHUNK_OVERLAP_TOKENS: int = 32
+    EMBEDDING_MAX_CHUNKS_PER_NODE: int = 5
+    EMBEDDING_SKIP_BINARY_FILES: bool = True
+
     FLUSH_THREAD_POOL_SIZE: int = Field(default=4, gt=0)
     FILE_FLUSH_INTERVAL: int = Field(default=500, gt=0)
 
@@ -343,6 +349,14 @@ class AppConfig(BaseSettings):
 
     QUERY_RESULT_MAX_TOKENS: int = Field(default=16000, gt=0)
     QUERY_RESULT_ROW_CAP: int = Field(default=500, gt=0)
+    QUERY_RESULT_TRUNCATION_STRATEGY: Literal["fifo", "relevance", "balanced"] = "balanced"
+    QUERY_RESULT_MAX_ROW_TOKENS: int = 2000
+    QUERY_RESULT_MIN_ROWS: int = 5
+    QUERY_RESULT_DIVERSITY_BUDGET_PCT: float = 0.15
+
+    # Visibility and logging
+    LOG_TRUNCATION_DETAILS: bool = True
+    RETURN_TRUNCATION_METADATA: bool = True
 
     OLLAMA_HEALTH_TIMEOUT: float = 5.0
 
@@ -548,6 +562,74 @@ class AppConfig(BaseSettings):
         if resolved < 1:
             raise ValueError(ex.BATCH_SIZE_POSITIVE)
         return resolved
+
+    @field_validator("EMBEDDING_MAX_LENGTH")
+    @classmethod
+    def validate_embedding_max_length(cls, v: int) -> int:
+        """Validate EMBEDDING_MAX_LENGTH against UniXcoder context limit."""
+        max_context = cs.UNIXCODER_MAX_CONTEXT - 4  # Reserve for special tokens
+        if v > max_context:
+            raise ValueError(
+                f"EMBEDDING_MAX_LENGTH ({v}) must be <= {max_context} "
+                f"(UNIXCODER_MAX_CONTEXT - 4 for special tokens)"
+            )
+        if v < 64:
+            raise ValueError(
+                f"EMBEDDING_MAX_LENGTH ({v}) must be >= 64 for meaningful embeddings"
+            )
+        return v
+
+    @field_validator("EMBEDDING_CHUNK_OVERLAP_TOKENS")
+    @classmethod
+    def validate_chunk_overlap(cls, v: int, info) -> int:
+        """Validate overlap is less than max length."""
+        max_length = info.data.get("EMBEDDING_MAX_LENGTH", 512)
+        if v >= max_length:
+            raise ValueError(
+                f"EMBEDDING_CHUNK_OVERLAP_TOKENS ({v}) must be < "
+                f"EMBEDDING_MAX_LENGTH ({max_length})"
+            )
+        if v < 0:
+            raise ValueError(
+                f"EMBEDDING_CHUNK_OVERLAP_TOKENS ({v}) must be >= 0"
+            )
+        return v
+
+    @field_validator("QUERY_RESULT_MAX_ROW_TOKENS")
+    @classmethod
+    def validate_max_row_tokens(cls, v: int, info) -> int:
+        """Validate max row tokens is less than max tokens."""
+        max_tokens = info.data.get("QUERY_RESULT_MAX_TOKENS", 16000)
+        if v >= max_tokens:
+            raise ValueError(
+                f"QUERY_RESULT_MAX_ROW_TOKENS ({v}) must be < "
+                f"QUERY_RESULT_MAX_TOKENS ({max_tokens})"
+            )
+        if v < 100:
+            raise ValueError(
+                f"QUERY_RESULT_MAX_ROW_TOKENS ({v}) must be >= 100 for useful results"
+            )
+        return v
+
+    @field_validator("QUERY_RESULT_DIVERSITY_BUDGET_PCT")
+    @classmethod
+    def validate_diversity_budget(cls, v: float) -> float:
+        """Validate diversity budget is in valid range."""
+        if not 0 <= v <= 0.5:
+            raise ValueError(
+                f"QUERY_RESULT_DIVERSITY_BUDGET_PCT ({v}) must be between 0 and 0.5"
+            )
+        return v
+
+    @field_validator("QUERY_RESULT_MIN_ROWS")
+    @classmethod
+    def validate_min_rows(cls, v: int) -> int:
+        """Validate min rows is reasonable."""
+        if v < 1:
+            raise ValueError(f"QUERY_RESULT_MIN_ROWS ({v}) must be >= 1")
+        if v > 50:
+            raise ValueError(f"QUERY_RESULT_MIN_ROWS ({v}) must be <= 50")
+        return v
 
 
 settings = AppConfig()
