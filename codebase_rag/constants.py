@@ -25,6 +25,43 @@ class Provider(StrEnum):
     VLLM = "vllm"
 
 
+class EmbeddingProvider(StrEnum):
+    """Embedding provider identifiers."""
+
+    LOCAL = "local"
+    OPENAI = "openai"
+    GOOGLE = "google"
+    OLLAMA = "ollama"
+
+
+# (H) Known embedding model dimensions for auto-detection
+EMBEDDING_MODEL_DIMENSIONS: dict[str, int] = {
+    # OpenAI embeddings
+    "text-embedding-3-small": 1536,
+    "text-embedding-3-large": 3072,
+    "text-embedding-ada-002": 1536,
+    # Google embeddings (GLA and Vertex)
+    "text-embedding-004": 768,
+    "text-embedding-005": 3072,
+    "embedding-001": 768,
+    # Aliyun/Dashscope embeddings (OpenAI-compatible)
+    "text-embedding-v1": 1536,
+    "text-embedding-v2": 1536,
+    "text-embedding-v3": 1024,
+    "text-embedding-v4": 1024,
+    # Local models (transformers)
+    "microsoft/unixcoder-base": 768,
+    "sentence-transformers/all-MiniLM-L6-v2": 384,
+    "BAAI/bge-small-en-v1.5": 384,
+    "BAAI/bge-large-en-v1.5": 1024,
+    # Ollama embedding models
+    "nomic-embed-text": 768,
+    "mxbai-embed-large": 1024,
+    "all-minilm": 384,
+    "snowflake-arctic-embed": 1024,
+}
+
+
 class Color(StrEnum):
     GREEN = "green"
     YELLOW = "yellow"
@@ -2607,6 +2644,8 @@ class MCPToolName(StrEnum):
     LIST_DIRECTORY = "list_directory"
     SEMANTIC_SEARCH = "semantic_search"
     ASK_AGENT = "ask_agent"
+    GET_EMBEDDING_STATUS = "get_embedding_status"
+    SET_EMBEDDING_PROVIDER = "set_embedding_provider"
 
 
 # (H) MCP transport selection
@@ -2654,6 +2693,12 @@ class MCPParamName(StrEnum):
     DIRECTORY_PATH = "directory_path"
     TOP_K = "top_k"
     QUESTION = "question"
+    EMBEDDING_PROVIDER = "provider"
+    EMBEDDING_MODEL = "model"
+    EMBEDDING_DIMENSION = "dimension"
+    EMBEDDING_API_KEY = "api_key"
+    EMBEDDING_ENDPOINT = "endpoint"
+    REEMBED = "reembed"
 
 
 # (H) MCP server constants

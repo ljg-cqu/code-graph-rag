@@ -155,6 +155,20 @@ class ModelConfigKwargs(TypedDict, total=False):
     service_account_file: str | None
 
 
+class EmbeddingConfigKwargs(TypedDict, total=False):
+    """Keyword arguments for embedding configuration."""
+
+    dimension: int | None
+    api_key: str | None
+    endpoint: str | None
+    keep_alive: str | None
+    project_id: str | None
+    region: str | None
+    provider_type: str | None
+    service_account_file: str | None
+    device: str | None
+
+
 class GraphMetadata(TypedDict):
     total_nodes: int
     total_relationships: int

@@ -40,6 +40,7 @@ DEF_FOUND_DEPENDENCY = "    Found dependency: {name} (spec: {spec})"
 SEMANTIC_NOT_AVAILABLE = (
     "Semantic search dependencies not available, skipping embedding generation"
 )
+SEMANTIC_EXTRA = "Semantic search requires 'semantic' extra: uv sync --extra semantic"
 INGESTOR_NO_QUERY = "Ingestor does not support querying, skipping embedding generation"
 NO_FUNCTIONS_FOR_EMBEDDING = "No functions or methods found for embedding generation"
 GENERATING_EMBEDDINGS = "Generating embeddings for {count} functions/methods"
@@ -63,6 +64,12 @@ EMBEDDING_CACHE_HIT = "Embedding cache hit for {count} snippets"
 EMBEDDING_CACHE_LOADED = "Loaded embedding cache with {count} entries from {path}"
 EMBEDDING_CACHE_SAVE_FAILED = "Failed to save embedding cache to {path}: {error}"
 EMBEDDING_CACHE_LOAD_FAILED = "Failed to load embedding cache from {path}: {error}"
+EMBEDDING_PROVIDER_INITIALIZED = "Initialized embedding provider: {provider}/{model} (dimension={dimension})"
+EMBEDDING_PROVIDER_SWITCHED = "Switched embedding provider from {old_provider}/{old_model} to {new_provider}/{new_model}"
+EMBEDDING_DIMENSION_MISMATCH = "Embedding dimension mismatch: existing={existing_dim}, configured={configured_dim}"
+EMBEDDING_REEMBEDDING_START = "Re-embedding {count} nodes with {provider}/{model}"
+EMBEDDING_REEMBEDDING_PROGRESS = "Re-embedding progress: {done}/{total}"
+EMBEDDING_REEMBEDDING_COMPLETE = "Re-embedding complete: {success} success, {failed} failed"
 
 # (H) Image logs
 IMAGE_COPIED = "Copied image to temporary path: {path}"

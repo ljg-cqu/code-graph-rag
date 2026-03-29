@@ -568,6 +568,8 @@ claude mcp add --transport stdio code-graph-rag \
 | `list_directory` | List contents of a directory in the project. |
 | `semantic_search` | Performs a semantic search for functions based on a natural language query describing their purpose, returning a list of potential matches with similarity scores. Requires the 'semantic' extra to be installed. |
 | `ask_agent` | Ask the Code Graph RAG agent a question about the codebase. Uses the full RAG pipeline to analyze the code graph and provide a detailed answer. Use this for general questions about architecture, functionality, and code relationships. |
+| `get_embedding_status` | Get the current embedding provider configuration and status. Returns the current provider, model, dimension, and available providers. |
+| `set_embedding_provider` | Switch to a different embedding provider. Supported providers: local, openai, google, ollama. Optionally re-embed all vectors after switching. |
 <!-- /SECTION:mcp_tools -->
 
 ### Example Usage
@@ -692,6 +694,49 @@ Configuration is managed through environment variables in `.env` file:
 - `CYPHER_PROVIDER_TYPE`: Google provider type (`gla` or `vertex`)
 - `CYPHER_THINKING_BUDGET`: Thinking budget for reasoning models
 - `CYPHER_SERVICE_ACCOUNT_FILE`: Path to service account file (for Vertex AI)
+
+#### Embedding Provider Configuration
+
+Code-Graph-RAG supports multiple embedding providers for semantic search:
+
+- `EMBEDDING_PROVIDER`: Provider name (`local`, `openai`, `google`, `ollama`) - default: `local`
+- `EMBEDDING_MODEL`: Model identifier (e.g., `microsoft/unixcoder-base`, `text-embedding-3-small`, `nomic-embed-text`)
+- `EMBEDDING_API_KEY`: API key for external providers (optional if set via provider-specific env vars)
+- `EMBEDDING_ENDPOINT`: Custom endpoint URL (optional)
+- `EMBEDDING_DEVICE`: Device for local models (`auto`, `cpu`, `cuda`) - default: `auto`
+- `EMBEDDING_KEEP_ALIVE`: Ollama model keep-alive duration (e.g., `5m`)
+- `EMBEDDING_PROJECT_ID`: Google Cloud project ID (for Vertex AI)
+- `EMBEDDING_REGION`: Google Cloud region (default: `us-central1`)
+- `EMBEDDING_PROVIDER_TYPE`: Google provider type (`gla` or `vertex`)
+
+**Available Providers:**
+
+| Provider | Models | Dimension | API Key Required |
+|----------|--------|-----------|------------------|
+| `local` | `microsoft/unixcoder-base` (default) | 768 | No |
+| `openai` | `text-embedding-3-small`, `text-embedding-3-large` | 1536, 3072 | Yes |
+| `google` | `text-embedding-004`, `embedding-001` | 768 | Yes (GLA) or Service Account (Vertex) |
+| `ollama` | `nomic-embed-text`, `mxbai-embed-large`, etc. | Varies | No |
+
+**Example Configuration:**
+
+```bash
+# Use OpenAI embeddings
+EMBEDDING_PROVIDER=openai
+EMBEDDING_MODEL=text-embedding-3-small
+EMBEDDING_API_KEY=sk-your-key
+
+# Use Ollama local embeddings
+EMBEDDING_PROVIDER=ollama
+EMBEDDING_MODEL=nomic-embed-text
+EMBEDDING_KEEP_ALIVE=5m
+
+# Use Google Vertex AI
+EMBEDDING_PROVIDER=google
+EMBEDDING_MODEL=text-embedding-004
+EMBEDDING_PROVIDER_TYPE=vertex
+EMBEDDING_PROJECT_ID=your-project-id
+```
 
 ### System Settings
 - `MEMGRAPH_HOST`: Memgraph hostname (default: `localhost`)

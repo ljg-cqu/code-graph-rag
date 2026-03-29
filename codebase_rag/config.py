@@ -13,7 +13,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from . import constants as cs
 from . import exceptions as ex
 from . import logs
-from .types_defs import CgrignorePatterns, ModelConfigKwargs
+from .types_defs import CgrignorePatterns, EmbeddingConfigKwargs, ModelConfigKwargs
 
 load_dotenv()
 
@@ -139,6 +139,44 @@ class ModelConfig:
         ):
             error_msg = format_missing_api_key_errors(self.provider, role)
             raise ValueError(error_msg)
+
+
+@dataclass
+class EmbeddingConfig:
+    """Configuration for embedding provider.
+
+    Attributes:
+        provider: Provider name (local, openai, google, ollama).
+        model_id: Model identifier (e.g., "microsoft/unixcoder-base").
+        dimension: Embedding dimension. None for auto-detect.
+        api_key: API key for external providers.
+        endpoint: Custom endpoint URL.
+        keep_alive: Ollama model keep-alive duration.
+        project_id: Google Cloud project ID (for Vertex AI).
+        region: Google Cloud region.
+        provider_type: Google provider type (gla/vertex).
+        service_account_file: Path to Google service account JSON.
+        device: Device for local models (auto/cpu/cuda).
+    """
+
+    provider: str
+    model_id: str
+    dimension: int | None = None
+    api_key: str | None = None
+    endpoint: str | None = None
+    keep_alive: str | None = None
+    project_id: str | None = None
+    region: str | None = None
+    provider_type: str | None = None
+    service_account_file: str | None = None
+    device: str | None = None
+
+    def to_update_kwargs(self) -> EmbeddingConfigKwargs:
+        result = asdict(self)
+        del result[cs.FIELD_PROVIDER]
+        del result[cs.FIELD_MODEL_ID]
+        del result["dimension"]
+        return EmbeddingConfigKwargs(**result)
 
 
 class AppConfig(BaseSettings):
@@ -279,6 +317,19 @@ class AppConfig(BaseSettings):
     VECTOR_EMBEDDING_BATCH_SIZE: int = 50
     VECTOR_MIN_SIMILARITY: float = 0.0
 
+    # Embedding provider configuration
+    EMBEDDING_PROVIDER: str = "local"  # Options: local, openai, google, ollama
+    EMBEDDING_MODEL: str = "microsoft/unixcoder-base"
+    EMBEDDING_API_KEY: str | None = None
+    EMBEDDING_ENDPOINT: str | None = None  # Custom endpoint URL
+    EMBEDDING_BASE_URL: str | None = None  # Alias for EMBEDDING_ENDPOINT (OpenAI-compatible APIs)
+    EMBEDDING_KEEP_ALIVE: str | None = None  # Ollama: keep model loaded duration (e.g., "5m")
+    EMBEDDING_PROJECT_ID: str | None = None  # Google Vertex AI
+    EMBEDDING_REGION: str = "us-central1"
+    EMBEDDING_PROVIDER_TYPE: str | None = None  # Google: gla/vertex
+    EMBEDDING_SERVICE_ACCOUNT_FILE: str | None = None  # Google service account
+    EMBEDDING_DEVICE: str = "auto"  # Local: auto/cpu/cuda
+
     EMBEDDING_MAX_LENGTH: int = 512
     EMBEDDING_PROGRESS_INTERVAL: int = 10
 
@@ -297,6 +348,7 @@ class AppConfig(BaseSettings):
 
     _active_orchestrator: ModelConfig | None = None
     _active_cypher: ModelConfig | None = None
+    _active_embedding: EmbeddingConfig | None = None
 
     QUIET: bool = Field(False, validation_alias="CGR_QUIET")
 
@@ -357,6 +409,131 @@ class AppConfig(BaseSettings):
     ) -> None:
         config = ModelConfig(provider=provider.lower(), model_id=model, **kwargs)
         self._active_cypher = config
+
+    def _get_default_embedding_config(self) -> EmbeddingConfig:
+        """Get default embedding configuration from environment."""
+        return EmbeddingConfig(
+            provider=self.EMBEDDING_PROVIDER.lower(),
+            model_id=self.EMBEDDING_MODEL,
+            api_key=self._get_effective_embedding_api_key(),
+            endpoint=self._get_effective_embedding_endpoint(),
+            keep_alive=self.EMBEDDING_KEEP_ALIVE,
+            project_id=self.EMBEDDING_PROJECT_ID,
+            region=self.EMBEDDING_REGION,
+            provider_type=self.EMBEDDING_PROVIDER_TYPE,
+            service_account_file=self.EMBEDDING_SERVICE_ACCOUNT_FILE,
+            device=self.EMBEDDING_DEVICE,
+        )
+
+    @property
+    def active_embedding_config(self) -> EmbeddingConfig:
+        """Get the active embedding configuration."""
+        return self._active_embedding or self._get_default_embedding_config()
+
+    def set_embedding(
+        self,
+        provider: str,
+        model_id: str,
+        dimension: int | None = None,
+        **kwargs: Unpack[EmbeddingConfigKwargs],
+    ) -> None:
+        """Set the active embedding provider configuration."""
+        config = EmbeddingConfig(
+            provider=provider.lower(),
+            model_id=model_id,
+            dimension=dimension,
+            **kwargs,
+        )
+        self._active_embedding = config
+
+    def _get_effective_embedding_api_key(self) -> str | None:
+        """Resolve embedding API key with fallback hierarchy.
+
+        Fallback order:
+        1. EMBEDDING_API_KEY (embedding-specific key)
+        2. {PROVIDER}_API_KEY (provider-specific key)
+        3. OPENAI_API_KEY (legacy fallback for OpenAI-compatible)
+
+        Returns:
+            Resolved API key or None.
+        """
+        # 1. Embedding-specific key takes precedence
+        if self.EMBEDDING_API_KEY:
+            return self.EMBEDDING_API_KEY
+
+        # 2. Provider-specific key
+        provider_key_map = {
+            "openai": "OPENAI_API_KEY",
+            "google": "GOOGLE_API_KEY",
+            "anthropic": "ANTHROPIC_API_KEY",
+        }
+        provider_lower = self.EMBEDDING_PROVIDER.lower()
+        if provider_lower in provider_key_map:
+            key = os.environ.get(provider_key_map[provider_lower])
+            if key:
+                return key
+
+        # 3. OpenAI fallback (for OpenAI-compatible APIs)
+        return os.environ.get("OPENAI_API_KEY")
+
+    def _get_effective_embedding_endpoint(self) -> str | None:
+        """Resolve embedding endpoint with fallback.
+
+        Fallback order:
+        1. EMBEDDING_ENDPOINT (embedding-specific endpoint)
+        2. EMBEDDING_BASE_URL (alias for OpenAI-compatible APIs)
+        3. OLLAMA_BASE_URL (for Ollama provider)
+
+        Returns:
+            Resolved endpoint URL or None.
+        """
+        if self.EMBEDDING_ENDPOINT:
+            return self.EMBEDDING_ENDPOINT
+
+        if self.EMBEDDING_BASE_URL:
+            return self.EMBEDDING_BASE_URL
+
+        if self.EMBEDDING_PROVIDER.lower() == "ollama":
+            return self.ollama_endpoint
+
+        return None
+
+    def _get_model_dimension(self, provider: str, model_id: str) -> int:
+        """Get dimension for model with provider context.
+
+        Args:
+            provider: Provider name (openai, google, ollama, local).
+            model_id: Model identifier.
+
+        Returns:
+            Known dimension or default (768) if unknown.
+        """
+        return cs.EMBEDDING_MODEL_DIMENSIONS.get(model_id, 768)
+
+    def get_effective_vector_dim(self) -> int:
+        """Return effective dimension with proper precedence.
+
+        Precedence order:
+        1. MEMGRAPH_VECTOR_DIM if set (explicit override)
+        2. Auto-detect from embedding model
+
+        Returns:
+            Effective vector dimension.
+        """
+        # If explicitly set via env/config, use that
+        # Check if it's set to something other than default
+        env_dim = os.environ.get("MEMGRAPH_VECTOR_DIM")
+        if env_dim:
+            try:
+                return int(env_dim)
+            except ValueError:
+                pass
+
+        # Auto-detect from model
+        return self._get_model_dimension(
+            self.EMBEDDING_PROVIDER,
+            self.EMBEDDING_MODEL,
+        )
 
     def parse_model_string(self, model_string: str) -> tuple[str, str]:
         if ":" not in model_string:

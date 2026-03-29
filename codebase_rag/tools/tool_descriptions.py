@@ -155,6 +155,25 @@ MCP_ASK_AGENT = (
     "Use this for general questions about architecture, functionality, and code relationships."
 )
 
+MCP_GET_EMBEDDING_STATUS = (
+    "Get the current embedding provider configuration and status. "
+    "Returns the current provider, model, dimension, and available providers."
+)
+
+MCP_SET_EMBEDDING_PROVIDER = (
+    "Switch to a different embedding provider. "
+    "Supported providers: local, openai, google, ollama. "
+    "Optionally re-embed all vectors after switching. "
+    "WARNING: Changing providers may require re-embedding for consistent results."
+)
+
+MCP_PARAM_EMBEDDING_PROVIDER = "Embedding provider name (local, openai, google, ollama)"
+MCP_PARAM_EMBEDDING_MODEL = "Model identifier (e.g., text-embedding-3-small, nomic-embed-text)"
+MCP_PARAM_EMBEDDING_DIMENSION = "Optional dimension override (auto-detected from model by default)"
+MCP_PARAM_EMBEDDING_API_KEY = "API key for external providers (optional if set in environment)"
+MCP_PARAM_EMBEDDING_ENDPOINT = "Custom endpoint URL (optional)"
+MCP_PARAM_REEMBED = "If true, re-embed all vectors after switching providers (default: false)"
+
 
 MCP_TOOLS: dict[MCPToolName, str] = {
     MCPToolName.LIST_PROJECTS: MCP_LIST_PROJECTS,
@@ -170,6 +189,8 @@ MCP_TOOLS: dict[MCPToolName, str] = {
     MCPToolName.LIST_DIRECTORY: MCP_LIST_DIRECTORY,
     MCPToolName.SEMANTIC_SEARCH: MCP_SEMANTIC_SEARCH,
     MCPToolName.ASK_AGENT: MCP_ASK_AGENT,
+    MCPToolName.GET_EMBEDDING_STATUS: MCP_GET_EMBEDDING_STATUS,
+    MCPToolName.SET_EMBEDDING_PROVIDER: MCP_SET_EMBEDDING_PROVIDER,
 }
 
 AGENTIC_TOOLS: dict[AgenticToolName, str] = {

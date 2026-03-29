@@ -337,6 +337,57 @@ class MCPToolsRegistry:
             returns_json=True,
         )
 
+        # Embedding management tools
+        self._tools[cs.MCPToolName.GET_EMBEDDING_STATUS] = ToolMetadata(
+            name=cs.MCPToolName.GET_EMBEDDING_STATUS,
+            description=td.MCP_TOOLS[cs.MCPToolName.GET_EMBEDDING_STATUS],
+            input_schema=MCPInputSchema(
+                type=cs.MCPSchemaType.OBJECT,
+                properties={},
+                required=[],
+            ),
+            handler=self.get_embedding_status,
+            returns_json=True,
+        )
+
+        self._tools[cs.MCPToolName.SET_EMBEDDING_PROVIDER] = ToolMetadata(
+            name=cs.MCPToolName.SET_EMBEDDING_PROVIDER,
+            description=td.MCP_TOOLS[cs.MCPToolName.SET_EMBEDDING_PROVIDER],
+            input_schema=MCPInputSchema(
+                type=cs.MCPSchemaType.OBJECT,
+                properties={
+                    cs.MCPParamName.EMBEDDING_PROVIDER: MCPInputSchemaProperty(
+                        type=cs.MCPSchemaType.STRING,
+                        description=td.MCP_PARAM_EMBEDDING_PROVIDER,
+                    ),
+                    cs.MCPParamName.EMBEDDING_MODEL: MCPInputSchemaProperty(
+                        type=cs.MCPSchemaType.STRING,
+                        description=td.MCP_PARAM_EMBEDDING_MODEL,
+                    ),
+                    cs.MCPParamName.EMBEDDING_DIMENSION: MCPInputSchemaProperty(
+                        type=cs.MCPSchemaType.INTEGER,
+                        description=td.MCP_PARAM_EMBEDDING_DIMENSION,
+                    ),
+                    cs.MCPParamName.EMBEDDING_API_KEY: MCPInputSchemaProperty(
+                        type=cs.MCPSchemaType.STRING,
+                        description=td.MCP_PARAM_EMBEDDING_API_KEY,
+                    ),
+                    cs.MCPParamName.EMBEDDING_ENDPOINT: MCPInputSchemaProperty(
+                        type=cs.MCPSchemaType.STRING,
+                        description=td.MCP_PARAM_EMBEDDING_ENDPOINT,
+                    ),
+                    cs.MCPParamName.REEMBED: MCPInputSchemaProperty(
+                        type=cs.MCPSchemaType.BOOLEAN,
+                        description=td.MCP_PARAM_REEMBED,
+                        default=False,
+                    ),
+                },
+                required=[cs.MCPParamName.EMBEDDING_PROVIDER, cs.MCPParamName.EMBEDDING_MODEL],
+            ),
+            handler=self.set_embedding_provider,
+            returns_json=True,
+        )
+
     @property
     def rag_agent(self) -> Agent:
         if self._rag_agent is None:
@@ -609,6 +660,60 @@ class MCPToolsRegistry:
         except Exception as e:
             logger.error(lg.MCP_ERROR_LIST_DIR.format(error=e))
             return te.ERROR_WRAPPER.format(message=e)
+
+    async def get_embedding_status(self) -> dict[str, str | int | list[str]]:
+        """Get current embedding provider configuration and status."""
+        logger.info("Getting embedding status")
+        try:
+            from codebase_rag.embeddings import get_embedding_status
+            return get_embedding_status()
+        except Exception as e:
+            logger.error(f"Failed to get embedding status: {e}")
+            return {"error": str(e)}
+
+    async def set_embedding_provider(
+        self,
+        provider: str,
+        model: str,
+        dimension: int | None = None,
+        api_key: str | None = None,
+        endpoint: str | None = None,
+        reembed: bool = False,
+    ) -> dict[str, str | int | bool]:
+        """Switch to a different embedding provider."""
+        logger.info(f"Setting embedding provider to {provider}/{model}")
+        try:
+            from codebase_rag.embeddings import switch_embedding_provider
+
+            config = {}
+            if api_key:
+                config["api_key"] = api_key
+            if endpoint:
+                config["endpoint"] = endpoint
+            if dimension:
+                config["dimension"] = dimension
+
+            result = switch_embedding_provider(
+                new_provider=provider,
+                new_model=model,
+                reembed=reembed,
+                **config,
+            )
+
+            return {
+                "success": result.success,
+                "old_provider": result.old_provider,
+                "old_model": result.old_model,
+                "old_dimension": result.old_dimension,
+                "new_provider": result.new_provider,
+                "new_model": result.new_model,
+                "new_dimension": result.new_dimension,
+                "vectors_reembedded": result.vectors_reembedded,
+                "error": result.error or "",
+            }
+        except Exception as e:
+            logger.error(f"Failed to set embedding provider: {e}")
+            return {"success": False, "error": str(e)}
 
     def get_tool_schemas(self) -> list[MCPToolSchema]:
         return [

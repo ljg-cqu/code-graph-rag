@@ -339,6 +339,57 @@ class MemgraphBackend(VectorBackend):
         except Exception:
             return False
 
+    def recreate_vector_indexes(self, new_dimension: int) -> None:
+        """Drop and recreate all vector indexes with new dimension.
+
+        This is needed when switching embedding models with different dimensions.
+        WARNING: Existing embeddings will become incompatible after this operation.
+
+        Args:
+            new_dimension: New vector dimension for the indexes.
+        """
+        logger.info(
+            f"Recreating vector indexes with dimension {new_dimension}..."
+        )
+
+        for label in self.LABELS_TO_INDEX:
+            index_name = f"{label.lower()}_embedding_index"
+
+            # Drop existing index (Memgraph doesn't support IF EXISTS)
+            drop_cypher = f"DROP VECTOR INDEX {index_name};"
+            try:
+                self._execute_query(drop_cypher)
+                logger.debug(f"Dropped index {index_name}")
+            except Exception as e:
+                # Index may not exist, which is fine
+                logger.debug(f"Could not drop index {index_name}: {e}")
+
+            # Create new index with updated dimension
+            create_cypher = f"""
+            CREATE VECTOR INDEX {index_name}
+            ON :{label}(embedding)
+            WITH CONFIG {{
+                "dimension": {new_dimension},
+                "capacity": {settings.MEMGRAPH_VECTOR_CAPACITY},
+                "metric": "{settings.MEMGRAPH_VECTOR_METRIC}"
+            }};
+            """
+            try:
+                self._execute_query(create_cypher)
+                logger.info(
+                    ls.MG_VECTOR_INDEX_CREATED.format(
+                        index=index_name,
+                        label=label,
+                        dim=new_dimension,
+                        capacity=settings.MEMGRAPH_VECTOR_CAPACITY,
+                    )
+                )
+            except Exception as e:
+                logger.error(f"Failed to create index {index_name}: {e}")
+                raise
+
+        logger.info(f"Vector indexes recreated with dimension {new_dimension}")
+
     def close(self) -> None:
         """Close Memgraph connection."""
         if self._conn is not None:

@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from codebase_rag.config import settings
 from codebase_rag.embedder import EmbeddingCache, clear_embedding_cache
 from codebase_rag.utils.dependencies import has_torch, has_transformers
 
@@ -30,23 +31,6 @@ def mock_unixcoder() -> MagicMock:
     return mock_model
 
 
-@pytest.fixture
-def reset_model_cache() -> Generator[None, None, None]:
-    if _has_semantic_deps():
-        from codebase_rag.embedder import (
-            get_model,  # ty: ignore[possibly-missing-import]
-        )
-
-        get_model.cache_clear()
-    yield
-    if _has_semantic_deps():
-        from codebase_rag.embedder import (
-            get_model,  # ty: ignore[possibly-missing-import]
-        )
-
-        get_model.cache_clear()
-
-
 @pytest.fixture(autouse=True)
 def reset_cache() -> Generator[None, None, None]:
     clear_embedding_cache()
@@ -54,9 +38,22 @@ def reset_cache() -> Generator[None, None, None]:
     clear_embedding_cache()
 
 
+@pytest.fixture
+def force_local_provider(reset_cache: None) -> Generator[None, None, None]:
+    """Force local provider for backward-compatible tests.
+
+    This ensures tests that mock get_model() work correctly even when
+    .env configures a different provider (e.g., openai/aliyun).
+    """
+    with patch.object(settings, "EMBEDDING_PROVIDER", "local"):
+        with patch.object(settings, "EMBEDDING_MODEL", "microsoft/unixcoder-base"):
+            clear_embedding_cache()
+            yield
+
+
 @pytest.mark.skipif(not _has_semantic_deps(), reason="torch/transformers not installed")
 def test_embed_code_returns_768_dimensional_vector(
-    mock_unixcoder: MagicMock, reset_model_cache: None
+    mock_unixcoder: MagicMock, force_local_provider: None
 ) -> None:
     import torch
 
@@ -74,7 +71,7 @@ def test_embed_code_returns_768_dimensional_vector(
 
 @pytest.mark.skipif(not _has_semantic_deps(), reason="torch/transformers not installed")
 def test_embed_code_calls_tokenize(
-    mock_unixcoder: MagicMock, reset_model_cache: None
+    mock_unixcoder: MagicMock, force_local_provider: None
 ) -> None:
     import torch
 
@@ -93,7 +90,7 @@ def test_embed_code_calls_tokenize(
 
 @pytest.mark.skipif(not _has_semantic_deps(), reason="torch/transformers not installed")
 def test_embed_code_uses_default_max_length(
-    mock_unixcoder: MagicMock, reset_model_cache: None
+    mock_unixcoder: MagicMock, force_local_provider: None
 ) -> None:
     import torch
 
@@ -109,7 +106,7 @@ def test_embed_code_uses_default_max_length(
 
 
 @pytest.mark.skipif(not _has_semantic_deps(), reason="torch/transformers not installed")
-def test_get_model_is_cached(reset_model_cache: None) -> None:
+def test_get_model_is_cached(force_local_provider: None) -> None:
     from codebase_rag.embedder import get_model  # ty: ignore[possibly-missing-import]
 
     with patch("codebase_rag.embedder.UniXcoder") as mock_unixcoder_class:
@@ -126,7 +123,7 @@ def test_get_model_is_cached(reset_model_cache: None) -> None:
 
 
 @pytest.mark.skipif(not _has_semantic_deps(), reason="torch/transformers not installed")
-def test_get_model_uses_cuda_when_available(reset_model_cache: None) -> None:
+def test_get_model_uses_cuda_when_available(force_local_provider: None) -> None:
     from codebase_rag.embedder import get_model  # ty: ignore[possibly-missing-import]
 
     with patch("codebase_rag.embedder.UniXcoder") as mock_unixcoder_class:
@@ -142,7 +139,7 @@ def test_get_model_uses_cuda_when_available(reset_model_cache: None) -> None:
 
 
 @pytest.mark.skipif(not _has_semantic_deps(), reason="torch/transformers not installed")
-def test_get_model_does_not_use_cuda_when_unavailable(reset_model_cache: None) -> None:
+def test_get_model_does_not_use_cuda_when_unavailable(force_local_provider: None) -> None:
     from codebase_rag.embedder import get_model  # ty: ignore[possibly-missing-import]
 
     with patch("codebase_rag.embedder.UniXcoder") as mock_unixcoder_class:
@@ -158,7 +155,7 @@ def test_get_model_does_not_use_cuda_when_unavailable(reset_model_cache: None) -
 
 @pytest.mark.skipif(not _has_semantic_deps(), reason="torch/transformers not installed")
 @pytest.mark.slow
-def test_embed_code_integration(reset_model_cache: None) -> None:
+def test_embed_code_integration(force_local_provider: None) -> None:
     from codebase_rag.embedder import embed_code
 
     code = "def add(a, b): return a + b"
@@ -171,7 +168,7 @@ def test_embed_code_integration(reset_model_cache: None) -> None:
 
 @pytest.mark.skipif(not _has_semantic_deps(), reason="torch/transformers not installed")
 @pytest.mark.slow
-def test_similar_code_has_similar_embeddings(reset_model_cache: None) -> None:
+def test_similar_code_has_similar_embeddings(force_local_provider: None) -> None:
     from codebase_rag.embedder import embed_code
 
     code1 = "def add(a, b): return a + b"
@@ -307,7 +304,7 @@ def test_embedding_cache_load_no_path() -> None:
 
 @pytest.mark.skipif(not _has_semantic_deps(), reason="torch/transformers not installed")
 def test_embed_code_uses_cache(
-    mock_unixcoder: MagicMock, reset_model_cache: None
+    mock_unixcoder: MagicMock, force_local_provider: None
 ) -> None:
     import torch
 
@@ -328,7 +325,7 @@ def test_embed_code_uses_cache(
 
 @pytest.mark.skipif(not _has_semantic_deps(), reason="torch/transformers not installed")
 def test_embed_code_populates_cache(
-    mock_unixcoder: MagicMock, reset_model_cache: None
+    mock_unixcoder: MagicMock, force_local_provider: None
 ) -> None:
     import torch
 
@@ -345,7 +342,7 @@ def test_embed_code_populates_cache(
 
 
 @pytest.mark.skipif(not _has_semantic_deps(), reason="torch/transformers not installed")
-def test_embed_code_batch_empty_list(reset_model_cache: None) -> None:
+def test_embed_code_batch_empty_list(force_local_provider: None) -> None:
     from codebase_rag.embedder import embed_code_batch
 
     assert embed_code_batch([]) == []
@@ -353,7 +350,7 @@ def test_embed_code_batch_empty_list(reset_model_cache: None) -> None:
 
 @pytest.mark.skipif(not _has_semantic_deps(), reason="torch/transformers not installed")
 def test_embed_code_batch_returns_correct_count(
-    mock_unixcoder: MagicMock, reset_model_cache: None
+    mock_unixcoder: MagicMock, force_local_provider: None
 ) -> None:
     import torch
 
@@ -373,7 +370,7 @@ def test_embed_code_batch_returns_correct_count(
 
 @pytest.mark.skipif(not _has_semantic_deps(), reason="torch/transformers not installed")
 def test_embed_code_batch_uses_padding(
-    mock_unixcoder: MagicMock, reset_model_cache: None
+    mock_unixcoder: MagicMock, force_local_provider: None
 ) -> None:
     import torch
 
@@ -394,7 +391,7 @@ def test_embed_code_batch_uses_padding(
 
 @pytest.mark.skipif(not _has_semantic_deps(), reason="torch/transformers not installed")
 def test_embed_code_batch_cache_hit(
-    mock_unixcoder: MagicMock, reset_model_cache: None
+    mock_unixcoder: MagicMock, force_local_provider: None
 ) -> None:
     from codebase_rag.embedder import embed_code_batch, get_embedding_cache
 
@@ -411,7 +408,7 @@ def test_embed_code_batch_cache_hit(
 
 @pytest.mark.skipif(not _has_semantic_deps(), reason="torch/transformers not installed")
 def test_embed_code_batch_partial_cache(
-    mock_unixcoder: MagicMock, reset_model_cache: None
+    mock_unixcoder: MagicMock, force_local_provider: None
 ) -> None:
     import torch
 
@@ -434,7 +431,7 @@ def test_embed_code_batch_partial_cache(
 
 @pytest.mark.skipif(not _has_semantic_deps(), reason="torch/transformers not installed")
 def test_embed_code_batch_populates_cache(
-    mock_unixcoder: MagicMock, reset_model_cache: None
+    mock_unixcoder: MagicMock, force_local_provider: None
 ) -> None:
     import torch
 
@@ -453,7 +450,7 @@ def test_embed_code_batch_populates_cache(
 
 @pytest.mark.skipif(not _has_semantic_deps(), reason="torch/transformers not installed")
 def test_embed_code_batch_respects_batch_size(
-    mock_unixcoder: MagicMock, reset_model_cache: None
+    mock_unixcoder: MagicMock, force_local_provider: None
 ) -> None:
     import torch
 
