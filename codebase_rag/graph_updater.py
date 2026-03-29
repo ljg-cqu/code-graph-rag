@@ -28,6 +28,7 @@ from .types_defs import (
 from .utils.dependencies import has_semantic_dependencies
 from .utils.fqn_resolver import find_function_source_by_fqn
 from .utils.path_utils import should_skip_path
+from .utils.source_extraction import extract_source_lines
 from .utils.source_extraction import extract_source_with_fallback
 
 type FileHashCache = dict[str, str]
@@ -598,12 +599,17 @@ class GraphUpdater:
                 end_line = parsed.get(cs.KEY_END_LINE)
                 file_path = parsed.get(cs.KEY_PATH)
 
-                if start_line is None or end_line is None or file_path is None:
+                # Require file_path, but allow missing line info for AST extraction
+                if file_path is None:
                     logger.debug(ls.NO_SOURCE_FOR, name=qualified_name)
                     continue
 
+                # Use 0 as placeholder for missing line info (AST extraction will handle it)
+                effective_start = start_line if start_line is not None else 0
+                effective_end = end_line if end_line is not None else 0
+
                 if source_code := self._extract_source_code(
-                    qualified_name, file_path, start_line, end_line
+                    qualified_name, file_path, effective_start, effective_end
                 ):
                     try:
                         embedding = embed_code(source_code)
@@ -681,11 +687,12 @@ class GraphUpdater:
     def _extract_source_code(
         self, qualified_name: str, file_path: str, start_line: int, end_line: int
     ) -> str | None:
-        if not file_path or not start_line or not end_line:
+        if not file_path:
             return None
 
         file_path_obj = self.repo_path / file_path
 
+        # Try AST extraction first (works even without line info)
         ast_extractor = None
         if file_path_obj in self.ast_cache:
             root_node, language = self.ast_cache[file_path_obj]
@@ -705,9 +712,19 @@ class GraphUpdater:
 
                 ast_extractor = ast_extractor_func
 
-        return extract_source_with_fallback(
-            file_path_obj, start_line, end_line, qualified_name, ast_extractor
-        )
+                # If we have AST extractor, try it first (before line-based extraction)
+                if ast_extractor and qualified_name:
+                    try:
+                        if ast_result := ast_extractor(qualified_name, file_path_obj):
+                            return str(ast_result)
+                    except Exception as e:
+                        logger.debug(ls.SOURCE_AST_FAILED, name=qualified_name, error=e)
+
+        # Fall back to line-based extraction if we have valid line numbers
+        if start_line > 0 and end_line > 0 and start_line <= end_line:
+            return extract_source_lines(file_path_obj, start_line, end_line)
+
+        return None
 
     def _parse_embedding_result(self, row: ResultRow) -> EmbeddingQueryResult | None:
         node_id = row.get(cs.KEY_NODE_ID)

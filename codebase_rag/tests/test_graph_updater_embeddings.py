@@ -63,6 +63,17 @@ class TestCypherQueryEmbeddingsStructure:
                     f"$project_name + '.' must be parenthesized in: {stripped!r}"
                 )
 
+    def test_uses_union_not_coalesce(self) -> None:
+        """Verify the query uses UNION to return each node type separately."""
+        # UNION is the correct approach to get all node types separately
+        assert "UNION" in cs.CYPHER_QUERY_EMBEDDINGS.upper(), (
+            "CYPHER_QUERY_EMBEDDINGS should use UNION to return each node type separately"
+        )
+        # COALESCE would collapse nodes incorrectly - should NOT be present
+        assert "COALESCE" not in cs.CYPHER_QUERY_EMBEDDINGS.upper(), (
+            "CYPHER_QUERY_EMBEDDINGS should NOT use COALESCE (collapses multiple nodes into one)"
+        )
+
     def test_includes_all_embeddable_node_types(self) -> None:
         """Verify the embedding query includes all node types that should be embedded."""
         # These are the node types that should have embeddings
@@ -79,6 +90,11 @@ class TestCypherQueryEmbeddingsStructure:
             assert node_type in cs.CYPHER_QUERY_PROJECT_NODE_IDS, (
                 f"CYPHER_QUERY_PROJECT_NODE_IDS should include {node_type} node type"
             )
+
+    def test_project_node_ids_uses_union_not_coalesce(self) -> None:
+        """Verify CYPHER_QUERY_PROJECT_NODE_IDS uses UNION."""
+        assert "UNION" in cs.CYPHER_QUERY_PROJECT_NODE_IDS.upper()
+        assert "COALESCE" not in cs.CYPHER_QUERY_PROJECT_NODE_IDS.upper()
 
 
 class TestGenerateSemanticEmbeddings:

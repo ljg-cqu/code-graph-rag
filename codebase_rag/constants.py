@@ -471,49 +471,85 @@ CSPROJ_SUFFIX = ".csproj"
 # (H) Cypher queries
 CYPHER_DEFAULT_LIMIT = 50
 
-# Base query for embeddings - retrieves all embeddable node types:
+# Embedding queries use UNION to return each embeddable node type separately:
 # - Function: standalone functions (Module -> DEFINES -> Function)
-# - Method: methods in classes (Module -> DEFINES -> Class -> DEFINES_METHOD -> Method)
+# - Method: methods in classes/contracts (Module -> DEFINES -> Class/Contract -> DEFINES_METHOD -> Method)
 # - Class: class definitions (Module -> DEFINES -> Class)
 # - Interface: interface definitions (Module -> DEFINES -> Interface)
 # - Contract: Solidity contracts (Module -> DEFINES -> Contract)
 # - Library: Solidity libraries (Module -> DEFINES -> Library)
-_CYPHER_EMBEDDING_BASE = """
+#
+# NOTE: UNION requires all branches to return the same column names and types.
+# For nodes without start_line/end_line (Function, Method, Class, Interface in non-Solidity),
+# these columns will be NULL but source extraction can use AST fallback via qualified_name.
+
+CYPHER_QUERY_EMBEDDINGS = """
 MATCH (m:Module)
 WHERE m.qualified_name STARTS WITH ($project_name + '.')
-OPTIONAL MATCH (m)-[:DEFINES]->(f:Function)
-OPTIONAL MATCH (m)-[:DEFINES]->(c)-[:DEFINES_METHOD]->(meth:Method)
-OPTIONAL MATCH (m)-[:DEFINES]->(cls:Class)
-OPTIONAL MATCH (m)-[:DEFINES]->(iface:Interface)
-OPTIONAL MATCH (m)-[:DEFINES]->(contract:Contract)
-OPTIONAL MATCH (m)-[:DEFINES]->(lib:Library)
-WITH m, f, meth, cls, iface, contract, lib
-WHERE f IS NOT NULL OR meth IS NOT NULL OR cls IS NOT NULL
-      OR iface IS NOT NULL OR contract IS NOT NULL OR lib IS NOT NULL
-WITH m, COALESCE(f, meth, cls, iface, contract, lib) AS n
+MATCH (m)-[:DEFINES]->(n:Function)
+RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
+       n.start_line AS start_line, n.end_line AS end_line, m.path AS path
+UNION
+MATCH (m:Module)
+WHERE m.qualified_name STARTS WITH ($project_name + '.')
+MATCH (m)-[:DEFINES]->(c)-[:DEFINES_METHOD]->(n:Method)
+RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
+       n.start_line AS start_line, n.end_line AS end_line, m.path AS path
+UNION
+MATCH (m:Module)
+WHERE m.qualified_name STARTS WITH ($project_name + '.')
+MATCH (m)-[:DEFINES]->(n:Class)
+RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
+       n.start_line AS start_line, n.end_line AS end_line, m.path AS path
+UNION
+MATCH (m:Module)
+WHERE m.qualified_name STARTS WITH ($project_name + '.')
+MATCH (m)-[:DEFINES]->(n:Interface)
+RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
+       n.start_line AS start_line, n.end_line AS end_line, m.path AS path
+UNION
+MATCH (m:Module)
+WHERE m.qualified_name STARTS WITH ($project_name + '.')
+MATCH (m)-[:DEFINES]->(n:Contract)
+RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
+       n.start_line AS start_line, n.end_line AS end_line, m.path AS path
+UNION
+MATCH (m:Module)
+WHERE m.qualified_name STARTS WITH ($project_name + '.')
+MATCH (m)-[:DEFINES]->(n:Library)
+RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
+       n.start_line AS start_line, n.end_line AS end_line, m.path AS path
 """
-
-CYPHER_QUERY_EMBEDDINGS = (
-    _CYPHER_EMBEDDING_BASE
-    + """RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
-       n.start_line AS start_line, n.end_line AS end_line,
-       m.path AS path
-"""
-)
 
 CYPHER_QUERY_PROJECT_NODE_IDS = """
 MATCH (m:Module)
 WHERE m.qualified_name STARTS WITH ($project_name + '.')
-OPTIONAL MATCH (m)-[:DEFINES]->(f:Function)
-OPTIONAL MATCH (m)-[:DEFINES]->(c)-[:DEFINES_METHOD]->(meth:Method)
-OPTIONAL MATCH (m)-[:DEFINES]->(cls:Class)
-OPTIONAL MATCH (m)-[:DEFINES]->(iface:Interface)
-OPTIONAL MATCH (m)-[:DEFINES]->(contract:Contract)
-OPTIONAL MATCH (m)-[:DEFINES]->(lib:Library)
-WITH f, meth, cls, iface, contract, lib
-WHERE f IS NOT NULL OR meth IS NOT NULL OR cls IS NOT NULL
-      OR iface IS NOT NULL OR contract IS NOT NULL OR lib IS NOT NULL
-WITH COALESCE(f, meth, cls, iface, contract, lib) AS n
+MATCH (m)-[:DEFINES]->(n:Function)
+RETURN id(n) AS node_id
+UNION
+MATCH (m:Module)
+WHERE m.qualified_name STARTS WITH ($project_name + '.')
+MATCH (m)-[:DEFINES]->(c)-[:DEFINES_METHOD]->(n:Method)
+RETURN id(n) AS node_id
+UNION
+MATCH (m:Module)
+WHERE m.qualified_name STARTS WITH ($project_name + '.')
+MATCH (m)-[:DEFINES]->(n:Class)
+RETURN id(n) AS node_id
+UNION
+MATCH (m:Module)
+WHERE m.qualified_name STARTS WITH ($project_name + '.')
+MATCH (m)-[:DEFINES]->(n:Interface)
+RETURN id(n) AS node_id
+UNION
+MATCH (m:Module)
+WHERE m.qualified_name STARTS WITH ($project_name + '.')
+MATCH (m)-[:DEFINES]->(n:Contract)
+RETURN id(n) AS node_id
+UNION
+MATCH (m:Module)
+WHERE m.qualified_name STARTS WITH ($project_name + '.')
+MATCH (m)-[:DEFINES]->(n:Library)
 RETURN id(n) AS node_id
 """
 
