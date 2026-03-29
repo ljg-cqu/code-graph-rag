@@ -337,6 +337,7 @@ EMBEDDABLE_NODE_LABELS = frozenset({
     NodeLabel.CLASS,
     NodeLabel.INTERFACE,
     NodeLabel.CONTRACT,  # Solidity
+    NodeLabel.LIBRARY,   # Solidity
 })
 
 # Node properties for Memgraph native storage

@@ -29,7 +29,6 @@ from .utils.dependencies import has_semantic_dependencies
 from .utils.fqn_resolver import find_function_source_by_fqn
 from .utils.path_utils import should_skip_path
 from .utils.source_extraction import extract_source_lines
-from .utils.source_extraction import extract_source_with_fallback
 
 type FileHashCache = dict[str, str]
 
