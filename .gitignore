@@ -15,6 +15,7 @@ wheels/
 .pytest_cache/
 .claude/
 .embedding_cache/
+.cgr/
 .qdrant_code_embeddings/
 CLAUDE.md
 AGENTS.md
