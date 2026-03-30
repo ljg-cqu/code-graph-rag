@@ -89,7 +89,7 @@ def _search_memgraph_native(
 
     query = """
     CALL vector_search.search(
-        'chunk_embeddings',
+        'doc_embeddings',
         $embedding,
         $limit
     ) YIELD node, score
@@ -141,14 +141,12 @@ def search_documents_by_keywords(
         - Document-[:CONTAINS_CHUNK]->Chunk
         - Chunk-[:BELONGS_TO_SECTION]->Section (optional)
     """
-    # Build keyword search pattern
-    keyword_pattern = " OR ".join(
-        [f"c.content CONTAINS '{kw}'" for kw in keywords]
-    )
-
-    query = f"""
+    # Build keyword search pattern using parameterized query
+    # Each keyword is passed as a separate parameter to prevent injection
+    query = """
     MATCH (d:Document)-[:CONTAINS_CHUNK]->(c:Chunk)
-    WHERE d.workspace = $workspace AND ({keyword_pattern})
+    WHERE d.workspace = $workspace
+    AND ANY(kw IN $keywords WHERE c.content CONTAINS kw)
     OPTIONAL MATCH (c)-[:BELONGS_TO_SECTION]->(s:Section)
     RETURN
         c.content as content,
@@ -161,7 +159,7 @@ def search_documents_by_keywords(
 
     return ingestor.execute_query(
         query,
-        parameters={"workspace": workspace, "limit": limit},
+        parameters={"workspace": workspace, "keywords": keywords, "limit": limit},
     )
 
 

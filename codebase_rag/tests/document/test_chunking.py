@@ -744,3 +744,215 @@ class TestSecurityBounds:
         assert len(chunks) <= chunker.MAX_CHUNKS_PER_DOCUMENT, (
             f"Chunks {len(chunks)} exceeded limit {chunker.MAX_CHUNKS_PER_DOCUMENT}"
         )
+
+
+class TestChunkIndexUniqueness:
+    """Tests for chunk_index uniqueness and sequential ordering.
+
+    These tests verify the critical invariant that chunk_index values
+    are unique and sequential within a document, ensuring unique
+    qualified_name values for graph storage.
+    """
+
+    def test_chunk_indices_are_unique_and_sequential(self):
+        """Verify all chunks have unique, sequential chunk_index values."""
+        chunker = SemanticDocumentChunker(max_tokens=50, overlap_tokens=10)
+
+        # Create document that produces multiple chunks
+        content = " ".join(["paragraph content here."] * 20)
+        doc = ExtractedDocument(
+            path="/test/multi.md",
+            file_type=".md",
+            content=content,
+            sections=[],
+            code_blocks=[],
+            code_references=[],
+            word_count=80,
+            modified_date="2024-01-01",
+        )
+
+        chunks = list(chunker.chunk_document(doc))
+        assert len(chunks) > 1, "Need multiple chunks to test uniqueness"
+
+        indices = [c.chunk_index for c in chunks]
+        # Verify uniqueness
+        assert len(indices) == len(set(indices)), (
+            f"Duplicate chunk_index values found: {indices}"
+        )
+        # Verify sequential starting from 0
+        assert indices == list(range(len(chunks))), (
+            f"Indices not sequential: expected {list(range(len(chunks)))}, got {indices}"
+        )
+
+    def test_nested_sections_chunk_index_propagation(self):
+        """Verify chunk_counter propagates correctly through nested sections."""
+        chunker = SemanticDocumentChunker(max_tokens=100)
+
+        doc = ExtractedDocument(
+            path="/test/nested.md",
+            file_type=".md",
+            content="",
+            sections=[
+                ExtractedSection(
+                    title="Parent",
+                    level=1,
+                    start_line=0,
+                    end_line=10,
+                    content="Parent content here.",
+                    subsections=[
+                        ExtractedSection(
+                            title="Child",
+                            level=2,
+                            start_line=5,
+                            end_line=10,
+                            content="Child content here.",
+                            subsections=[
+                                ExtractedSection(
+                                    title="Grandchild",
+                                    level=3,
+                                    start_line=7,
+                                    end_line=9,
+                                    content="Grandchild content.",
+                                    subsections=[],
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
+                ExtractedSection(
+                    title="Another Parent",
+                    level=1,
+                    start_line=11,
+                    end_line=20,
+                    content="Another parent content.",
+                    subsections=[],
+                ),
+            ],
+            code_blocks=[],
+            code_references=[],
+            word_count=10,
+            modified_date="2024-01-01",
+        )
+
+        chunks = list(chunker.chunk_document(doc))
+        assert len(chunks) >= 4, f"Need at least 4 chunks for nested test, got {len(chunks)}"
+
+        indices = [c.chunk_index for c in chunks]
+        # Verify uniqueness
+        assert len(indices) == len(set(indices)), (
+            f"Duplicate indices in nested sections: {indices}"
+        )
+        # Verify sequential
+        assert indices == list(range(len(chunks))), (
+            f"Indices not sequential in nested: expected {list(range(len(chunks)))}, got {indices}"
+        )
+
+    def test_qualified_names_are_unique(self):
+        """Verify all chunks have unique qualified_name values."""
+        chunker = SemanticDocumentChunker(max_tokens=30, overlap_tokens=5)
+
+        # Create document with multiple chunks
+        content = " ".join(["This is sentence number."] * 30)
+        doc = ExtractedDocument(
+            path="/test/unique_names.md",
+            file_type=".md",
+            content=content,
+            sections=[],
+            code_blocks=[],
+            code_references=[],
+            word_count=120,
+            modified_date="2024-01-01",
+        )
+
+        chunks = list(chunker.chunk_document(doc))
+        qualified_names = [c.qualified_name for c in chunks]
+
+        # Verify uniqueness
+        assert len(qualified_names) == len(set(qualified_names)), (
+            f"Duplicate qualified_name values: {qualified_names}"
+        )
+
+        # Verify format: path#chunk_N
+        for chunk in chunks:
+            expected = f"{chunk.document_path}#chunk_{chunk.chunk_index}"
+            assert chunk.qualified_name == expected, (
+                f"qualified_name mismatch: {chunk.qualified_name} != {expected}"
+            )
+
+    def test_empty_sections_dont_break_counter(self):
+        """Verify empty sections don't cause counter issues."""
+        chunker = SemanticDocumentChunker(max_tokens=100)
+
+        doc = ExtractedDocument(
+            path="/test/empty.md",
+            file_type=".md",
+            content="",
+            sections=[
+                ExtractedSection(
+                    title="Empty Parent",
+                    level=1,
+                    start_line=0,
+                    end_line=5,
+                    content="",  # Empty
+                    subsections=[
+                        ExtractedSection(
+                            title="Non-empty Child",
+                            level=2,
+                            start_line=2,
+                            end_line=5,
+                            content="Child has content.",
+                            subsections=[],
+                        ),
+                    ],
+                ),
+                ExtractedSection(
+                    title="Final Section",
+                    level=1,
+                    start_line=6,
+                    end_line=10,
+                    content="Final content.",
+                    subsections=[],
+                ),
+            ],
+            code_blocks=[],
+            code_references=[],
+            word_count=5,
+            modified_date="2024-01-01",
+        )
+
+        chunks = list(chunker.chunk_document(doc))
+
+        # Should have 2 chunks (empty parent skipped, child + final)
+        assert len(chunks) == 2, f"Expected 2 chunks, got {len(chunks)}"
+
+        indices = [c.chunk_index for c in chunks]
+        assert indices == [0, 1], f"Indices should be [0, 1], got {indices}"
+
+    def test_oversized_splits_preserve_sequential_indices(self):
+        """Verify oversized content splits get sequential indices."""
+        chunker = SemanticDocumentChunker(max_tokens=20, overlap_tokens=5)
+
+        # Single large paragraph that needs splitting
+        large_content = " ".join(["word"] * 100)  # ~130 tokens
+        doc = ExtractedDocument(
+            path="/test/oversized.md",
+            file_type=".md",
+            content=large_content,
+            sections=[],
+            code_blocks=[],
+            code_references=[],
+            word_count=100,
+            modified_date="2024-01-01",
+        )
+
+        chunks = list(chunker.chunk_document(doc))
+        assert len(chunks) > 1, "Oversized content should split into multiple chunks"
+
+        indices = [c.chunk_index for c in chunks]
+        # All indices should be unique and sequential
+        assert len(indices) == len(set(indices)), (
+            f"Duplicate indices in oversized splits: {indices}"
+        )
+        assert indices == list(range(len(chunks))), (
+            f"Oversized split indices not sequential: {indices}"
+        )

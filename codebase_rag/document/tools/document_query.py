@@ -106,9 +106,16 @@ def get_document_sections(
     document_path: str,
     workspace: str = "default",
 ) -> list[dict]:
-    """Get all sections for a document."""
+    """Get all sections for a document, including nested subsections.
+
+    Traverses CONTAINS_SECTION for top-level sections and HAS_SUBSECTION* for nested ones.
+    """
     query = """
     MATCH (d:Document)-[:CONTAINS_SECTION]->(s:Section)
+    WHERE d.path = $path AND d.workspace = $workspace
+    RETURN s
+    UNION
+    MATCH (d:Document)-[:CONTAINS_SECTION]->(:Section)-[:HAS_SUBSECTION*]->(s:Section)
     WHERE d.path = $path AND d.workspace = $workspace
     RETURN s
     ORDER BY s.start_line
@@ -122,17 +129,43 @@ def get_section_chunks(
     ingestor: MemgraphIngestor,
     section_qn: str,
     workspace: str = "default",
+    include_subsections: bool = True,
 ) -> list[dict]:
     """Get all chunks for a section.
 
-    Note: Chunks have BELONGS_TO_SECTION relationship to their containing section.
+    Args:
+        ingestor: Graph service
+        section_qn: Section qualified name
+        workspace: Workspace filter
+        include_subsections: If True, include chunks from all nested subsections
+
+    Returns:
+        List of chunks ordered by start_line
+
+    Note:
+        Chunks have BELONGS_TO_SECTION relationship to their containing section.
+        When include_subsections=True, also traverses HAS_SUBSECTION* to get
+        chunks from the entire section subtree.
     """
-    query = """
-    MATCH (c:Chunk)-[:BELONGS_TO_SECTION]->(s:Section)
-    WHERE s.qualified_name = $qn AND s.workspace = $workspace
-    RETURN c
-    ORDER BY c.start_line
-    """
+    if include_subsections:
+        query = """
+        MATCH (c:Chunk)-[:BELONGS_TO_SECTION]->(s:Section)
+        WHERE s.qualified_name = $qn AND s.workspace = $workspace
+        RETURN c
+        UNION
+        MATCH (parent:Section)-[:HAS_SUBSECTION*]->(sub:Section)
+        WHERE parent.qualified_name = $qn AND parent.workspace = $workspace
+        MATCH (c:Chunk)-[:BELONGS_TO_SECTION]->(sub)
+        RETURN c
+        ORDER BY c.start_line
+        """
+    else:
+        query = """
+        MATCH (c:Chunk)-[:BELONGS_TO_SECTION]->(s:Section)
+        WHERE s.qualified_name = $qn AND s.workspace = $workspace
+        RETURN c
+        ORDER BY c.start_line
+        """
     return ingestor.execute_query(
         query, parameters={"qn": section_qn, "workspace": workspace}
     )

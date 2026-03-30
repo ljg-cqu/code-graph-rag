@@ -19,6 +19,7 @@ def read_document_content(
     workspace: str = "default",
     include_sections: bool = True,
     include_chunks: bool = False,
+    include_subsections: bool = True,
 ) -> dict:
     """
     Read document content from graph.
@@ -29,6 +30,9 @@ def read_document_content(
         workspace: Workspace filter
         include_sections: Include section content
         include_chunks: Include chunk content
+        include_subsections: When True, include chunks from all nested subsections
+            (traverses HAS_SUBSECTION*). When False, only include chunks from
+            top-level sections.
 
     Returns:
         Document content with optional sections and chunks
@@ -58,7 +62,7 @@ def read_document_content(
 
     if include_sections:
         content["sections"] = _get_sections_with_content(
-            ingestor, document_path, workspace, include_chunks
+            ingestor, document_path, workspace, include_chunks, include_subsections
         )
 
     return content
@@ -69,14 +73,42 @@ def _get_sections_with_content(
     document_path: str,
     workspace: str,
     include_chunks: bool,
+    include_subsections: bool = True,
 ) -> list[dict]:
-    """Get sections with their content."""
-    query = """
-    MATCH (d:Document)-[:CONTAINS_SECTION]->(s:Section)
-    WHERE d.path = $path AND d.workspace = $workspace
-    RETURN s
-    ORDER BY s.start_line
+    """Get sections with their content.
+
+    Args:
+        ingestor: Graph service instance
+        document_path: Path to document
+        workspace: Workspace filter
+        include_chunks: Include chunk content in sections
+        include_subsections: When True, traverse HAS_SUBSECTION* to get all nested sections.
+            When False, only return top-level sections (direct CONTAINS_SECTION children).
+
+    Returns:
+        ALL sections including nested subsections by traversing HAS_SUBSECTION relationships.
     """
+    # Query traverses the full hierarchy: Document -> Section (via CONTAINS_SECTION)
+    # and Section -> Section (via HAS_SUBSECTION*)
+    if include_subsections:
+        query = """
+        MATCH (d:Document)-[:CONTAINS_SECTION]->(s:Section)
+        WHERE d.path = $path AND d.workspace = $workspace
+        RETURN s
+        UNION
+        MATCH (d:Document)-[:CONTAINS_SECTION]->(:Section)-[:HAS_SUBSECTION*]->(s:Section)
+        WHERE d.path = $path AND d.workspace = $workspace
+        RETURN s
+        ORDER BY s.start_line
+        """
+    else:
+        # Only top-level sections (direct CONTAINS_SECTION children)
+        query = """
+        MATCH (d:Document)-[:CONTAINS_SECTION]->(s:Section)
+        WHERE d.path = $path AND d.workspace = $workspace
+        RETURN s
+        ORDER BY s.start_line
+        """
 
     sections = ingestor.execute_query(
         query, parameters={"path": document_path, "workspace": workspace}
@@ -90,11 +122,12 @@ def _get_sections_with_content(
             "start_line": section.get("start_line"),
             "end_line": section.get("end_line"),
             "content": section.get("content_snippet"),  # Section stores content_snippet
+            "qualified_name": section.get("qualified_name"),
         }
 
         if include_chunks:
             section_data["chunks"] = _get_chunks_for_section(
-                ingestor, section.get("qualified_name"), workspace
+                ingestor, section.get("qualified_name"), workspace, include_subsections
             )
 
         section_list.append(section_data)
@@ -106,17 +139,42 @@ def _get_chunks_for_section(
     ingestor: MemgraphIngestor,
     section_qn: str,
     workspace: str,
+    include_subsections: bool = True,
 ) -> list[dict]:
     """Get chunks for a section.
 
-    Note: Chunks have BELONGS_TO_SECTION relationship to their containing section.
+    Args:
+        ingestor: Graph service instance
+        section_qn: Section qualified name
+        workspace: Workspace filter
+        include_subsections: When True, traverse HAS_SUBSECTION* to collect chunks from
+            the entire section subtree. When False, only get chunks directly belonging
+            to this section.
+
+    Returns:
+        Chunks for the section, optionally including nested subsection chunks.
     """
-    query = """
-    MATCH (c:Chunk)-[:BELONGS_TO_SECTION]->(s:Section)
-    WHERE s.qualified_name = $qn AND s.workspace = $workspace
-    RETURN c
-    ORDER BY c.start_line
-    """
+    if include_subsections:
+        # Get chunks directly belonging to this section OR any of its subsections
+        query = """
+        MATCH (c:Chunk)-[:BELONGS_TO_SECTION]->(s:Section)
+        WHERE s.qualified_name = $qn AND s.workspace = $workspace
+        RETURN c
+        UNION
+        MATCH (parent:Section)-[:HAS_SUBSECTION*]->(sub:Section)
+        WHERE parent.qualified_name = $qn AND parent.workspace = $workspace
+        MATCH (c:Chunk)-[:BELONGS_TO_SECTION]->(sub)
+        RETURN c
+        ORDER BY c.start_line
+        """
+    else:
+        # Only chunks directly belonging to this section
+        query = """
+        MATCH (c:Chunk)-[:BELONGS_TO_SECTION]->(s:Section)
+        WHERE s.qualified_name = $qn AND s.workspace = $workspace
+        RETURN c
+        ORDER BY c.start_line
+        """
 
     return ingestor.execute_query(
         query, parameters={"qn": section_qn, "workspace": workspace}

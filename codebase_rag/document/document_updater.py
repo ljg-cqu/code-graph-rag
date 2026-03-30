@@ -6,6 +6,7 @@ Pattern follows GraphUpdater from codebase_rag/graph_updater.py
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -19,6 +20,10 @@ from .chunking import DocumentChunk, SemanticDocumentChunker
 from .error_handling import DeadLetterQueue, ErrorType, ExtractionError, ExtractionException
 from .extractors import ExtractedDocument, ExtractedSection, get_extractor_for_file
 from .versioning import ContentVersionTracker, VersionCache
+
+# Workspace must be a safe identifier (alphanumeric, underscore, hyphen)
+# Same validation pattern as document_query.py for consistency
+WORKSPACE_PATTERN = re.compile(r"^[\w\-]+$")
 
 
 class DocumentGraphUpdater:
@@ -60,6 +65,14 @@ class DocumentGraphUpdater:
         self.port = port
         self.repo_path = repo_path.resolve()
 
+        # Validate workspace identifier (same pattern as document_query.py)
+        if not WORKSPACE_PATTERN.match(workspace):
+            raise ValueError(
+                f"Invalid workspace identifier: '{workspace}'. "
+                "Must contain only alphanumeric characters, underscores, and hyphens."
+            )
+        self.workspace = workspace
+
         # Determine base path for metadata files
         # If repo_path is a file, use its parent directory
         if self.repo_path.is_file():
@@ -75,7 +88,6 @@ class DocumentGraphUpdater:
             raise ValueError(f"repo_path {repo_path} is outside allowed boundaries")
 
         self.batch_size = batch_size
-        self.workspace = workspace
 
         # Ensure metadata directory exists before initializing caches
         cgr_dir = self.base_path / ".cgr"
@@ -173,6 +185,7 @@ class DocumentGraphUpdater:
             batch_size=self.batch_size,
         ) as ingestor:
             ingestor.ensure_constraints()
+            self._ensure_vector_index(ingestor)
             documents = self._collect_documents()
             stats["total_documents"] = len(documents)
 
@@ -348,6 +361,40 @@ class DocumentGraphUpdater:
         logger.info(f"Document indexing complete: {stats}")
         return stats
 
+    def _ensure_vector_index(self, ingestor: MemgraphIngestor) -> None:
+        """Create vector index for Chunk embeddings.
+
+        Vector indexes enable efficient similarity search on embeddings.
+        Uses Memgraph's CREATE VECTOR INDEX syntax with capacity from config.
+        """
+        # Use the embedding provider's dimension property (already has correct mapping)
+        # The provider's dimension is determined from known model dimensions
+        dimension = self._embedding_provider.dimension
+
+        capacity = settings.DOC_MEMGRAPH_VECTOR_CAPACITY
+        index_name = settings.DOC_MEMGRAPH_VECTOR_INDEX_NAME
+
+        cypher = f"""
+        CREATE VECTOR INDEX {index_name}
+        ON :Chunk(embedding)
+        WITH CONFIG {{
+            "dimension": {dimension},
+            "capacity": {capacity},
+            "metric": "cos"
+        }};
+        """
+
+        try:
+            ingestor.execute_write(cypher, {})
+            logger.info(f"Created vector index '{index_name}' for Chunk nodes (dim={dimension}, capacity={capacity})")
+        except Exception as e:
+            error_str = str(e).lower()
+            if "already exists" in error_str or "duplicate" in error_str:
+                logger.info(f"Vector index '{index_name}' already exists")
+            else:
+                logger.error(f"Failed to create vector index '{index_name}': {e}")
+                # Non-fatal: indexing can proceed without vector index
+
     def _collect_documents(self) -> list[Path]:
         """Collect all eligible document files."""
         documents: list[Path] = []
@@ -439,10 +486,10 @@ class DocumentGraphUpdater:
         self._delete_document_nodes(doc.path, ingestor)
 
         # Store document and sections in graph, get section info for chunk matching
-        store_stats, section_info = self._store_document(doc, ingestor)
+        store_stats, section_info, indexed_at = self._store_document(doc, ingestor)
 
         # Store pre-computed chunks with embeddings and section relationships
-        chunk_count = self._store_chunks_with_embeddings(doc, embeddings_data, section_info, ingestor)
+        chunk_count = self._store_chunks_with_embeddings(doc, embeddings_data, section_info, ingestor, indexed_at)
 
         # Update version cache
         version = self.version_tracker.create_version(doc)
@@ -547,9 +594,9 @@ class DocumentGraphUpdater:
         await asyncio.to_thread(self._delete_document_nodes, doc.path, ingestor)
 
         # Store document and sections (run in thread to avoid blocking)
-        store_stats, section_info = await asyncio.to_thread(self._store_document, doc, ingestor)
+        store_stats, section_info, indexed_at = await asyncio.to_thread(self._store_document, doc, ingestor)
         chunk_count = await asyncio.to_thread(
-            self._store_chunks_with_embeddings, doc, embeddings_data, section_info, ingestor
+            self._store_chunks_with_embeddings, doc, embeddings_data, section_info, ingestor, indexed_at
         )
 
         # Update version
@@ -561,40 +608,78 @@ class DocumentGraphUpdater:
         )
         return "indexed"
 
-    def _store_document(self, doc: ExtractedDocument, ingestor: MemgraphIngestor) -> tuple[dict, list[dict]]:
+    def _store_document(self, doc: ExtractedDocument, ingestor: MemgraphIngestor) -> tuple[dict, list[dict], str]:
         """Store document and sections in graph.
 
         Returns:
-            Tuple of (stats dict, section_info list for chunk matching)
+            Tuple of (stats dict, section_info list for chunk matching, indexed_at timestamp)
         """
         stats = {"sections": 0}
         all_section_info: list[dict] = []
+        indexed_at = datetime.now(UTC).isoformat()
 
         logger.debug(f"Storing document: {doc.path}")
 
+        # Track if we'll create a synthetic section (for section_count accuracy)
+        will_create_synthetic = not doc.sections and doc.content and doc.content.strip()
+
         # Create Document node
+        # Note: section_count includes synthetic sections for plain text files
         ingestor.ensure_node_batch(
             cs.NodeLabel.DOCUMENT.value,
             {
                 cs.UniqueKeyType.PATH.value: doc.path,
                 "workspace": self.workspace,
                 "file_type": doc.file_type,
-                "section_count": len(doc.sections),
+                "section_count": len(doc.sections) + (1 if will_create_synthetic else 0),
                 "code_block_count": len(doc.code_blocks),
                 "code_references": doc.code_references,
                 "word_count": doc.word_count,
                 "modified_date": doc.modified_date,
-                "indexed_at": datetime.now(UTC).isoformat(),
+                "indexed_at": indexed_at,
                 "content_hash": doc.content_hash,
             },
         )
 
         # Create Section nodes and relationships, collect section info
         for section in doc.sections:
-            section_infos = self._store_section(doc.path, section, doc.path, None, ingestor, stats)
+            section_infos = self._store_section(doc.path, section, doc.path, None, ingestor, stats, indexed_at)
             all_section_info.extend(section_infos)
 
-        return stats, all_section_info
+        # For documents without sections (e.g., plain text files),
+        # create a synthetic "Document Content" section so chunks have a section to belong to.
+        # Use "#synthetic:" prefix instead of "#L0:" to avoid collision with real sections
+        # that might start at line 0 (edge case for malformed documents).
+        if will_create_synthetic:
+            synthetic_qn = f"{doc.path}#synthetic:Document Content"
+            ingestor.ensure_node_batch(
+                cs.NodeLabel.SECTION.value,
+                {
+                    cs.UniqueKeyType.QUALIFIED_NAME.value: synthetic_qn,
+                    "workspace": self.workspace,
+                    "title": "Document Content",
+                    "level": 1,
+                    "start_line": 0,
+                    "end_line": doc.content.count("\n"),
+                    "content_snippet": doc.content[:500],
+                    "indexed_at": indexed_at,
+                },
+            )
+            ingestor.ensure_relationship_batch(
+                (cs.NodeLabel.DOCUMENT.value, cs.UniqueKeyType.PATH.value, doc.path),
+                cs.RelationshipType.CONTAINS_SECTION.value,
+                (cs.NodeLabel.SECTION.value, cs.UniqueKeyType.QUALIFIED_NAME.value, synthetic_qn),
+            )
+            all_section_info.append({
+                "qualified_name": synthetic_qn,
+                "title": "Document Content",
+                "start_line": 0,
+                "end_line": doc.content.count("\n"),
+                "level": 1,
+            })
+            stats["sections"] = 1
+
+        return stats, all_section_info, indexed_at
 
     def _store_section(
         self,
@@ -604,6 +689,7 @@ class DocumentGraphUpdater:
         parent_qn: str | None,
         ingestor: MemgraphIngestor,
         stats: dict,
+        indexed_at: str,
     ) -> list[dict]:
         """
         Recursively store section and its subsections.
@@ -615,6 +701,7 @@ class DocumentGraphUpdater:
             parent_qn: Parent section's qualified name (None for top-level)
             ingestor: MemgraphIngestor instance
             stats: Stats dict to update
+            indexed_at: ISO timestamp for the indexing operation
 
         Returns:
             List of section info dicts with qualified_name, title, start_line, end_line, level
@@ -632,6 +719,7 @@ class DocumentGraphUpdater:
                 "start_line": section.start_line,
                 "end_line": section.end_line,
                 "content_snippet": section.content[:500] if section.content else "",
+                "indexed_at": indexed_at,
             },
         )
 
@@ -664,7 +752,7 @@ class DocumentGraphUpdater:
         # Recursively process subsections
         for subsection in section.subsections:
             subsection_infos = self._store_section(
-                doc_path, subsection, section_qn, section_qn, ingestor, stats
+                doc_path, subsection, section_qn, section_qn, ingestor, stats, indexed_at
             )
             section_info.extend(subsection_infos)
 
@@ -781,6 +869,7 @@ class DocumentGraphUpdater:
         embeddings_data: tuple[list, list[list[float]]],
         section_info: list[dict],
         ingestor: MemgraphIngestor,
+        indexed_at: str,
     ) -> int:
         """Store chunks with pre-computed embeddings.
 
@@ -789,14 +878,24 @@ class DocumentGraphUpdater:
             embeddings_data: Tuple of (non_empty_chunks, embeddings) from _prepare_embeddings
             section_info: List of section info dicts for chunk-to-section matching
             ingestor: MemgraphIngestor instance
+            indexed_at: ISO timestamp for the indexing operation
 
         Returns:
             Number of chunks stored
+
+        Note:
+            Every chunk MUST get a BELONGS_TO_SECTION relationship. If _find_section_for_chunk
+            returns None (edge case for malformed documents), we use the first available section
+            as a fallback to prevent orphaned chunks.
         """
         non_empty_chunks, embeddings = embeddings_data
 
         if not non_empty_chunks:
             return 0
+
+        # Determine fallback section for chunks that don't match any section
+        # (shouldn't happen with synthetic section creation, but safety fallback)
+        fallback_section = section_info[0] if section_info else None
 
         for chunk, embedding in zip(non_empty_chunks, embeddings):
             ingestor.ensure_node_batch(
@@ -810,6 +909,7 @@ class DocumentGraphUpdater:
                     "start_line": chunk.start_line,
                     "end_line": chunk.end_line,
                     "embedding": embedding,
+                    "indexed_at": indexed_at,
                 },
             )
             ingestor.ensure_relationship_batch(
@@ -819,12 +919,30 @@ class DocumentGraphUpdater:
             )
 
             # Find matching section for this chunk and create relationship
+            # GUARANTEE: Every chunk gets BELONGS_TO_SECTION relationship
             matching_section = self._find_section_for_chunk(chunk, section_info)
             if matching_section:
                 ingestor.ensure_relationship_batch(
                     (cs.NodeLabel.CHUNK.value, cs.UniqueKeyType.QUALIFIED_NAME.value, chunk.qualified_name),
                     cs.RelationshipType.BELONGS_TO_SECTION.value,
                     (cs.NodeLabel.SECTION.value, cs.UniqueKeyType.QUALIFIED_NAME.value, matching_section["qualified_name"]),
+                )
+            elif fallback_section:
+                # Fallback: Use first section (typically synthetic section for plain text)
+                logger.warning(
+                    f"Chunk {chunk.qualified_name} has no overlapping section, "
+                    f"using fallback section: {fallback_section['qualified_name']}"
+                )
+                ingestor.ensure_relationship_batch(
+                    (cs.NodeLabel.CHUNK.value, cs.UniqueKeyType.QUALIFIED_NAME.value, chunk.qualified_name),
+                    cs.RelationshipType.BELONGS_TO_SECTION.value,
+                    (cs.NodeLabel.SECTION.value, cs.UniqueKeyType.QUALIFIED_NAME.value, fallback_section["qualified_name"]),
+                )
+            else:
+                # This should never happen - indicates a bug in section creation
+                logger.error(
+                    f"Chunk {chunk.qualified_name} has no BELONGS_TO_SECTION relationship "
+                    f"and no fallback section available. This is a bug."
                 )
 
         return len(non_empty_chunks)
