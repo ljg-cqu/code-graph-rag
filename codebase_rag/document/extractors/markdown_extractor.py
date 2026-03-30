@@ -153,11 +153,16 @@ class MarkdownExtractor(BaseDocumentExtractor):
         section_stack: list[tuple[int, ExtractedSection]] = []  # (level, section)
 
         for idx, (line_num, level, title) in enumerate(header_positions):
-            # Determine end line (next header or end of file)
-            if idx + 1 < len(header_positions):
-                end_line = header_positions[idx + 1][0] - 1
-            else:
-                end_line = len(lines) - 1
+            # Determine end line: find next header at same or higher level (<=)
+            # A section at level L should extend until the next header at level <= L
+            # or end of file if no such header exists
+            end_line = len(lines) - 1  # Default to end of file
+            for j in range(idx + 1, len(header_positions)):
+                next_line, next_level, _ = header_positions[j]
+                if next_level <= level:
+                    # Found next header at same or higher level
+                    end_line = next_line - 1
+                    break
 
             # Extract section content (from line after header to end)
             section_content = "\n".join(lines[line_num + 1 : end_line + 1])

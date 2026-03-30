@@ -837,9 +837,10 @@ class DocumentGraphUpdater:
         """Find the most specific section that contains a chunk.
 
         Matching logic:
-        1. Chunk must be within section's line range (inclusive)
+        1. Use line overlap to find candidate sections
         2. Prefer sections where chunk.section_title matches section.title
-        3. Among matches, prefer the deepest (highest level) section
+        3. Among matches, prefer sections with highest overlap
+        4. Among equal overlap, prefer deepest (highest level) section
 
         Args:
             chunk: DocumentChunk to match
@@ -847,28 +848,32 @@ class DocumentGraphUpdater:
                           start_line, end_line, level
 
         Returns:
-            Best matching section dict, or None if no match found
+            Best matching section dict, or None if no overlap found
         """
-        matching_sections: list[dict] = []
+        candidates: list[tuple[dict, int]] = []  # (section, overlap_lines)
 
         for section in section_info:
-            # Check if chunk is within section's line range (inclusive)
-            if chunk.start_line >= section["start_line"] and chunk.end_line <= section["end_line"]:
-                matching_sections.append(section)
+            # Calculate line overlap (inclusive ranges)
+            overlap_start = max(chunk.start_line, section["start_line"])
+            overlap_end = min(chunk.end_line, section["end_line"])
+            overlap_lines = overlap_end - overlap_start + 1 if overlap_start <= overlap_end else 0
 
-        if not matching_sections:
+            if overlap_lines > 0:
+                candidates.append((section, overlap_lines))
+
+        if not candidates:
             return None
 
-        # Sort by: (title match score, level descending)
-        # Title match gets priority, then deepest section
-        def sort_key(s: dict) -> tuple[int, int]:
-            # Title match: 1 if matches, 0 if doesn't
-            title_match = 1 if chunk.section_title == s["title"] else 0
+        # Sort by: (title match score, overlap lines, level descending)
+        def sort_key(item: tuple[dict, int]) -> tuple[int, int, int]:
+            section, overlap = item
+            # Title match: 2 if matches exactly, 1 if section_title non-empty and partial match, 0 otherwise
+            title_match = 2 if chunk.section_title == section["title"] else 0
             # Level: higher is deeper (more specific)
-            return (title_match, s["level"])
+            return (title_match, overlap, section["level"])
 
-        matching_sections.sort(key=sort_key, reverse=True)
-        return matching_sections[0]
+        candidates.sort(key=sort_key, reverse=True)
+        return candidates[0][0]
 
     def update_file(self, file_path: Path) -> str:
         """
