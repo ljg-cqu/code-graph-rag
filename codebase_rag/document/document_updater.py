@@ -15,7 +15,7 @@ from .. import constants as cs
 from ..config import settings
 from ..embeddings import get_embedding_provider
 from ..services.graph_service import MemgraphIngestor
-from .chunking import SemanticDocumentChunker
+from .chunking import DocumentChunk, SemanticDocumentChunker
 from .error_handling import DeadLetterQueue, ErrorType, ExtractionError, ExtractionException
 from .extractors import ExtractedDocument, ExtractedSection, get_extractor_for_file
 from .versioning import ContentVersionTracker, VersionCache
@@ -434,7 +434,7 @@ class DocumentGraphUpdater:
         store_stats = self._store_document(doc, ingestor)
 
         # Store pre-computed chunks with embeddings
-        chunk_count = self._store_chunks_with_embeddings(doc, chunks, embeddings_data, ingestor)
+        chunk_count = self._store_chunks_with_embeddings(doc, embeddings_data, ingestor)
 
         # Update version cache
         version = self.version_tracker.create_version(doc)
@@ -540,7 +540,7 @@ class DocumentGraphUpdater:
         # Store document and sections (run in thread to avoid blocking)
         store_stats = await asyncio.to_thread(self._store_document, doc, ingestor)
         chunk_count = await asyncio.to_thread(
-            self._store_chunks_with_embeddings, doc, chunks, embeddings_data, ingestor
+            self._store_chunks_with_embeddings, doc, embeddings_data, ingestor
         )
 
         # Update version
@@ -674,12 +674,11 @@ class DocumentGraphUpdater:
                     message=f"Embedding generation failed: {type(e).__name__}: {e}",
                 ) from e
             # Return a pseudo-chunk for the fallback case
-            from .chunking import DocumentChunk
             fallback_chunk = DocumentChunk(
                 content=doc.content[:1000],
                 section_title="",
-                start_line=0,
-                end_line=0,
+                start_line=1,  # Documents start at line 1 (consistent indexing)
+                end_line=self.chunker._count_lines(doc.content[:1000]),
                 token_count=self.chunker.count_tokens(doc.content[:1000]),
                 document_path=doc.path,
                 chunk_index=0,
@@ -718,7 +717,6 @@ class DocumentGraphUpdater:
     def _store_chunks_with_embeddings(
         self,
         doc: ExtractedDocument,
-        chunks: list,
         embeddings_data: tuple[list, list[list[float]]],
         ingestor: MemgraphIngestor,
     ) -> int:
@@ -726,7 +724,6 @@ class DocumentGraphUpdater:
 
         Args:
             doc: Extracted document
-            chunks: Original chunk list (for reference)
             embeddings_data: Tuple of (non_empty_chunks, embeddings) from _prepare_embeddings
             ingestor: MemgraphIngestor instance
 
@@ -739,104 +736,6 @@ class DocumentGraphUpdater:
             return 0
 
         for chunk, embedding in zip(non_empty_chunks, embeddings):
-            ingestor.ensure_node_batch(
-                cs.NodeLabel.CHUNK.value,
-                {
-                    cs.UniqueKeyType.QUALIFIED_NAME.value: chunk.qualified_name,
-                    "workspace": self.workspace,
-                    "content": chunk.content,
-                    "token_count": chunk.token_count,
-                    "section_title": chunk.section_title,
-                    "start_line": chunk.start_line,
-                    "end_line": chunk.end_line,
-                    "embedding": embedding,
-                },
-            )
-            ingestor.ensure_relationship_batch(
-                (cs.NodeLabel.DOCUMENT.value, cs.UniqueKeyType.PATH.value, doc.path),
-                cs.RelationshipType.CONTAINS_CHUNK.value,
-                (cs.NodeLabel.CHUNK.value, cs.UniqueKeyType.QUALIFIED_NAME.value, chunk.qualified_name),
-            )
-
-        return len(non_empty_chunks)
-
-    def _generate_and_store_embeddings(
-        self, doc: ExtractedDocument, ingestor: MemgraphIngestor
-    ) -> int:
-        """Generate embeddings using cached provider.
-
-        Raises:
-            ExtractionException: If embedding generation fails
-        """
-        # Use cached embedding provider from __init__
-        provider = self._embedding_provider
-
-        # Chunk document semantically
-        chunks = list(self.chunker.chunk_document(doc))
-
-        if not chunks:
-            # Fallback for empty documents - store document-level embedding
-            if not doc.content or not doc.content.strip():
-                logger.warning(f"Document {doc.path} has no content, skipping embedding")
-                return 0
-            # Wrap embedding operation to handle provider errors
-            try:
-                doc_embedding = provider.embed(doc.content[:1000])
-            except Exception as e:
-                raise ExtractionException(
-                    path=doc.path,
-                    error_type=ErrorType.UNKNOWN,
-                    message=f"Embedding generation failed: {type(e).__name__}: {e}",
-                ) from e
-            ingestor.ensure_node_batch(
-                cs.NodeLabel.CHUNK.value,
-                {
-                    cs.UniqueKeyType.QUALIFIED_NAME.value: f"{doc.path}#chunk_0",
-                    "workspace": self.workspace,
-                    "content": doc.content[:1000],
-                    "token_count": self.chunker.count_tokens(doc.content[:1000]),
-                    "section_title": "",
-                    "start_line": 0,
-                    "end_line": 0,
-                    "embedding": doc_embedding,
-                },
-            )
-            ingestor.ensure_relationship_batch(
-                (cs.NodeLabel.DOCUMENT.value, cs.UniqueKeyType.PATH.value, doc.path),
-                cs.RelationshipType.CONTAINS_CHUNK.value,
-                (cs.NodeLabel.CHUNK.value, cs.UniqueKeyType.QUALIFIED_NAME.value, f"{doc.path}#chunk_0"),
-            )
-            return 1
-
-        # Embed all chunks using config batch size
-        # Filter out empty chunks to avoid API errors (DashScope rejects empty strings)
-        non_empty_chunks = [(i, c) for i, c in enumerate(chunks) if c.content.strip()]
-        if not non_empty_chunks:
-            logger.warning(f"All chunks in {doc.path} are empty, skipping embedding")
-            return 0
-
-        chunk_contents = [c.content for i, c in non_empty_chunks]
-        batch_size = settings.VECTOR_EMBEDDING_BATCH_SIZE
-        # Wrap embedding operation to handle provider errors
-        try:
-            embeddings = provider.embed_batch(chunk_contents, batch_size=batch_size)
-        except Exception as e:
-            raise ExtractionException(
-                path=doc.path,
-                error_type=ErrorType.UNKNOWN,
-                message=f"Embedding batch generation failed: {type(e).__name__}: {e}",
-            ) from e
-
-        # Validate embedding count matches non-empty chunk count
-        if len(embeddings) != len(non_empty_chunks):
-            raise ExtractionException(
-                path=doc.path,
-                error_type=ErrorType.UNKNOWN,
-                message=f"Embedding provider returned {len(embeddings)} embeddings for {len(non_empty_chunks)} non-empty chunks",
-            )
-
-        # Store chunk embeddings (only non-empty chunks have embeddings)
-        for (orig_idx, chunk), embedding in zip(non_empty_chunks, embeddings):
             ingestor.ensure_node_batch(
                 cs.NodeLabel.CHUNK.value,
                 {

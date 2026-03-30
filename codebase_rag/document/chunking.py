@@ -9,11 +9,17 @@ Use token-aware chunking with section boundaries.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Iterator
 
 if TYPE_CHECKING:
     from .extractors.base import ExtractedDocument, ExtractedSection
+
+
+# Regex to split sentences, keeping punctuation with the sentence
+# We split AFTER punctuation, then find the actual whitespace boundary
+_SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[.!?])")
 
 
 @dataclass
@@ -249,57 +255,78 @@ class SemanticDocumentChunker:
             )
 
     def _split_long_paragraph(
-        self, para: str, section_title: str, doc_path: str, start_index: int, para_start_line: int = 0
+        self, para: str, section_title: str, doc_path: str, start_index: int, para_start_line: int = 1
     ) -> Iterator[DocumentChunk]:
-        """Split a very long paragraph by sentences with line tracking."""
-        # Simple sentence split on punctuation followed by space
-        import re
+        """Split a very long paragraph by sentences with line tracking.
 
-        sentences = re.split(r"(?<=[.!?])\s+", para)
-        current_chunk: list[str] = []
+        Uses regex that preserves position accuracy by finding sentence boundaries
+        without consuming the whitespace that follows.
+
+        Args:
+            para: Paragraph text to split
+            section_title: Title of the containing section
+            doc_path: Document path
+            start_index: Starting chunk index
+            para_start_line: Starting line number (1-indexed, consistent with section lines)
+        """
+        # Split on sentence boundaries, keeping punctuation with the sentence
+        # This regex only looks behind for punctuation, not consuming whitespace
+        # We then manually strip leading whitespace from each split result
+        raw_splits = _SENTENCE_BOUNDARY_RE.split(para)
+
+        # Process splits to get actual sentences (strip leading whitespace)
+        # and track the actual position where each sentence starts in the original para
+        sentences_with_positions: list[tuple[str, int]] = []
+        position = 0
+        for raw_split in raw_splits:
+            if not raw_split:
+                continue
+            # Find where the actual content starts (skip leading whitespace)
+            content_start = len(raw_split) - len(raw_split.lstrip())
+            sentence = raw_split.lstrip()
+            if sentence:
+                sentences_with_positions.append((sentence, position + content_start))
+            # Move position forward for next split
+            position += len(raw_split)
+
+        current_chunk: list[tuple[str, int]] = []  # (sentence, start_position)
         current_tokens = 0
         chunk_index = start_index
-        para_position = 0  # Track position within paragraph for line calculation
 
-        for sentence in sentences:
+        for sentence, sent_start_pos in sentences_with_positions:
             sent_tokens = self.count_tokens(sentence)
 
-            # Calculate line offset for this sentence in the paragraph
-            sent_start_line = para_start_line + self._find_line_offset(para, para_position)
-            sent_end_line = sent_start_line + self._count_lines(sentence) - 1
-
             if current_tokens + sent_tokens > self.max_tokens and current_chunk:
-                # Use the start line of the first sentence in the chunk
-                first_sent_pos = para_position - len(" ".join(current_chunk))
-                chunk_start_line = para_start_line + self._find_line_offset(para, max(0, first_sent_pos))
+                # Use the position of the first sentence in the chunk for line calculation
+                first_sent_pos = current_chunk[0][1]
+                chunk_start_line = para_start_line + self._find_line_offset(para, first_sent_pos)
+                chunk_content = " ".join(s for s, _ in current_chunk)
                 yield DocumentChunk(
-                    content=" ".join(current_chunk),
+                    content=chunk_content,
                     section_title=section_title,
                     start_line=chunk_start_line,
-                    end_line=chunk_start_line + self._count_lines(" ".join(current_chunk)) - 1,
+                    end_line=chunk_start_line + self._count_lines(chunk_content) - 1,
                     token_count=current_tokens,
                     document_path=doc_path,
                     chunk_index=chunk_index,
                 )
                 chunk_index += 1
-                current_chunk = [sentence]
+                current_chunk = [(sentence, sent_start_pos)]
                 current_tokens = sent_tokens
             else:
-                current_chunk.append(sentence)
+                current_chunk.append((sentence, sent_start_pos))
                 current_tokens += sent_tokens
-
-            # Update position for next sentence
-            para_position += len(sentence) + 1  # +1 for space separator
 
         if current_chunk:
             # Calculate start line for the final chunk
-            first_sent_pos = para_position - len(" ".join(current_chunk))
-            chunk_start_line = para_start_line + self._find_line_offset(para, max(0, first_sent_pos))
+            first_sent_pos = current_chunk[0][1]
+            chunk_start_line = para_start_line + self._find_line_offset(para, first_sent_pos)
+            chunk_content = " ".join(s for s, _ in current_chunk)
             yield DocumentChunk(
-                content=" ".join(current_chunk),
+                content=chunk_content,
                 section_title=section_title,
                 start_line=chunk_start_line,
-                end_line=chunk_start_line + self._count_lines(" ".join(current_chunk)) - 1,
+                end_line=chunk_start_line + self._count_lines(chunk_content) - 1,
                 token_count=current_tokens,
                 document_path=doc_path,
                 chunk_index=chunk_index,
