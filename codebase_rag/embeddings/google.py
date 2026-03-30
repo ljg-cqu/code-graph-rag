@@ -269,9 +269,17 @@ class GoogleEmbeddingProvider(EmbeddingProvider):
             "Content-Type": "application/json",
         }
 
-        # Vertex AI supports batch embedding
-        for start in range(0, len(texts), batch_size):
-            batch = texts[start : start + batch_size]
+        # Vertex AI supports batch embedding with limits
+        # Enforce batch size limits for Vertex AI
+        max_texts = BATCH_LIMITS["vertex"]["max_texts"]
+        effective_batch_size = min(batch_size, max_texts)
+        if batch_size > max_texts:
+            logger.debug(
+                f"Vertex AI batch size capped from {batch_size} to {effective_batch_size}"
+            )
+
+        for start in range(0, len(texts), effective_batch_size):
+            batch = texts[start : start + effective_batch_size]
 
             instances = [{"content": text} for text in batch]
 

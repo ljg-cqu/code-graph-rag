@@ -33,8 +33,32 @@ OPENAI_MODEL_DIMENSIONS: dict[str, int] = {
 # Default models
 DEFAULT_OPENAI_MODEL = "text-embedding-3-small"
 
-# Batch size limits
+# Batch size limits by provider/endpoint
+# OpenAI's limit is 2048, but compatible APIs may have lower limits
 MAX_BATCH_SIZE = 2048  # OpenAI's actual limit
+
+# Known limits for OpenAI-compatible APIs (matched by URL pattern)
+# Format: (url_pattern, max_batch_size)
+COMPATIBLE_API_BATCH_LIMITS = [
+    ("dashscope.aliyuncs.com", 10),  # Aliyun DashScope
+    ("azure", 16),  # Azure OpenAI (conservative default)
+]
+
+
+def _get_batch_limit_for_endpoint(endpoint: str) -> int:
+    """Get the batch size limit for a given endpoint URL.
+
+    Args:
+        endpoint: The embedding API endpoint URL.
+
+    Returns:
+        Maximum batch size for that endpoint.
+    """
+    endpoint_lower = endpoint.lower()
+    for pattern, limit in COMPATIBLE_API_BATCH_LIMITS:
+        if pattern in endpoint_lower:
+            return limit
+    return MAX_BATCH_SIZE
 
 
 class OpenAIEmbeddingProvider(EmbeddingProvider):
@@ -119,16 +143,28 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
             "Content-Type": "application/json",
         }
 
+        # Determine effective batch size based on endpoint
+        endpoint_limit = _get_batch_limit_for_endpoint(self._endpoint)
+        effective_batch_size = min(batch_size, endpoint_limit)
+        if batch_size > endpoint_limit:
+            logger.debug(
+                f"Batch size capped from {batch_size} to {effective_batch_size} for endpoint {self._endpoint}"
+            )
+
         all_embeddings: list[list[float]] = []
 
-        for start in range(0, len(texts), batch_size):
-            batch = texts[start : start + batch_size]
+        for start in range(0, len(texts), effective_batch_size):
+            batch = texts[start : start + effective_batch_size]
 
             payload = {
                 "model": self.model_id,
                 "input": batch,
-                "encoding_format": "float",
             }
+
+            # encoding_format is only supported by OpenAI's native API
+            # Many OpenAI-compatible APIs (DashScope, Azure, etc.) reject this parameter
+            if self._endpoint.startswith("https://api.openai.com"):
+                payload["encoding_format"] = "float"
 
             try:
                 response = client.post(

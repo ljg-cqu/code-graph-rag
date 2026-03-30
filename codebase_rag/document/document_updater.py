@@ -612,7 +612,13 @@ class DocumentGraphUpdater:
             return 1
 
         # Embed all chunks using config batch size
-        chunk_contents = [c.content for c in chunks]
+        # Filter out empty chunks to avoid API errors (DashScope rejects empty strings)
+        non_empty_chunks = [(i, c) for i, c in enumerate(chunks) if c.content.strip()]
+        if not non_empty_chunks:
+            logger.warning(f"All chunks in {doc.path} are empty, skipping embedding")
+            return 0
+
+        chunk_contents = [c.content for i, c in non_empty_chunks]
         batch_size = settings.VECTOR_EMBEDDING_BATCH_SIZE
         # Wrap embedding operation to handle provider errors
         try:
@@ -624,16 +630,16 @@ class DocumentGraphUpdater:
                 message=f"Embedding batch generation failed: {type(e).__name__}: {e}",
             ) from e
 
-        # Validate embedding count matches chunk count
-        if len(embeddings) != len(chunks):
+        # Validate embedding count matches non-empty chunk count
+        if len(embeddings) != len(non_empty_chunks):
             raise ExtractionException(
                 path=doc.path,
                 error_type=ErrorType.UNKNOWN,
-                message=f"Embedding provider returned {len(embeddings)} embeddings for {len(chunks)} chunks",
+                message=f"Embedding provider returned {len(embeddings)} embeddings for {len(non_empty_chunks)} non-empty chunks",
             )
 
-        # Store chunk embeddings
-        for chunk, embedding in zip(chunks, embeddings):
+        # Store chunk embeddings (only non-empty chunks have embeddings)
+        for (orig_idx, chunk), embedding in zip(non_empty_chunks, embeddings):
             ingestor.ensure_node_batch(
                 cs.NodeLabel.CHUNK.value,
                 {
@@ -653,7 +659,7 @@ class DocumentGraphUpdater:
                 (cs.NodeLabel.CHUNK.value, cs.UniqueKeyType.QUALIFIED_NAME.value, chunk.qualified_name),
             )
 
-        return len(chunks)
+        return len(non_empty_chunks)
 
     def update_file(self, file_path: Path) -> str:
         """
