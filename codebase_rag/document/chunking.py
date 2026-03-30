@@ -200,11 +200,313 @@ class SemanticDocumentChunker:
             return
 
         for section in doc.sections:
-            for chunk in self._chunk_section(section, doc.path, chunk_index):
+            for chunk in self._chunk_section_recursive(section, doc.path, chunk_index):
                 if chunk_index >= self.MAX_CHUNKS_PER_DOCUMENT:
                     return
                 chunk_index += 1
                 yield chunk
+
+    def _chunk_section_recursive(
+        self, section: ExtractedSection, doc_path: str, start_index: int
+    ) -> Iterator[DocumentChunk]:
+        """Chunk a section and its subsections recursively.
+
+        Each section only chunks its "own" content - the content between
+        its header and the next subsection's header (or its end_line).
+
+        Line tracking note: section.start_line is the header line.
+        section.content starts at section.start_line + 1.
+        """
+        # Skip sections with empty content
+        if not section.content or not section.content.strip():
+            # Still process subsections even if this section is empty
+            for subsection in section.subsections:
+                yield from self._chunk_section_recursive(subsection, doc_path, start_index)
+            return
+
+        # Calculate the content that belongs to THIS section only
+        # (excluding subsection headers and their content)
+        content_start = section.start_line + 1  # Content starts after header
+
+        # Find where subsections start
+        subsection_starts = [s.start_line for s in section.subsections]
+        if subsection_starts:
+            # This section's "own" content ends at the first subsection
+            own_content_end = min(subsection_starts) - 1
+        else:
+            # No subsections - use the section's end_line
+            own_content_end = section.end_line
+
+        # Extract only the content specific to this section
+        if own_content_end >= content_start:
+            own_content_lines = own_content_end - content_start + 1
+            # Split content by lines and take only the "own" portion
+            all_lines = section.content.split("\n")
+            own_lines = all_lines[:own_content_lines]
+            own_content = "\n".join(own_lines)
+
+            if own_content.strip():
+                tokens = self.count_tokens(own_content)
+
+                if tokens <= self.max_tokens:
+                    yield DocumentChunk(
+                        content=own_content,
+                        section_title=section.title,
+                        start_line=content_start,
+                        end_line=own_content_end,
+                        token_count=tokens,
+                        document_path=doc_path,
+                        chunk_index=start_index,
+                    )
+                else:
+                    # Split large sections
+                    yield from self._split_section_content(
+                        own_content, section.title, content_start, own_content_end, doc_path, start_index
+                    )
+
+        # Recursively process subsections
+        for subsection in section.subsections:
+            yield from self._chunk_section_recursive(subsection, doc_path, start_index)
+
+    def _split_section_content(
+        self,
+        content: str,
+        section_title: str,
+        start_line: int,
+        end_line: int,
+        doc_path: str,
+        start_index: int,
+    ) -> Iterator[DocumentChunk]:
+        """Split section content by paragraphs with line tracking."""
+        paragraphs = content.split("\n\n")
+        current_chunk: list[str] = []
+        current_tokens = 0
+        chunk_index = start_index
+        current_line = start_line
+
+        # Track line positions within content
+        line_positions = []
+        line_idx = 0
+        for i, char in enumerate(content):
+            if char == '\n':
+                line_idx += 1
+            line_positions.append(line_idx)
+
+        for para in paragraphs:
+            if not para.strip():
+                continue
+
+            para_tokens = self.count_tokens(para)
+            sep_tokens = 1 if current_chunk else 0  # \n\n = ~1 token
+
+            if current_tokens + sep_tokens + para_tokens <= self.max_tokens:
+                current_chunk.append(para)
+                current_tokens += sep_tokens + para_tokens
+            else:
+                # Flush current chunk first
+                if current_chunk:
+                    chunk_content = "\n\n".join(current_chunk)
+                    chunk_lines = chunk_content.count("\n")
+                    yield DocumentChunk(
+                        content=chunk_content,
+                        section_title=section_title,
+                        start_line=current_line,
+                        end_line=current_line + chunk_lines,
+                        token_count=current_tokens,
+                        document_path=doc_path,
+                        chunk_index=chunk_index,
+                    )
+                    chunk_index += 1
+                    current_line += chunk_lines + 2  # +2 for paragraph separator
+                    current_chunk = []
+                    current_tokens = 0
+
+                # Handle oversized paragraph
+                if para_tokens > self.max_tokens:
+                    # Split oversized paragraph
+                    yield from self._split_oversized_paragraph_in_section(
+                        para, section_title, current_line, doc_path, chunk_index
+                    )
+                    # Update line position after the oversized paragraph
+                    para_lines = para.count("\n")
+                    current_line += para_lines + 1
+                else:
+                    # Start new chunk with this paragraph
+                    current_chunk.append(para)
+                    current_tokens = para_tokens
+
+        # Flush remaining chunk
+        if current_chunk:
+            chunk_content = "\n\n".join(current_chunk)
+            yield DocumentChunk(
+                content=chunk_content,
+                section_title=section_title,
+                start_line=current_line,
+                end_line=end_line,
+                token_count=current_tokens,
+                document_path=doc_path,
+                chunk_index=chunk_index,
+            )
+
+    def _split_oversized_paragraph_in_section(
+        self,
+        paragraph: str,
+        section_title: str,
+        start_line: int,
+        doc_path: str,
+        start_index: int,
+    ) -> Iterator[DocumentChunk]:
+        """Split an oversized paragraph within a section.
+
+        Uses sentence boundaries and eventually hard splits if needed.
+        """
+        chunk_index = start_index
+        lines = paragraph.split("\n")
+        current_chunk_lines: list[str] = []
+        current_tokens = 0
+        current_line = start_line
+
+        for line in lines:
+            line_tokens = self.count_tokens(line)
+            sep_tokens = 1 if current_chunk_lines else 0
+
+            if current_tokens + sep_tokens + line_tokens <= self.max_tokens:
+                current_chunk_lines.append(line)
+                current_tokens += sep_tokens + line_tokens
+            else:
+                # Flush current chunk
+                if current_chunk_lines:
+                    chunk_content = "\n".join(current_chunk_lines)
+                    chunk_end_line = current_line + len(current_chunk_lines) - 1
+                    yield DocumentChunk(
+                        content=chunk_content,
+                        section_title=section_title,
+                        start_line=current_line,
+                        end_line=chunk_end_line,
+                        token_count=current_tokens,
+                        document_path=doc_path,
+                        chunk_index=chunk_index,
+                    )
+                    chunk_index += 1
+                    current_line = chunk_end_line + 1
+                    current_chunk_lines = []
+                    current_tokens = 0
+
+                # Handle single line that exceeds limit
+                if line_tokens > self.max_tokens:
+                    # Hard split the line
+                    yield from self._split_long_line(
+                        line, section_title, current_line, doc_path, chunk_index
+                    )
+                    chunk_index += 1
+                    current_line += 1
+                else:
+                    current_chunk_lines.append(line)
+                    current_tokens = line_tokens
+
+        # Flush remaining lines
+        if current_chunk_lines:
+            chunk_content = "\n".join(current_chunk_lines)
+            yield DocumentChunk(
+                content=chunk_content,
+                section_title=section_title,
+                start_line=current_line,
+                end_line=current_line + len(current_chunk_lines) - 1,
+                token_count=current_tokens,
+                document_path=doc_path,
+                chunk_index=chunk_index,
+            )
+
+    def _split_long_line(
+        self,
+        line: str,
+        section_title: str,
+        start_line: int,
+        doc_path: str,
+        start_index: int,
+    ) -> Iterator[DocumentChunk]:
+        """Split a single line that exceeds token limit."""
+        # Split by sentences first
+        sentences = self._split_by_sentences(line)
+        chunk_index = start_index
+
+        current_chunk = ""
+        current_tokens = 0
+
+        for sentence in sentences:
+            sent_tokens = self.count_tokens(sentence)
+
+            if current_tokens + sent_tokens <= self.max_tokens:
+                current_chunk += sentence
+                current_tokens += sent_tokens
+            else:
+                if current_chunk:
+                    yield DocumentChunk(
+                        content=current_chunk,
+                        section_title=section_title,
+                        start_line=start_line,
+                        end_line=start_line,
+                        token_count=current_tokens,
+                        document_path=doc_path,
+                        chunk_index=chunk_index,
+                    )
+                    chunk_index += 1
+
+                # Handle sentence that exceeds limit
+                if sent_tokens > self.max_tokens:
+                    # Hard split by characters
+                    yield from self._hard_split(
+                        sentence, section_title, start_line, doc_path, chunk_index
+                    )
+                    chunk_index += 1
+                else:
+                    current_chunk = sentence
+                    current_tokens = sent_tokens
+
+        if current_chunk:
+            yield DocumentChunk(
+                content=current_chunk,
+                section_title=section_title,
+                start_line=start_line,
+                end_line=start_line,
+                token_count=current_tokens,
+                document_path=doc_path,
+                chunk_index=chunk_index,
+            )
+
+    def _split_by_sentences(self, text: str) -> list[str]:
+        """Split text by sentence boundaries."""
+        import re
+        # Split by sentence-ending punctuation
+        sentences = re.split(r'(?<=[.!?])\s+', text)
+        return [s for s in sentences if s.strip()]
+
+    def _hard_split(
+        self,
+        text: str,
+        section_title: str,
+        start_line: int,
+        doc_path: str,
+        start_index: int,
+    ) -> Iterator[DocumentChunk]:
+        """Hard split text by character count when other methods fail."""
+        chunk_index = start_index
+        # Estimate characters per token (rough approximation)
+        chars_per_token = 4
+        max_chars = self.max_tokens * chars_per_token
+
+        for i in range(0, len(text), max_chars):
+            chunk_text = text[i:i + max_chars]
+            yield DocumentChunk(
+                content=chunk_text,
+                section_title=section_title,
+                start_line=start_line,
+                end_line=start_line,
+                token_count=self.count_tokens(chunk_text),
+                document_path=doc_path,
+                chunk_index=chunk_index,
+            )
+            chunk_index += 1
 
     def _chunk_section(
         self, section: ExtractedSection, doc_path: str, start_index: int
