@@ -174,6 +174,43 @@ MCP_PARAM_EMBEDDING_API_KEY = "API key for external providers (optional if set i
 MCP_PARAM_EMBEDDING_ENDPOINT = "Custom endpoint URL (optional)"
 MCP_PARAM_REEMBED = "If true, re-embed all vectors after switching providers (default: false)"
 
+# Document GraphRAG tool descriptions
+MCP_QUERY_DOCUMENT_GRAPH = (
+    "Query the DOCUMENT graph/vector ONLY. "
+    "Use for questions about documentation, specifications, and textual content. "
+    "Returns relevant document sections and chunks."
+)
+
+MCP_QUERY_BOTH_GRAPHS = (
+    "Query BOTH code and document graphs, merge results. "
+    "Use for comprehensive searches spanning code and documentation. "
+    "Results are labeled with their source (code_graph or document_graph)."
+)
+
+MCP_VALIDATE_CODE_AGAINST_SPEC = (
+    "Validate CODE against DOCUMENT specifications. "
+    "Checks if the implementation matches the specification document. "
+    "Returns validation report with discrepancies."
+)
+
+MCP_VALIDATE_DOC_AGAINST_CODE = (
+    "Validate DOCUMENT against actual CODE. "
+    "Checks if documentation accurately reflects the current code. "
+    "Identifies outdated or incorrect documentation."
+)
+
+MCP_INDEX_DOCUMENTS = (
+    "Index documents into the document graph. "
+    "Parses and ingests markdown, PDF, DOCX, and text files. "
+    "Creates Document, Section, and Chunk nodes with embeddings."
+)
+
+MCP_PARAM_SPEC_DOCUMENT_PATH = "Path to the specification document to validate against"
+MCP_PARAM_DOCUMENT_PATH = "Path to the document to validate"
+MCP_PARAM_SCOPE = "Scope of validation: 'all', 'sections', or 'claims'"
+MCP_PARAM_MAX_COST_USD = "Maximum cost budget for validation in USD (default: 0.50)"
+MCP_PARAM_DRY_RUN = "If true, only estimate cost without running validation"
+
 
 MCP_TOOLS: dict[MCPToolName, str] = {
     MCPToolName.LIST_PROJECTS: MCP_LIST_PROJECTS,
@@ -191,6 +228,12 @@ MCP_TOOLS: dict[MCPToolName, str] = {
     MCPToolName.ASK_AGENT: MCP_ASK_AGENT,
     MCPToolName.GET_EMBEDDING_STATUS: MCP_GET_EMBEDDING_STATUS,
     MCPToolName.SET_EMBEDDING_PROVIDER: MCP_SET_EMBEDDING_PROVIDER,
+    # Document GraphRAG tools
+    MCPToolName.QUERY_DOCUMENT_GRAPH: MCP_QUERY_DOCUMENT_GRAPH,
+    MCPToolName.QUERY_BOTH_GRAPHS: MCP_QUERY_BOTH_GRAPHS,
+    MCPToolName.VALIDATE_CODE_AGAINST_SPEC: MCP_VALIDATE_CODE_AGAINST_SPEC,
+    MCPToolName.VALIDATE_DOC_AGAINST_CODE: MCP_VALIDATE_DOC_AGAINST_CODE,
+    MCPToolName.INDEX_DOCUMENTS: MCP_INDEX_DOCUMENTS,
 }
 
 AGENTIC_TOOLS: dict[AgenticToolName, str] = {

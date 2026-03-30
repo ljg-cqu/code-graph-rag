@@ -49,6 +49,8 @@ from codebase_rag.types_defs import (
 )
 from codebase_rag.utils.dependencies import has_semantic_dependencies
 from codebase_rag.vector_store import delete_project_embeddings
+from codebase_rag.shared.query_router import QueryMode, QueryRequest, QueryResponse
+from codebase_rag.document.document_updater import DocumentGraphUpdater
 
 
 class MCPToolsRegistry:
@@ -388,6 +390,127 @@ class MCPToolsRegistry:
             returns_json=True,
         )
 
+        # Document GraphRAG tools
+        self._tools[cs.MCPToolName.QUERY_DOCUMENT_GRAPH] = ToolMetadata(
+            name=cs.MCPToolName.QUERY_DOCUMENT_GRAPH,
+            description=td.MCP_TOOLS[cs.MCPToolName.QUERY_DOCUMENT_GRAPH],
+            input_schema=MCPInputSchema(
+                type=cs.MCPSchemaType.OBJECT,
+                properties={
+                    cs.MCPParamName.NATURAL_LANGUAGE_QUERY: MCPInputSchemaProperty(
+                        type=cs.MCPSchemaType.STRING,
+                        description=td.MCP_PARAM_NATURAL_LANGUAGE_QUERY,
+                    ),
+                    cs.MCPParamName.TOP_K: MCPInputSchemaProperty(
+                        type=cs.MCPSchemaType.INTEGER,
+                        description=td.MCP_PARAM_TOP_K,
+                        default=5,
+                    ),
+                },
+                required=[cs.MCPParamName.NATURAL_LANGUAGE_QUERY],
+            ),
+            handler=self.query_document_graph,
+            returns_json=True,
+        )
+
+        self._tools[cs.MCPToolName.QUERY_BOTH_GRAPHS] = ToolMetadata(
+            name=cs.MCPToolName.QUERY_BOTH_GRAPHS,
+            description=td.MCP_TOOLS[cs.MCPToolName.QUERY_BOTH_GRAPHS],
+            input_schema=MCPInputSchema(
+                type=cs.MCPSchemaType.OBJECT,
+                properties={
+                    cs.MCPParamName.NATURAL_LANGUAGE_QUERY: MCPInputSchemaProperty(
+                        type=cs.MCPSchemaType.STRING,
+                        description=td.MCP_PARAM_NATURAL_LANGUAGE_QUERY,
+                    ),
+                    cs.MCPParamName.TOP_K: MCPInputSchemaProperty(
+                        type=cs.MCPSchemaType.INTEGER,
+                        description=td.MCP_PARAM_TOP_K,
+                        default=5,
+                    ),
+                },
+                required=[cs.MCPParamName.NATURAL_LANGUAGE_QUERY],
+            ),
+            handler=self.query_both_graphs,
+            returns_json=True,
+        )
+
+        self._tools[cs.MCPToolName.VALIDATE_CODE_AGAINST_SPEC] = ToolMetadata(
+            name=cs.MCPToolName.VALIDATE_CODE_AGAINST_SPEC,
+            description=td.MCP_TOOLS[cs.MCPToolName.VALIDATE_CODE_AGAINST_SPEC],
+            input_schema=MCPInputSchema(
+                type=cs.MCPSchemaType.OBJECT,
+                properties={
+                    cs.MCPParamName.SPEC_DOCUMENT_PATH: MCPInputSchemaProperty(
+                        type=cs.MCPSchemaType.STRING,
+                        description=td.MCP_PARAM_SPEC_DOCUMENT_PATH,
+                    ),
+                    cs.MCPParamName.SCOPE: MCPInputSchemaProperty(
+                        type=cs.MCPSchemaType.STRING,
+                        description=td.MCP_PARAM_SCOPE,
+                        default="all",
+                    ),
+                    cs.MCPParamName.MAX_COST_USD: MCPInputSchemaProperty(
+                        type=cs.MCPSchemaType.NUMBER,
+                        description=td.MCP_PARAM_MAX_COST_USD,
+                        default=0.50,
+                    ),
+                    cs.MCPParamName.DRY_RUN: MCPInputSchemaProperty(
+                        type=cs.MCPSchemaType.BOOLEAN,
+                        description=td.MCP_PARAM_DRY_RUN,
+                        default=False,
+                    ),
+                },
+                required=[cs.MCPParamName.SPEC_DOCUMENT_PATH],
+            ),
+            handler=self.validate_code_against_spec,
+            returns_json=True,
+        )
+
+        self._tools[cs.MCPToolName.VALIDATE_DOC_AGAINST_CODE] = ToolMetadata(
+            name=cs.MCPToolName.VALIDATE_DOC_AGAINST_CODE,
+            description=td.MCP_TOOLS[cs.MCPToolName.VALIDATE_DOC_AGAINST_CODE],
+            input_schema=MCPInputSchema(
+                type=cs.MCPSchemaType.OBJECT,
+                properties={
+                    cs.MCPParamName.DOCUMENT_PATH: MCPInputSchemaProperty(
+                        type=cs.MCPSchemaType.STRING,
+                        description=td.MCP_PARAM_DOCUMENT_PATH,
+                    ),
+                    cs.MCPParamName.SCOPE: MCPInputSchemaProperty(
+                        type=cs.MCPSchemaType.STRING,
+                        description=td.MCP_PARAM_SCOPE,
+                        default="all",
+                    ),
+                    cs.MCPParamName.MAX_COST_USD: MCPInputSchemaProperty(
+                        type=cs.MCPSchemaType.NUMBER,
+                        description=td.MCP_PARAM_MAX_COST_USD,
+                        default=0.50,
+                    ),
+                    cs.MCPParamName.DRY_RUN: MCPInputSchemaProperty(
+                        type=cs.MCPSchemaType.BOOLEAN,
+                        description=td.MCP_PARAM_DRY_RUN,
+                        default=False,
+                    ),
+                },
+                required=[cs.MCPParamName.DOCUMENT_PATH],
+            ),
+            handler=self.validate_doc_against_code,
+            returns_json=True,
+        )
+
+        self._tools[cs.MCPToolName.INDEX_DOCUMENTS] = ToolMetadata(
+            name=cs.MCPToolName.INDEX_DOCUMENTS,
+            description=td.MCP_TOOLS[cs.MCPToolName.INDEX_DOCUMENTS],
+            input_schema=MCPInputSchema(
+                type=cs.MCPSchemaType.OBJECT,
+                properties={},
+                required=[],
+            ),
+            handler=self.index_documents,
+            returns_json=True,
+        )
+
     @property
     def rag_agent(self) -> Agent:
         if self._rag_agent is None:
@@ -713,6 +836,138 @@ class MCPToolsRegistry:
             }
         except Exception as e:
             logger.error(f"Failed to set embedding provider: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def query_document_graph(
+        self, natural_language_query: str, top_k: int = 5
+    ) -> dict:
+        """Query the DOCUMENT graph/vector ONLY."""
+        from dataclasses import asdict
+
+        logger.info(f"Querying document graph: {natural_language_query}")
+        try:
+            request = QueryRequest(
+                question=natural_language_query,
+                mode=QueryMode.DOCUMENT_ONLY,
+                top_k=top_k,
+            )
+            # TODO: Integrate with QueryRouter when available
+            # response = self._query_router.query(request)
+            # return asdict(response)
+            return {
+                "query": natural_language_query,
+                "mode": "DOCUMENT_ONLY",
+                "results": [],
+                "message": "Document graph query - integration pending",
+            }
+        except Exception as e:
+            logger.error(f"Document graph query failed: {e}")
+            return {"error": str(e), "results": []}
+
+    async def query_both_graphs(
+        self, natural_language_query: str, top_k: int = 5
+    ) -> dict:
+        """Query BOTH code and document graphs, merge results."""
+        from dataclasses import asdict
+
+        logger.info(f"Querying both graphs: {natural_language_query}")
+        try:
+            request = QueryRequest(
+                question=natural_language_query,
+                mode=QueryMode.BOTH_MERGED,
+                top_k=top_k,
+            )
+            # TODO: Integrate with QueryRouter when available
+            # response = self._query_router.query(request)
+            # return asdict(response)
+            return {
+                "query": natural_language_query,
+                "mode": "BOTH_MERGED",
+                "results": [],
+                "message": "Both graphs query - integration pending",
+            }
+        except Exception as e:
+            logger.error(f"Both graphs query failed: {e}")
+            return {"error": str(e), "results": []}
+
+    async def validate_code_against_spec(
+        self,
+        spec_document_path: str,
+        scope: str = "all",
+        max_cost_usd: float = 0.50,
+        dry_run: bool = False,
+    ) -> dict:
+        """Validate CODE against DOCUMENT specifications."""
+        from dataclasses import asdict
+
+        logger.info(f"Validating code against spec: {spec_document_path}")
+        try:
+            request = QueryRequest(
+                question=f"Validate code against {spec_document_path}",
+                mode=QueryMode.CODE_VS_DOC,
+                scope=scope,
+            )
+            # TODO: Integrate with ValidationTriggerAPI when available
+            return {
+                "spec_document": spec_document_path,
+                "mode": "CODE_VS_DOC",
+                "scope": scope,
+                "max_cost_usd": max_cost_usd,
+                "dry_run": dry_run,
+                "validation_report": None,
+                "message": "Validation - integration pending",
+            }
+        except Exception as e:
+            logger.error(f"Validation failed: {e}")
+            return {"error": str(e)}
+
+    async def validate_doc_against_code(
+        self,
+        document_path: str,
+        scope: str = "all",
+        max_cost_usd: float = 0.50,
+        dry_run: bool = False,
+    ) -> dict:
+        """Validate DOCUMENT against actual CODE."""
+        from dataclasses import asdict
+
+        logger.info(f"Validating doc against code: {document_path}")
+        try:
+            request = QueryRequest(
+                question=f"Validate {document_path} against code",
+                mode=QueryMode.DOC_VS_CODE,
+                scope=scope,
+            )
+            # TODO: Integrate with ValidationTriggerAPI when available
+            return {
+                "document": document_path,
+                "mode": "DOC_VS_CODE",
+                "scope": scope,
+                "max_cost_usd": max_cost_usd,
+                "dry_run": dry_run,
+                "validation_report": None,
+                "message": "Validation - integration pending",
+            }
+        except Exception as e:
+            logger.error(f"Validation failed: {e}")
+            return {"error": str(e)}
+
+    async def index_documents(self) -> dict:
+        """Index documents into the document graph."""
+        logger.info("Indexing documents")
+        try:
+            updater = DocumentGraphUpdater(
+                host="localhost",  # TODO: Use config
+                port=7688,  # Document graph port
+                repo_path=Path(self.project_root),
+            )
+            stats = await asyncio.to_thread(updater.run)
+            return {
+                "success": True,
+                "stats": stats,
+            }
+        except Exception as e:
+            logger.error(f"Document indexing failed: {e}")
             return {"success": False, "error": str(e)}
 
     def get_tool_schemas(self) -> list[MCPToolSchema]:

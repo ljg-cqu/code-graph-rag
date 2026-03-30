@@ -347,6 +347,34 @@ class AppConfig(BaseSettings):
     CACHE_EVICTION_DIVISOR: int = 10
     CACHE_MEMORY_THRESHOLD_RATIO: float = 0.8
 
+    # ─────────────────────────────────────────────────────────
+    # DOCUMENT GRAPHRAG (NEW)
+    # ─────────────────────────────────────────────────────────
+    DOC_MEMGRAPH_HOST: str = "localhost"
+    DOC_MEMGRAPH_PORT: int = 7688
+    DOC_MEMGRAPH_USERNAME: str | None = None
+    DOC_MEMGRAPH_PASSWORD: str | None = None
+    DOC_MEMGRAPH_MEMORY_LIMIT: str = "2GB"  # Memory limit for document graph container
+    DOC_LAB_PORT: int = 3001  # Memgraph Lab for document graph
+    DOC_VECTOR_STORE_BACKEND: str = "memgraph"
+
+    DOC_SUPPORTED_EXTENSIONS: list[str] = Field(
+        default=[".md", ".rst", ".txt", ".pdf", ".docx"]
+    )
+    DOC_ENABLE_PDF_EXTRACTION: bool = True
+    DOC_MAX_FILE_SIZE_MB: int = Field(default=50, gt=0)
+    DOC_EXTRACTION_TIMEOUT_SECONDS: int = Field(default=30, gt=0)
+    DOC_ENABLED: bool = True  # Master switch for document features
+
+    # Document vector settings
+    DOC_MEMGRAPH_VECTOR_INDEX_NAME: str = "doc_embeddings"
+    DOC_MEMGRAPH_VECTOR_CAPACITY: int = 100000
+    DOC_VECTOR_SEARCH_TOP_K: int = 5
+
+    # Real-time updater (extended)
+    REALTIME_DEBOUNCE_SECONDS: int = Field(default=2, gt=0)
+    REALTIME_BATCH_SIZE: int = Field(default=100, gt=0)
+
     QUERY_RESULT_MAX_TOKENS: int = Field(default=16000, gt=0)
     QUERY_RESULT_ROW_CAP: int = Field(default=500, gt=0)
     QUERY_RESULT_TRUNCATION_STRATEGY: Literal["fifo", "relevance", "balanced"] = "balanced"
@@ -629,6 +657,43 @@ class AppConfig(BaseSettings):
             raise ValueError(f"QUERY_RESULT_MIN_ROWS ({v}) must be >= 1")
         if v > 50:
             raise ValueError(f"QUERY_RESULT_MIN_ROWS ({v}) must be <= 50")
+        return v
+
+    @field_validator("DOC_SUPPORTED_EXTENSIONS", mode="before")
+    @classmethod
+    def parse_doc_extensions(cls, v: str | list[str]) -> list[str]:
+        """Parse comma-separated or JSON array env var to list."""
+        if isinstance(v, str):
+            # Try JSON parse first (pydantic-settings 2.x uses JSON for list fields)
+            if v.startswith("["):
+                import json
+                try:
+                    parsed = json.loads(v)
+                    if isinstance(parsed, list):
+                        return [ext.strip().lower() for ext in parsed if ext.strip()]
+                except json.JSONDecodeError:
+                    pass
+            # Fallback to comma-separated
+            return [ext.strip().lower() for ext in v.split(",") if ext.strip()]
+        return v
+
+    @field_validator("DOC_VECTOR_STORE_BACKEND")
+    @classmethod
+    def validate_doc_vector_backend(cls, v: str) -> str:
+        """Validate document vector backend is supported."""
+        allowed = {"memgraph", "qdrant"}
+        if v.lower() not in allowed:
+            raise ValueError(f"DOC_VECTOR_STORE_BACKEND must be one of: {allowed}")
+        return v.lower()
+
+    @field_validator("DOC_MAX_FILE_SIZE_MB")
+    @classmethod
+    def validate_doc_max_file_size(cls, v: int) -> int:
+        """Validate max file size is reasonable."""
+        if v < 1:
+            raise ValueError(f"DOC_MAX_FILE_SIZE_MB ({v}) must be >= 1")
+        if v > 500:
+            raise ValueError(f"DOC_MAX_FILE_SIZE_MB ({v}) must be <= 500")
         return v
 
 

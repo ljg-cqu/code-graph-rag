@@ -33,6 +33,7 @@ from codebase_rag.language_spec import get_language_spec
 from codebase_rag.parser_loader import load_parsers
 from codebase_rag.services import QueryProtocol
 from codebase_rag.services.graph_service import MemgraphIngestor
+from codebase_rag.shared.utils.file_classifier import classify_file, FileType
 
 
 class CodeChangeEventHandler(FileSystemEventHandler):
@@ -414,3 +415,268 @@ def main(
 
 if __name__ == "__main__":
     typer.run(main)
+
+
+# Document GraphRAG Extension
+
+# Document extensions to watch
+DOC_EXTENSIONS = {".md", ".rst", ".txt", ".pdf", ".docx"}
+
+
+class DocumentChangeEventHandler(FileSystemEventHandler):
+    """
+    Handles document file system events for the document graph.
+
+    Pattern follows CodeChangeEventHandler but for documents.
+    """
+
+    def __init__(
+        self,
+        doc_updater,  # DocumentGraphUpdater
+        debounce_seconds: float = DEFAULT_DEBOUNCE_SECONDS,
+        max_wait_seconds: float = DEFAULT_MAX_WAIT_SECONDS,
+    ):
+        self.doc_updater = doc_updater
+        self.ignore_patterns = IGNORE_PATTERNS
+        self.doc_extensions = DOC_EXTENSIONS
+
+        # Debounce configuration
+        self.debounce_seconds = debounce_seconds
+        self.max_wait_seconds = max_wait_seconds
+        self.debounce_enabled = debounce_seconds > 0
+
+        # Thread-safe state
+        self.timers: dict[str, threading.Timer] = {}
+        self.first_event_time: dict[str, float] = {}
+        self.pending_events: dict[str, FileSystemEvent] = {}
+        self.lock = threading.Lock()
+
+    def _is_relevant(self, path_str: str) -> bool:
+        """Check if file is a document we should process."""
+        path = Path(path_str)
+        if path.suffix.lower() not in self.doc_extensions:
+            return False
+        return all(part not in self.ignore_patterns for part in path.parts)
+
+    def dispatch(self, event: FileSystemEvent) -> None:
+        src_path = event.src_path
+        if isinstance(src_path, bytes):
+            src_path = src_path.decode()
+
+        if event.is_directory or not self._is_relevant(src_path):
+            return
+
+        if not self.debounce_enabled:
+            self._process_change(event)
+            return
+
+        # Debounced processing
+        path = Path(src_path)
+        relative_path_str = str(path.relative_to(self.doc_updater.repo_path))
+        current_time = time.time()
+
+        with self.lock:
+            if relative_path_str not in self.first_event_time:
+                self.first_event_time[relative_path_str] = current_time
+                logger.info(
+                    f"Document change debouncing: {event.event_type} on {path.name}"
+                )
+
+            self.pending_events[relative_path_str] = event
+
+            if relative_path_str in self.timers:
+                self.timers[relative_path_str].cancel()
+
+            time_since_first = current_time - self.first_event_time[relative_path_str]
+
+            if time_since_first >= self.max_wait_seconds:
+                self._schedule_immediate_processing(relative_path_str)
+            else:
+                remaining_wait = self.max_wait_seconds - time_since_first
+                effective_delay = min(self.debounce_seconds, remaining_wait)
+                timer = threading.Timer(
+                    effective_delay,
+                    self._process_debounced_change,
+                    args=[relative_path_str],
+                )
+                timer.daemon = True
+                self.timers[relative_path_str] = timer
+                timer.start()
+
+    def _schedule_immediate_processing(self, relative_path_str: str) -> None:
+        timer = threading.Timer(
+            0, self._process_debounced_change, args=[relative_path_str]
+        )
+        timer.daemon = True
+        self.timers[relative_path_str] = timer
+        timer.start()
+
+    def _process_debounced_change(self, relative_path_str: str) -> None:
+        with self.lock:
+            event = self.pending_events.pop(relative_path_str, None)
+            self.first_event_time.pop(relative_path_str, None)
+            self.timers.pop(relative_path_str, None)
+
+        if event is None:
+            return
+
+        self._process_change(event)
+
+    def _process_change(self, event: FileSystemEvent) -> None:
+        """Process document file change."""
+        src_path = event.src_path
+        if isinstance(src_path, bytes):
+            src_path = src_path.decode()
+
+        path = Path(src_path)
+        logger.info(f"Processing document change: {path.name}")
+
+        relevant_events = {
+            EventType.MODIFIED,
+            EventType.CREATED,
+            EventType.DELETED,
+        }
+        if event.event_type not in relevant_events:
+            return
+
+        try:
+            if event.event_type == EventType.DELETED:
+                # Remove from document graph
+                logger.info(f"Document deleted: {path.name}")
+                # TODO: Delete from document graph
+            else:
+                # Update document in graph
+                result = self.doc_updater.update_file(path)
+                logger.success(f"Document updated: {path.name} ({result})")
+        except Exception as e:
+            logger.error(f"Failed to process document {path.name}: {e}")
+
+
+class UnifiedChangeEventHandler(FileSystemEventHandler):
+    """
+    Unified handler that routes file changes to appropriate updater.
+
+    Routes:
+    - Code files (py, js, ts, etc.) → CodeChangeEventHandler (code graph)
+    - Document files (md, pdf, docx) → DocumentChangeEventHandler (doc graph)
+    """
+
+    def __init__(
+        self,
+        code_updater: GraphUpdater,
+        doc_updater,
+        debounce_seconds: float = DEFAULT_DEBOUNCE_SECONDS,
+        max_wait_seconds: float = DEFAULT_MAX_WAIT_SECONDS,
+    ):
+        self.code_updater = code_updater
+        self.doc_updater = doc_updater
+        self.debounce_seconds = debounce_seconds
+        self.max_wait_seconds = max_wait_seconds
+
+        # Create delegate handlers
+        self.code_handler = CodeChangeEventHandler(
+            code_updater, debounce_seconds, max_wait_seconds
+        )
+        self.doc_handler = DocumentChangeEventHandler(
+            doc_updater, debounce_seconds, max_wait_seconds
+        )
+
+    def dispatch(self, event: FileSystemEvent) -> None:
+        """Route event to appropriate handler based on file type."""
+        src_path = event.src_path
+        if isinstance(src_path, bytes):
+            src_path = src_path.decode()
+
+        if event.is_directory:
+            return
+
+        path = Path(src_path)
+
+        # Skip files in ignored directories
+        if any(part in IGNORE_PATTERNS for part in path.parts):
+            return
+
+        # Classify file
+        classification = classify_file(path)
+
+        if classification.file_type == FileType.CODE:
+            self.code_handler.dispatch(event)
+        elif classification.file_type == FileType.DOCUMENT:
+            self.doc_handler.dispatch(event)
+        # else: skip unknown file types
+
+
+def start_unified_watcher(
+    repo_path: str,
+    code_host: str = settings.MEMGRAPH_HOST,
+    code_port: int = settings.MEMGRAPH_PORT,
+    doc_host: str = settings.DOC_MEMGRAPH_HOST,
+    doc_port: int = settings.DOC_MEMGRAPH_PORT,
+    batch_size: int | None = None,
+    debounce_seconds: float = DEFAULT_DEBOUNCE_SECONDS,
+    max_wait_seconds: float = DEFAULT_MAX_WAIT_SECONDS,
+) -> None:
+    """
+    Start unified watcher for both code and document graphs.
+
+    This is the recommended way to watch a repository with both
+    code and document support.
+    """
+    from codebase_rag.document.document_updater import DocumentGraphUpdater
+
+    repo_path_obj = Path(repo_path).resolve()
+    parsers, queries = load_parsers()
+
+    effective_batch_size = settings.resolve_batch_size(batch_size)
+
+    logger.info(f"Starting unified watcher for: {repo_path_obj}")
+
+    # Initialize code graph updater
+    with MemgraphIngestor(
+        host=code_host,
+        port=code_port,
+        batch_size=effective_batch_size,
+        username=settings.MEMGRAPH_USERNAME,
+        password=settings.MEMGRAPH_PASSWORD,
+    ) as code_ingestor:
+        code_updater = GraphUpdater(
+            code_ingestor, repo_path_obj, parsers, queries
+        )
+
+        # Initialize document graph updater
+        doc_updater = DocumentGraphUpdater(
+            host=doc_host,
+            port=doc_port,
+            repo_path=repo_path_obj,
+        )
+
+        # Initial scan
+        logger.info("Running initial code graph scan...")
+        code_updater.run()
+        logger.success("Initial code graph scan complete")
+
+        logger.info("Running initial document graph scan...")
+        doc_updater.run()
+        logger.success("Initial document graph scan complete")
+
+        # Set up unified event handler
+        event_handler = UnifiedChangeEventHandler(
+            code_updater,
+            doc_updater,
+            debounce_seconds,
+            max_wait_seconds,
+        )
+
+        observer = Observer()
+        observer.schedule(event_handler, str(repo_path_obj), recursive=True)
+        observer.start()
+
+        logger.info(f"Watching {repo_path_obj} for code and document changes...")
+
+        try:
+            while True:
+                time.sleep(WATCHER_SLEEP_INTERVAL)
+        except KeyboardInterrupt:
+            logger.info("Stopping watcher...")
+            observer.stop()
+        observer.join()

@@ -620,5 +620,185 @@ def stats() -> None:
         raise typer.Exit(1) from e
 
 
+# Document GraphRAG CLI commands
+
+@app.command(name=ch.CLICommandName.QUERY_DOCS, help=ch.CMD_QUERY_DOCS)
+def query_docs(
+    query: str = typer.Argument(..., help=ch.HELP_QUERY),
+    top_k: int = typer.Option(5, "--top-k", "-k", help=ch.HELP_TOP_K),
+) -> None:
+    """Query the document graph using natural language."""
+    from .shared.query_router import QueryRequest, QueryMode, QueryRouter
+    from dataclasses import asdict
+
+    _info(style(f"Querying document graph: {query}", cs.Color.CYAN))
+
+    try:
+        request = QueryRequest(
+            question=query,
+            mode=QueryMode.DOCUMENT_ONLY,
+            top_k=top_k,
+        )
+        # TODO: Integrate with actual QueryRouter
+        app_context.console.print(
+            Panel(
+                f"Query: {query}\nMode: DOCUMENT_ONLY\nTop K: {top_k}\n\n"
+                "Document graph query - integration pending",
+                title="Document Query",
+                border_style="cyan",
+            )
+        )
+    except Exception as e:
+        app_context.console.print(
+            style(f"Query failed: {e}", cs.Color.RED)
+        )
+        raise typer.Exit(1) from e
+
+
+@app.command(name=ch.CLICommandName.QUERY_ALL, help=ch.CMD_QUERY_ALL)
+def query_all(
+    query: str = typer.Argument(..., help=ch.HELP_QUERY),
+    top_k: int = typer.Option(5, "--top-k", "-k", help=ch.HELP_TOP_K),
+) -> None:
+    """Query both code and document graphs, merge results."""
+    from .shared.query_router import QueryRequest, QueryMode
+
+    _info(style(f"Querying both graphs: {query}", cs.Color.CYAN))
+
+    try:
+        request = QueryRequest(
+            question=query,
+            mode=QueryMode.BOTH_MERGED,
+            top_k=top_k,
+        )
+        # TODO: Integrate with actual QueryRouter
+        app_context.console.print(
+            Panel(
+                f"Query: {query}\nMode: BOTH_MERGED\nTop K: {top_k}\n\n"
+                "Both graphs query - integration pending",
+                title="Merged Query",
+                border_style="cyan",
+            )
+        )
+    except Exception as e:
+        app_context.console.print(
+            style(f"Query failed: {e}", cs.Color.RED)
+        )
+        raise typer.Exit(1) from e
+
+
+@app.command(name=ch.CLICommandName.VALIDATE_SPEC, help=ch.CMD_VALIDATE_SPEC)
+def validate_spec(
+    spec_path: str = typer.Argument(..., help=ch.HELP_SPEC_PATH),
+    scope: str = typer.Option("all", "--scope", "-s", help=ch.HELP_SCOPE),
+    max_cost: float = typer.Option(0.50, "--max-cost", "-c", help=ch.HELP_MAX_COST),
+    dry_run: bool = typer.Option(False, "--dry-run", help=ch.HELP_DRY_RUN),
+) -> None:
+    """Validate code against a specification document."""
+    from .shared.query_router import QueryRequest, QueryMode
+
+    _info(style(f"Validating code against spec: {spec_path}", cs.Color.CYAN))
+
+    try:
+        request = QueryRequest(
+            question=f"Validate code against {spec_path}",
+            mode=QueryMode.CODE_VS_DOC,
+            scope=scope,
+        )
+        # TODO: Integrate with ValidationTriggerAPI
+        app_context.console.print(
+            Panel(
+                f"Spec: {spec_path}\nMode: CODE_VS_DOC\nScope: {scope}\n"
+                f"Max Cost: ${max_cost}\nDry Run: {dry_run}\n\n"
+                "Validation - integration pending",
+                title="Code Validation",
+                border_style="yellow",
+            )
+        )
+    except Exception as e:
+        app_context.console.print(
+            style(f"Validation failed: {e}", cs.Color.RED)
+        )
+        raise typer.Exit(1) from e
+
+
+@app.command(name=ch.CLICommandName.VALIDATE_DOC, help=ch.CMD_VALIDATE_DOC)
+def validate_doc(
+    doc_path: str = typer.Argument(..., help=ch.HELP_DOC_PATH),
+    scope: str = typer.Option("all", "--scope", "-s", help=ch.HELP_SCOPE),
+    max_cost: float = typer.Option(0.50, "--max-cost", "-c", help=ch.HELP_MAX_COST),
+    dry_run: bool = typer.Option(False, "--dry-run", help=ch.HELP_DRY_RUN),
+) -> None:
+    """Validate documentation against actual code."""
+    from .shared.query_router import QueryRequest, QueryMode
+
+    _info(style(f"Validating doc against code: {doc_path}", cs.Color.CYAN))
+
+    try:
+        request = QueryRequest(
+            question=f"Validate {doc_path} against code",
+            mode=QueryMode.DOC_VS_CODE,
+            scope=scope,
+        )
+        # TODO: Integrate with ValidationTriggerAPI
+        app_context.console.print(
+            Panel(
+                f"Document: {doc_path}\nMode: DOC_VS_CODE\nScope: {scope}\n"
+                f"Max Cost: ${max_cost}\nDry Run: {dry_run}\n\n"
+                "Validation - integration pending",
+                title="Doc Validation",
+                border_style="yellow",
+            )
+        )
+    except Exception as e:
+        app_context.console.print(
+            style(f"Validation failed: {e}", cs.Color.RED)
+        )
+        raise typer.Exit(1) from e
+
+
+@app.command(name=ch.CLICommandName.INDEX_DOCS, help=ch.CMD_INDEX_DOCS)
+def index_docs(
+    repo_path: str | None = typer.Option(
+        None, "--repo-path", help=ch.HELP_REPO_PATH_RETRIEVAL
+    ),
+) -> None:
+    """Index documents into the document graph."""
+    from .document.document_updater import DocumentGraphUpdater
+
+    target_repo_path = repo_path or settings.TARGET_REPO_PATH
+    repo_to_index = Path(target_repo_path)
+
+    _info(style(f"Indexing documents in: {repo_to_index}", cs.Color.CYAN))
+
+    try:
+        updater = DocumentGraphUpdater(
+            host=settings.DOC_MEMGRAPH_HOST,
+            port=settings.DOC_MEMGRAPH_PORT,
+            repo_path=repo_to_index,
+        )
+        stats = updater.run()
+
+        table = Table(
+            title=style("Document Indexing Results", cs.Color.GREEN),
+            show_header=True,
+            header_style=f"{cs.StyleModifier.BOLD} {cs.Color.MAGENTA}",
+        )
+        table.add_column("Metric", style=cs.Color.CYAN)
+        table.add_column("Count", style=cs.Color.YELLOW, justify="right")
+
+        for key, value in stats.items():
+            table.add_row(key.replace("_", " ").title(), str(value))
+
+        app_context.console.print(table)
+
+    except Exception as e:
+        app_context.console.print(
+            style(f"Document indexing failed: {e}", cs.Color.RED)
+        )
+        logger.exception("Document indexing failed")
+        raise typer.Exit(1) from e
+
+
 if __name__ == "__main__":
     app()

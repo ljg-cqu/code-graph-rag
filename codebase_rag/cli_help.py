@@ -11,6 +11,12 @@ class CLICommandName(StrEnum):
     LANGUAGE = "language"
     DOCTOR = "doctor"
     STATS = "stats"
+    # Document GraphRAG commands
+    QUERY_DOCS = "query-docs"
+    QUERY_ALL = "query-all"
+    VALIDATE_SPEC = "validate-spec"
+    VALIDATE_DOC = "validate-doc"
+    INDEX_DOCS = "index-docs"
 
 
 APP_DESCRIPTION = (
@@ -28,6 +34,12 @@ CMD_GRAPH_LOADER = "Load and display summary of exported graph JSON"
 CMD_LANGUAGE = "Manage language grammars (add, remove, list)"
 CMD_DOCTOR = "Verify that all dependencies and configurations are properly set up"
 CMD_STATS = "Display node and relationship statistics for the indexed graph"
+# Document GraphRAG commands
+CMD_QUERY_DOCS = "Query the document graph using natural language"
+CMD_QUERY_ALL = "Query both code and document graphs, merge results"
+CMD_VALIDATE_SPEC = "Validate code against a specification document"
+CMD_VALIDATE_DOC = "Validate documentation against actual code"
+CMD_INDEX_DOCS = "Index documents into the document graph"
 
 CMD_LANGUAGE_GROUP = "CLI for managing language grammars"
 CMD_LANGUAGE_ADD = "Add a new language grammar to the project."
@@ -106,6 +118,15 @@ HELP_MCP_HTTP_PORT = (
     "Port to bind the HTTP server — only used when --transport http (default: 8080)"
 )
 
+# Document GraphRAG help text
+HELP_QUERY = "Natural language query"
+HELP_TOP_K = "Maximum number of results to return"
+HELP_SPEC_PATH = "Path to the specification document"
+HELP_DOC_PATH = "Path to the document to validate"
+HELP_SCOPE = "Scope of validation: 'all', 'sections', or 'claims'"
+HELP_MAX_COST = "Maximum cost budget for validation in USD"
+HELP_DRY_RUN = "Estimate cost without running validation"
+
 CLI_COMMANDS: dict[CLICommandName, str] = {
     CLICommandName.START: CMD_START,
     CLICommandName.INDEX: CMD_INDEX,
@@ -116,4 +137,10 @@ CLI_COMMANDS: dict[CLICommandName, str] = {
     CLICommandName.LANGUAGE: CMD_LANGUAGE,
     CLICommandName.DOCTOR: CMD_DOCTOR,
     CLICommandName.STATS: CMD_STATS,
+    # Document GraphRAG commands
+    CLICommandName.QUERY_DOCS: CMD_QUERY_DOCS,
+    CLICommandName.QUERY_ALL: CMD_QUERY_ALL,
+    CLICommandName.VALIDATE_SPEC: CMD_VALIDATE_SPEC,
+    CLICommandName.VALIDATE_DOC: CMD_VALIDATE_DOC,
+    CLICommandName.INDEX_DOCS: CMD_INDEX_DOCS,
 }

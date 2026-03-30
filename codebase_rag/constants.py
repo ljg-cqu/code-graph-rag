@@ -407,6 +407,10 @@ class NodeLabel(StrEnum):
     STATE_VARIABLE = "StateVariable"
     CUSTOM_ERROR = "CustomError"
     CODE_CHUNK = "CodeChunk"
+    # Document GraphRAG nodes
+    DOCUMENT = "Document"
+    SECTION = "Section"
+    CHUNK = "Chunk"
 
 
 _NODE_LABEL_UNIQUE_KEYS: dict[NodeLabel, UniqueKeyType] = {
@@ -432,6 +436,10 @@ _NODE_LABEL_UNIQUE_KEYS: dict[NodeLabel, UniqueKeyType] = {
     NodeLabel.STATE_VARIABLE: UniqueKeyType.QUALIFIED_NAME,
     NodeLabel.CUSTOM_ERROR: UniqueKeyType.QUALIFIED_NAME,
     NodeLabel.CODE_CHUNK: UniqueKeyType.QUALIFIED_NAME,
+    # Document GraphRAG nodes
+    NodeLabel.DOCUMENT: UniqueKeyType.PATH,
+    NodeLabel.SECTION: UniqueKeyType.QUALIFIED_NAME,
+    NodeLabel.CHUNK: UniqueKeyType.QUALIFIED_NAME,
 }
 
 _missing_keys = set(NodeLabel) - set(_NODE_LABEL_UNIQUE_KEYS.keys())
@@ -473,6 +481,11 @@ class RelationshipType(StrEnum):
     REVERTS_WITH = "REVERTS_WITH"
     # Chunking relationships
     HAS_CHUNK = "HAS_CHUNK"
+    # Document GraphRAG relationships
+    CONTAINS_SECTION = "CONTAINS_SECTION"
+    HAS_SUBSECTION = "HAS_SUBSECTION"
+    CONTAINS_CHUNK = "CONTAINS_CHUNK"
+    REFERENCES_CODE = "REFERENCES_CODE"
 
 
 NODE_PROJECT = NodeLabel.PROJECT
@@ -2650,6 +2663,12 @@ class MCPToolName(StrEnum):
     ASK_AGENT = "ask_agent"
     GET_EMBEDDING_STATUS = "get_embedding_status"
     SET_EMBEDDING_PROVIDER = "set_embedding_provider"
+    # Document GraphRAG tools
+    QUERY_DOCUMENT_GRAPH = "query_document_graph"
+    QUERY_BOTH_GRAPHS = "query_both_graphs"
+    VALIDATE_CODE_AGAINST_SPEC = "validate_code_against_spec"
+    VALIDATE_DOC_AGAINST_CODE = "validate_doc_against_code"
+    INDEX_DOCUMENTS = "index_documents"
 
 
 # (H) MCP transport selection
@@ -2703,6 +2722,12 @@ class MCPParamName(StrEnum):
     EMBEDDING_API_KEY = "api_key"
     EMBEDDING_ENDPOINT = "endpoint"
     REEMBED = "reembed"
+    # Document GraphRAG parameters
+    SPEC_DOCUMENT_PATH = "spec_document_path"
+    DOCUMENT_PATH = "document_path"
+    SCOPE = "scope"
+    MAX_COST_USD = "max_cost_usd"
+    DRY_RUN = "dry_run"
 
 
 # (H) MCP server constants
