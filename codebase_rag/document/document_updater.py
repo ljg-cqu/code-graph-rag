@@ -838,9 +838,9 @@ class DocumentGraphUpdater:
 
         Matching logic:
         1. Use line overlap to find candidate sections
-        2. Prefer sections where chunk.section_title matches section.title
-        3. Among matches, prefer sections with highest overlap
-        4. Among equal overlap, prefer deepest (highest level) section
+        2. Prefer sections with highest overlap (most content in common)
+        3. Among equal overlap, prefer deepest (highest level) section
+        4. Title match used as tiebreaker only
 
         Args:
             chunk: DocumentChunk to match
@@ -864,13 +864,16 @@ class DocumentGraphUpdater:
         if not candidates:
             return None
 
-        # Sort by: (title match score, overlap lines, level descending)
+        # Sort by: (overlap lines, level descending, title match)
+        # Prioritize overlap and level (specificity) over title match since
+        # section_title is set from root section during chunking and may not
+        # reflect the actual subsection where the chunk content belongs.
         def sort_key(item: tuple[dict, int]) -> tuple[int, int, int]:
             section, overlap = item
-            # Title match: 2 if matches exactly, 1 if section_title non-empty and partial match, 0 otherwise
-            title_match = 2 if chunk.section_title == section["title"] else 0
             # Level: higher is deeper (more specific)
-            return (title_match, overlap, section["level"])
+            # Title match: used as tiebreaker only
+            title_match = 1 if chunk.section_title == section["title"] else 0
+            return (overlap, section["level"], title_match)
 
         candidates.sort(key=sort_key, reverse=True)
         return candidates[0][0]

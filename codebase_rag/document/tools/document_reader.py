@@ -89,7 +89,7 @@ def _get_sections_with_content(
             "level": section.get("level"),
             "start_line": section.get("start_line"),
             "end_line": section.get("end_line"),
-            "content": section.get("content"),
+            "content": section.get("content_snippet"),  # Section stores content_snippet
         }
 
         if include_chunks:
@@ -107,12 +107,15 @@ def _get_chunks_for_section(
     section_qn: str,
     workspace: str,
 ) -> list[dict]:
-    """Get chunks for a section."""
+    """Get chunks for a section.
+
+    Note: Chunks have BELONGS_TO_SECTION relationship to their containing section.
+    """
     query = """
-    MATCH (s:Section)-[:CONTAINS_CHUNK]->(c:Chunk)
+    MATCH (c:Chunk)-[:BELONGS_TO_SECTION]->(s:Section)
     WHERE s.qualified_name = $qn AND s.workspace = $workspace
     RETURN c
-    ORDER BY c.chunk_index
+    ORDER BY c.start_line
     """
 
     return ingestor.execute_query(

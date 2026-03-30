@@ -32,7 +32,9 @@ class MarkdownExtractor(BaseDocumentExtractor):
 
     # Regex patterns for section detection
     HEADER_PATTERN = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
-    CODE_BLOCK_PATTERN = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
+    # Match fenced code blocks: ```lang\n...\n``` with optional Windows line endings
+    # Using \r?\n to handle both Unix and Windows line endings
+    CODE_BLOCK_PATTERN = re.compile(r"```(\w*)\r?\n(.*?)\r?\n```", re.DOTALL)
 
     @property
     def supported_extensions(self) -> list[str]:
@@ -134,10 +136,20 @@ class MarkdownExtractor(BaseDocumentExtractor):
         """
         lines = content.split("\n")
 
-        # Find all header positions
+        # Find all header positions, excluding those inside fenced code blocks
         header_positions: list[tuple[int, int, str]] = []  # (line, level, title)
+        in_code_block = False
 
         for i, line in enumerate(lines):
+            # Track fenced code block boundaries
+            if line.startswith("```"):
+                in_code_block = not in_code_block
+                continue
+
+            # Skip header detection inside code blocks
+            if in_code_block:
+                continue
+
             match = self.HEADER_PATTERN.match(line)
             if match:
                 level = len(match.group(1))
@@ -206,15 +218,17 @@ class MarkdownExtractor(BaseDocumentExtractor):
         # Different characters indicate different levels
         level_map: dict[str, int] = {}
 
-        # First pass: collect all sections with their levels
-        section_data: list[tuple[int, int, str, int, int]] = []  # (index, level, title, start_line, end_line)
+        # First pass: collect all section positions with their levels
+        # (index, level, title, start_line)
+        section_positions: list[tuple[int, int, str, int]] = []
         i = 0
         while i < len(lines) - 1:
             line = lines[i]
             next_line = lines[i + 1] if i + 1 < len(lines) else ""
 
             # Check for underline-style header
-            if next_line and all(c == next_line[0] for c in next_line) and len(next_line) >= len(line):
+            # Validate: underline must be at least as long as title
+            if next_line and all(c == next_line[0] for c in next_line) and len(next_line) >= len(line.strip()):
                 if line.strip():  # Non-empty title
                     underline_char = next_line[0]
 
@@ -225,31 +239,37 @@ class MarkdownExtractor(BaseDocumentExtractor):
                     level = level_map[underline_char]
                     title = line.strip()
 
-                    # Find end of section
-                    end_line = len(lines) - 1
-                    for j in range(i + 2, len(lines) - 1):
-                        potential_underline = lines[j + 1] if j + 1 < len(lines) else ""
-                        if potential_underline and all(
-                            c == potential_underline[0] for c in potential_underline
-                        ):
-                            if lines[j].strip():
-                                end_line = j - 1
-                                break
-
-                    section_data.append((len(section_data), level, title, i, end_line))
-                    i = end_line + 1
+                    section_positions.append((len(section_positions), level, title, i))
+                    i += 2  # Skip title and underline
                     continue
 
             i += 1
 
-        if not section_data:
+        if not section_positions:
             return []
 
-        # Second pass: build hierarchical structure using stack
+        # Second pass: determine end lines based on level hierarchy
+        # A section at level L extends until the next section at level <= L
+        section_data: list[tuple[int, int, str, int, int]] = []  # (index, level, title, start_line, end_line)
+        for idx, (section_idx, level, title, start_line) in enumerate(section_positions):
+            # Find end line: next section at same or higher level (<=)
+            end_line = len(lines) - 1  # Default to end of file
+            for j in range(idx + 1, len(section_positions)):
+                _, next_level, _, next_start = section_positions[j]
+                if next_level <= level:
+                    # Found next section at same or higher level
+                    # End before that section's title line
+                    end_line = next_start - 1
+                    break
+
+            section_data.append((section_idx, level, title, start_line, end_line))
+
+        # Third pass: build hierarchical structure using stack
         root_sections: list[ExtractedSection] = []
         section_stack: list[tuple[int, ExtractedSection]] = []  # (level, section)
 
         for idx, level, title, start_line, end_line in section_data:
+            # Content starts after title and underline (start_line + 2)
             section_content = "\n".join(lines[start_line + 2 : end_line + 1])
 
             section = ExtractedSection(

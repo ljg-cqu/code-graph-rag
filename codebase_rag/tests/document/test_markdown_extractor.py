@@ -96,6 +96,41 @@ function greet() {
         assert "def hello():" in doc.code_blocks[0]
         assert "function greet()" in doc.code_blocks[1]
 
+    def test_headers_in_code_blocks_ignored(self, tmp_path):
+        """Test that headers inside fenced code blocks are not extracted as sections."""
+        extractor = MarkdownExtractor()
+
+        md_file = tmp_path / "code_headers.md"
+        md_file.write_text(
+            """# Real Header
+
+Some content here.
+
+```python
+# This is a comment, not a header
+def fake_header():
+    pass
+
+# Another comment
+x = 1
+```
+
+## Real Subsection
+
+More content.
+"""
+        )
+
+        doc = extractor.extract(md_file)
+
+        # Should only have 2 sections: Real Header and Real Subsection
+        # The # comments in the code block should NOT be detected as headers
+        assert len(doc.sections) == 1  # Just the root "Real Header"
+        assert doc.sections[0].title == "Real Header"
+        # Real Subsection should be a subsection of Real Header
+        assert len(doc.sections[0].subsections) == 1
+        assert doc.sections[0].subsections[0].title == "Real Subsection"
+
     def test_extract_code_references(self, tmp_path):
         """Test extracting code references from markdown."""
         extractor = MarkdownExtractor()
