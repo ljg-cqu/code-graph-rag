@@ -61,15 +61,23 @@ class DocumentGraphUpdater:
         self.host = host
         self.port = port
         self.repo_path = repo_path.resolve()
+
+        # Determine base path for metadata files
+        # If repo_path is a file, use its parent directory
+        if self.repo_path.is_file():
+            self.base_path = self.repo_path.parent
+        else:
+            self.base_path = self.repo_path
+
         self.batch_size = batch_size
         self.workspace = workspace
 
         self.version_tracker = ContentVersionTracker()
         self.version_cache = VersionCache(
-            self.repo_path / ".cgr" / "doc_versions.json"
+            self.base_path / ".cgr" / "doc_versions.json"
         )
         self.dead_letter_queue = DeadLetterQueue(
-            self.repo_path / ".cgr" / "doc_errors"
+            self.base_path / ".cgr" / "doc_errors"
         )
         self.chunker = SemanticDocumentChunker()
 
@@ -173,6 +181,13 @@ class DocumentGraphUpdater:
         # Get supported extensions from config or use defaults
         supported_extensions = {".md", ".rst", ".txt", ".pdf", ".docx"}
 
+        # Handle single file path
+        if self.repo_path.is_file():
+            if self.repo_path.suffix.lower() in supported_extensions:
+                documents.append(self.repo_path)
+            return documents
+
+        # Handle directory path
         for ext in supported_extensions:
             for doc_path in self.repo_path.rglob(f"*{ext}"):
                 # Check if path is in excluded directory
