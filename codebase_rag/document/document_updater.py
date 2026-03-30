@@ -430,11 +430,11 @@ class DocumentGraphUpdater:
         # Only delete existing nodes after embeddings are validated
         self._delete_document_nodes(doc.path, ingestor)
 
-        # Store document and sections in graph
-        store_stats = self._store_document(doc, ingestor)
+        # Store document and sections in graph, get section info for chunk matching
+        store_stats, section_info = self._store_document(doc, ingestor)
 
-        # Store pre-computed chunks with embeddings
-        chunk_count = self._store_chunks_with_embeddings(doc, embeddings_data, ingestor)
+        # Store pre-computed chunks with embeddings and section relationships
+        chunk_count = self._store_chunks_with_embeddings(doc, embeddings_data, section_info, ingestor)
 
         # Update version cache
         version = self.version_tracker.create_version(doc)
@@ -538,9 +538,9 @@ class DocumentGraphUpdater:
         await asyncio.to_thread(self._delete_document_nodes, doc.path, ingestor)
 
         # Store document and sections (run in thread to avoid blocking)
-        store_stats = await asyncio.to_thread(self._store_document, doc, ingestor)
+        store_stats, section_info = await asyncio.to_thread(self._store_document, doc, ingestor)
         chunk_count = await asyncio.to_thread(
-            self._store_chunks_with_embeddings, doc, embeddings_data, ingestor
+            self._store_chunks_with_embeddings, doc, embeddings_data, section_info, ingestor
         )
 
         # Update version
@@ -552,9 +552,14 @@ class DocumentGraphUpdater:
         )
         return "indexed"
 
-    def _store_document(self, doc: ExtractedDocument, ingestor: MemgraphIngestor) -> dict:
-        """Store document and sections in graph."""
+    def _store_document(self, doc: ExtractedDocument, ingestor: MemgraphIngestor) -> tuple[dict, list[dict]]:
+        """Store document and sections in graph.
+
+        Returns:
+            Tuple of (stats dict, section_info list for chunk matching)
+        """
         stats = {"sections": 0}
+        all_section_info: list[dict] = []
 
         logger.debug(f"Storing document: {doc.path}")
 
@@ -575,11 +580,12 @@ class DocumentGraphUpdater:
             },
         )
 
-        # Create Section nodes and relationships
+        # Create Section nodes and relationships, collect section info
         for section in doc.sections:
-            self._store_section(doc.path, section, doc.path, None, ingestor, stats)
+            section_infos = self._store_section(doc.path, section, doc.path, None, ingestor, stats)
+            all_section_info.extend(section_infos)
 
-        return stats
+        return stats, all_section_info
 
     def _store_section(
         self,
@@ -589,7 +595,7 @@ class DocumentGraphUpdater:
         parent_qn: str | None,
         ingestor: MemgraphIngestor,
         stats: dict,
-    ) -> None:
+    ) -> list[dict]:
         """
         Recursively store section and its subsections.
 
@@ -600,6 +606,10 @@ class DocumentGraphUpdater:
             parent_qn: Parent section's qualified name (None for top-level)
             ingestor: MemgraphIngestor instance
             stats: Stats dict to update
+
+        Returns:
+            List of section info dicts with qualified_name, title, start_line, end_line, level
+            (includes this section and all subsections)
         """
         # Create hierarchical qualified name with line number to avoid collisions
         section_qn = f"{parent_path}#L{section.start_line}:{section.title}"
@@ -633,11 +643,23 @@ class DocumentGraphUpdater:
             )
         stats["sections"] += 1
 
+        # Collect section info for chunk-to-section matching
+        section_info: list[dict] = [{
+            "qualified_name": section_qn,
+            "title": section.title,
+            "start_line": section.start_line,
+            "end_line": section.end_line,
+            "level": section.level,
+        }]
+
         # Recursively process subsections
         for subsection in section.subsections:
-            self._store_section(
+            subsection_infos = self._store_section(
                 doc_path, subsection, section_qn, section_qn, ingestor, stats
             )
+            section_info.extend(subsection_infos)
+
+        return section_info
 
     def _prepare_embeddings(
         self,
@@ -677,18 +699,26 @@ class DocumentGraphUpdater:
             fallback_chunk = DocumentChunk(
                 content=doc.content[:1000],
                 section_title="",
-                start_line=1,  # Documents start at line 1 (consistent indexing)
-                end_line=self.chunker._count_lines(doc.content[:1000]),
+                start_line=0,  # 0-indexed to match chunking.py convention
+                end_line=self.chunker._count_lines(doc.content[:1000]) - 1,
                 token_count=self.chunker.count_tokens(doc.content[:1000]),
                 document_path=doc.path,
                 chunk_index=0,
             )
             return ([fallback_chunk], [doc_embedding])
 
-        # Filter out empty chunks to avoid API errors
-        non_empty_chunks = [(i, c) for i, c in enumerate(chunks) if c.content.strip()]
+        # Filter out empty and tiny chunks to avoid API errors and meaningless embeddings
+        # Tiny chunks (<10 tokens) like "```" or "```python" provide no semantic value
+        MIN_CHUNK_TOKENS = 10
+        non_empty_chunks = [
+            (i, c) for i, c in enumerate(chunks)
+            if c.content.strip() and c.token_count >= MIN_CHUNK_TOKENS
+        ]
         if not non_empty_chunks:
-            logger.warning(f"All chunks in {doc.path} are empty, skipping embedding")
+            logger.warning(
+                f"All chunks in {doc.path} are empty or too small (<{MIN_CHUNK_TOKENS} tokens), "
+                "skipping embedding"
+            )
             return ([], [])
 
         chunk_contents = [c.content for i, c in non_empty_chunks]
@@ -718,6 +748,7 @@ class DocumentGraphUpdater:
         self,
         doc: ExtractedDocument,
         embeddings_data: tuple[list, list[list[float]]],
+        section_info: list[dict],
         ingestor: MemgraphIngestor,
     ) -> int:
         """Store chunks with pre-computed embeddings.
@@ -725,6 +756,7 @@ class DocumentGraphUpdater:
         Args:
             doc: Extracted document
             embeddings_data: Tuple of (non_empty_chunks, embeddings) from _prepare_embeddings
+            section_info: List of section info dicts for chunk-to-section matching
             ingestor: MemgraphIngestor instance
 
         Returns:
@@ -755,7 +787,57 @@ class DocumentGraphUpdater:
                 (cs.NodeLabel.CHUNK.value, cs.UniqueKeyType.QUALIFIED_NAME.value, chunk.qualified_name),
             )
 
+            # Find matching section for this chunk and create relationship
+            matching_section = self._find_section_for_chunk(chunk, section_info)
+            if matching_section:
+                ingestor.ensure_relationship_batch(
+                    (cs.NodeLabel.CHUNK.value, cs.UniqueKeyType.QUALIFIED_NAME.value, chunk.qualified_name),
+                    cs.RelationshipType.BELONGS_TO_SECTION.value,
+                    (cs.NodeLabel.SECTION.value, cs.UniqueKeyType.QUALIFIED_NAME.value, matching_section["qualified_name"]),
+                )
+
         return len(non_empty_chunks)
+
+    def _find_section_for_chunk(
+        self,
+        chunk: DocumentChunk,
+        section_info: list[dict],
+    ) -> dict | None:
+        """Find the most specific section that contains a chunk.
+
+        Matching logic:
+        1. Chunk must be within section's line range (inclusive)
+        2. Prefer sections where chunk.section_title matches section.title
+        3. Among matches, prefer the deepest (highest level) section
+
+        Args:
+            chunk: DocumentChunk to match
+            section_info: List of section info dicts with qualified_name, title,
+                          start_line, end_line, level
+
+        Returns:
+            Best matching section dict, or None if no match found
+        """
+        matching_sections: list[dict] = []
+
+        for section in section_info:
+            # Check if chunk is within section's line range (inclusive)
+            if chunk.start_line >= section["start_line"] and chunk.end_line <= section["end_line"]:
+                matching_sections.append(section)
+
+        if not matching_sections:
+            return None
+
+        # Sort by: (title match score, level descending)
+        # Title match gets priority, then deepest section
+        def sort_key(s: dict) -> tuple[int, int]:
+            # Title match: 1 if matches, 0 if doesn't
+            title_match = 1 if chunk.section_title == s["title"] else 0
+            # Level: higher is deeper (more specific)
+            return (title_match, s["level"])
+
+        matching_sections.sort(key=sort_key, reverse=True)
+        return matching_sections[0]
 
     def update_file(self, file_path: Path) -> str:
         """

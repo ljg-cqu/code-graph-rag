@@ -109,7 +109,7 @@ class TestSemanticDocumentChunker:
 
     def test_chunk_large_section(self):
         """Test chunking a large section into multiple chunks."""
-        chunker = SemanticDocumentChunker(max_tokens=10)
+        chunker = SemanticDocumentChunker(max_tokens=10, overlap_tokens=0)
 
         # Create a large section that exceeds chunk size
         large_content = " ".join(["word"] * 100)
@@ -141,7 +141,7 @@ class TestSemanticDocumentChunker:
         assert all(c.section_title == "Large Section" for c in chunks)
 
     def test_chunk_empty_document(self):
-        """Test chunking an empty document."""
+        """Test chunking an empty document returns no chunks."""
         chunker = SemanticDocumentChunker()
 
         doc = ExtractedDocument(
@@ -156,13 +156,12 @@ class TestSemanticDocumentChunker:
         )
 
         chunks = list(chunker.chunk_document(doc))
-        # Empty document may still produce a chunk with empty content
-        assert len(chunks) >= 1
-        assert chunks[0].content == ""
+        # Empty document should produce no chunks
+        assert len(chunks) == 0
 
     def test_chunk_token_count(self):
         """Test that chunks have token counts."""
-        chunker = SemanticDocumentChunker(max_tokens=50)
+        chunker = SemanticDocumentChunker(max_tokens=50, overlap_tokens=10)
 
         doc = ExtractedDocument(
             path="/test/doc.md",
@@ -336,7 +335,7 @@ BOUNDARY_NODE_TYPES = {
 
         ASCII diagrams in markdown can span many lines with no .!? punctuation.
         """
-        chunker = SemanticDocumentChunker(max_tokens=50)
+        chunker = SemanticDocumentChunker(max_tokens=50, overlap_tokens=10)
 
         # ASCII art diagram
         diagram = """
@@ -376,3 +375,372 @@ BOUNDARY_NODE_TYPES = {
             assert chunk.token_count <= chunker.max_tokens, (
                 f"Diagram chunk exceeded limit: {chunk.token_count} > {chunker.max_tokens}"
             )
+
+    def test_plain_text_oversized_paragraph(self):
+        """Test that plain text documents handle oversized paragraphs.
+
+        This tests the P0 fix where _chunk_plain_text didn't split
+        paragraphs exceeding max_tokens.
+        """
+        chunker = SemanticDocumentChunker(max_tokens=50, overlap_tokens=10)
+        # Single paragraph that exceeds max_tokens
+        large_para = " ".join(["word"] * 200)  # ~270 tokens
+
+        doc = ExtractedDocument(
+            path="/test/plain.md",
+            file_type=".md",
+            content=large_para,
+            sections=[],
+            code_blocks=[],
+            code_references=[],
+            word_count=200,
+            modified_date="2024-01-01",
+        )
+
+        chunks = list(chunker.chunk_document(doc))
+        assert len(chunks) > 1  # Should split into multiple chunks
+
+        for chunk in chunks:
+            assert chunk.token_count <= chunker.max_tokens, (
+                f"Plain text chunk exceeded limit: {chunk.token_count} > {chunker.max_tokens}"
+            )
+
+    def test_actual_token_count_matches_content(self):
+        """Verify reported token_count matches actual content tokens."""
+        chunker = SemanticDocumentChunker(max_tokens=100, overlap_tokens=20)
+
+        content = " ".join(["word"] * 150)  # Will be split
+        doc = ExtractedDocument(
+            path="/test/tokens.md",
+            file_type=".md",
+            content=content,
+            sections=[],
+            code_blocks=[],
+            code_references=[],
+            word_count=150,
+            modified_date="2024-01-01",
+        )
+
+        chunks = list(chunker.chunk_document(doc))
+        for chunk in chunks:
+            # Verify token_count is calculated from actual content
+            actual_tokens = chunker.count_tokens(chunk.content)
+            assert chunk.token_count == actual_tokens, (
+                f"Reported token_count {chunk.token_count} != actual {actual_tokens}"
+            )
+
+
+class TestParameterValidation:
+    """Tests for constructor parameter validation."""
+
+    def test_invalid_max_tokens_zero(self):
+        """Test that max_tokens=0 raises ValueError."""
+        with pytest.raises(ValueError, match="max_tokens must be positive"):
+            SemanticDocumentChunker(max_tokens=0)
+
+    def test_invalid_max_tokens_negative(self):
+        """Test that negative max_tokens raises ValueError."""
+        with pytest.raises(ValueError, match="max_tokens must be positive"):
+            SemanticDocumentChunker(max_tokens=-10)
+
+    def test_invalid_overlap_tokens_negative(self):
+        """Test that negative overlap_tokens raises ValueError."""
+        with pytest.raises(ValueError, match="overlap_tokens must be non-negative"):
+            SemanticDocumentChunker(max_tokens=100, overlap_tokens=-5)
+
+    def test_invalid_overlap_exceeds_max_tokens(self):
+        """Test that overlap_tokens >= max_tokens raises ValueError."""
+        with pytest.raises(ValueError, match="overlap_tokens .* must be less than max_tokens"):
+            SemanticDocumentChunker(max_tokens=50, overlap_tokens=50)
+
+    def test_invalid_overlap_greater_than_max_tokens(self):
+        """Test that overlap_tokens > max_tokens raises ValueError."""
+        with pytest.raises(ValueError, match="overlap_tokens .* must be less than max_tokens"):
+            SemanticDocumentChunker(max_tokens=50, overlap_tokens=100)
+
+    def test_valid_parameters(self):
+        """Test that valid parameters are accepted."""
+        chunker = SemanticDocumentChunker(max_tokens=512, overlap_tokens=50)
+        assert chunker.max_tokens == 512
+        assert chunker.overlap_tokens == 50
+
+    def test_zero_overlap_is_valid(self):
+        """Test that overlap_tokens=0 is valid."""
+        chunker = SemanticDocumentChunker(max_tokens=100, overlap_tokens=0)
+        assert chunker.overlap_tokens == 0
+
+
+class TestLineTrackingAccuracy:
+    """Tests for line tracking accuracy."""
+
+    def test_line_numbers_are_zero_indexed(self):
+        """Verify all line numbers use 0-indexed convention."""
+        chunker = SemanticDocumentChunker(max_tokens=100)
+
+        doc = ExtractedDocument(
+            path="/test/lines.md",
+            file_type=".md",
+            content="Line 0\n\nLine 2\n\nLine 4",
+            sections=[],
+            code_blocks=[],
+            code_references=[],
+            word_count=5,
+            modified_date="2024-01-01",
+        )
+
+        chunks = list(chunker.chunk_document(doc))
+        # All start_line values should be >= 0
+        for chunk in chunks:
+            assert chunk.start_line >= 0, f"start_line {chunk.start_line} should be >= 0"
+            assert chunk.end_line >= chunk.start_line, "end_line should be >= start_line"
+
+    def test_plain_text_line_tracking(self):
+        """Verify line tracking in plain text documents (no sections)."""
+        chunker = SemanticDocumentChunker(max_tokens=100)
+
+        # Content: line 0, blank, blank, line 3, blank, blank, line 6
+        content = "First paragraph.\n\nSecond paragraph.\n\nThird paragraph."
+        doc = ExtractedDocument(
+            path="/test/plain.md",
+            file_type=".md",
+            content=content,
+            sections=[],
+            code_blocks=[],
+            code_references=[],
+            word_count=6,
+            modified_date="2024-01-01",
+        )
+
+        chunks = list(chunker.chunk_document(doc))
+        assert len(chunks) >= 1
+
+        # Verify line numbers are 0-indexed
+        for chunk in chunks:
+            assert chunk.start_line >= 0
+            # Extract content at claimed lines
+            lines = content.split("\n")
+            if chunk.end_line < len(lines):
+                extracted = "\n".join(lines[chunk.start_line : chunk.end_line + 1])
+                # Content should match (allowing for stripping)
+                assert chunk.content.strip() in extracted or extracted.strip() in chunk.content
+
+    def test_section_line_tracking_preserved(self):
+        """Verify section line numbers are preserved in chunks."""
+        chunker = SemanticDocumentChunker(max_tokens=100)
+
+        doc = ExtractedDocument(
+            path="/test/section.md",
+            file_type=".md",
+            content="",
+            sections=[
+                ExtractedSection(
+                    title="Section 1",
+                    level=1,
+                    start_line=10,  # Section starts at line 10
+                    end_line=20,
+                    content="Content here.",
+                    subsections=[],
+                ),
+            ],
+            code_blocks=[],
+            code_references=[],
+            word_count=2,
+            modified_date="2024-01-01",
+        )
+
+        chunks = list(chunker.chunk_document(doc))
+        assert len(chunks) == 1
+        # Chunk should use section's line numbers
+        assert chunks[0].start_line == 10
+        assert chunks[0].end_line <= 20
+
+
+class TestEdgeCaseHandling:
+    """Tests for edge case handling."""
+
+    def test_whitespace_only_plain_text(self):
+        """Test that whitespace-only documents without sections produce no chunks."""
+        chunker = SemanticDocumentChunker()
+
+        doc = ExtractedDocument(
+            path="/test/whitespace.md",
+            file_type=".md",
+            content="   \n\n   \t\t\n   ",  # Whitespace only
+            sections=[],
+            code_blocks=[],
+            code_references=[],
+            word_count=0,
+            modified_date="2024-01-01",
+        )
+
+        chunks = list(chunker.chunk_document(doc))
+        assert len(chunks) == 0, "Whitespace-only content should not produce chunks"
+
+    def test_whitespace_only_section(self):
+        """Test that whitespace-only sections produce no chunks."""
+        chunker = SemanticDocumentChunker()
+
+        doc = ExtractedDocument(
+            path="/test/whitespace_section.md",
+            file_type=".md",
+            content="",
+            sections=[
+                ExtractedSection(
+                    title="Empty Section",
+                    level=1,
+                    start_line=0,
+                    end_line=5,
+                    content="   \n\n   ",  # Whitespace only
+                    subsections=[],
+                ),
+            ],
+            code_blocks=[],
+            code_references=[],
+            word_count=0,
+            modified_date="2024-01-01",
+        )
+
+        chunks = list(chunker.chunk_document(doc))
+        assert len(chunks) == 0, "Whitespace-only sections should not produce chunks"
+
+    def test_mixed_content_and_whitespace(self):
+        """Test that documents with real content and whitespace work correctly."""
+        chunker = SemanticDocumentChunker()
+
+        doc = ExtractedDocument(
+            path="/test/mixed.md",
+            file_type=".md",
+            content="Real content here.\n\n   \n\nMore content.",
+            sections=[],
+            code_blocks=[],
+            code_references=[],
+            word_count=4,
+            modified_date="2024-01-01",
+        )
+
+        chunks = list(chunker.chunk_document(doc))
+        # Should have chunks with actual content, not just whitespace
+        assert len(chunks) >= 1
+        for chunk in chunks:
+            assert chunk.content.strip(), "Chunks should have non-empty content"
+
+
+class TestSeparatorTokenAccounting:
+    """Tests for separator token accounting."""
+
+    def test_paragraph_separator_accounted(self):
+        """Verify that paragraph separators are accounted for in token limits."""
+        chunker = SemanticDocumentChunker(max_tokens=50, overlap_tokens=0)
+
+        # Create content where separator would push over limit
+        # Each paragraph is ~20 tokens, separator is ~2 tokens
+        para = "This is a test paragraph with some content."
+        content = f"{para}\n\n{para}\n\n{para}"  # 3 paragraphs with separators
+
+        doc = ExtractedDocument(
+            path="/test/separators.md",
+            file_type=".md",
+            content=content,
+            sections=[],
+            code_blocks=[],
+            code_references=[],
+            word_count=15,
+            modified_date="2024-01-01",
+        )
+
+        chunks = list(chunker.chunk_document(doc))
+        # All chunks should respect max_tokens including separators
+        for chunk in chunks:
+            assert chunk.token_count <= chunker.max_tokens, (
+                f"Chunk exceeded limit with separators: {chunk.token_count} > {chunker.max_tokens}"
+            )
+
+    def test_overlap_respects_token_limit(self):
+        """Verify that overlap handling respects token limits."""
+        chunker = SemanticDocumentChunker(max_tokens=100, overlap_tokens=20)
+
+        # Create content that would trigger overlap
+        para = "This is a paragraph with enough tokens to trigger overlap handling in the chunker. "
+        content = para * 10  # Large enough to trigger multiple chunks
+
+        doc = ExtractedDocument(
+            path="/test/overlap.md",
+            file_type=".md",
+            content=content,
+            sections=[],
+            code_blocks=[],
+            code_references=[],
+            word_count=50,
+            modified_date="2024-01-01",
+        )
+
+        chunks = list(chunker.chunk_document(doc))
+        # All chunks must respect limit, even with overlap
+        for chunk in chunks:
+            assert chunk.token_count <= chunker.max_tokens, (
+                f"Chunk with overlap exceeded limit: {chunk.token_count} > {chunker.max_tokens}"
+            )
+
+
+class TestSecurityBounds:
+    """Tests for security bounds and limits."""
+
+    def test_max_tokens_upper_bound(self):
+        """Test that max_tokens exceeding upper bound raises ValueError."""
+        with pytest.raises(ValueError, match="exceeds reasonable limit"):
+            SemanticDocumentChunker(max_tokens=10000)  # Exceeds MAX_REASONABLE_TOKENS (8192)
+
+    def test_max_tokens_at_upper_bound_accepted(self):
+        """Test that max_tokens at upper bound is accepted."""
+        chunker = SemanticDocumentChunker(max_tokens=8192)
+        assert chunker.max_tokens == 8192
+
+    def test_reduce_segment_to_fit_guarantee(self):
+        """Verify _reduce_segment_to_fit always returns segment <= max_tokens."""
+        chunker = SemanticDocumentChunker(max_tokens=10, overlap_tokens=5)
+
+        # Create a pathological segment that might need many iterations
+        pathological_segment = "x" * 10000  # Very long string
+
+        segment, tokens = chunker._reduce_segment_to_fit(pathological_segment)
+        assert tokens <= chunker.max_tokens, (
+            f"Segment tokens {tokens} exceeded max_tokens {chunker.max_tokens}"
+        )
+        assert len(segment) > 0, "Segment should not be empty"
+
+    def test_reduce_segment_to_fit_preserves_content(self):
+        """Verify _reduce_segment_to_fit doesn't break content unnecessarily."""
+        chunker = SemanticDocumentChunker(max_tokens=100)
+
+        # Segment that fits
+        segment = "This is a short segment."
+        reduced, tokens = chunker._reduce_segment_to_fit(segment)
+
+        assert reduced == segment, "Should not reduce segment that fits"
+        assert tokens == chunker.count_tokens(segment)
+
+    def test_max_chunks_per_document_limit(self):
+        """Verify max_chunks_per_document limit is enforced."""
+        # Use very small max_tokens to generate many chunks
+        chunker = SemanticDocumentChunker(max_tokens=20, overlap_tokens=0)
+
+        # Create content that would generate many chunks
+        # Each sentence is ~10 tokens, so we need many sentences
+        sentences = [f"Sentence number {i} here." for i in range(2000)]
+        content = " ".join(sentences)
+
+        doc = ExtractedDocument(
+            path="/test/large.md",
+            file_type=".md",
+            content=content,
+            sections=[],
+            code_blocks=[],
+            code_references=[],
+            word_count=2000,
+            modified_date="2024-01-01",
+        )
+
+        chunks = list(chunker.chunk_document(doc))
+        assert len(chunks) <= chunker.MAX_CHUNKS_PER_DOCUMENT, (
+            f"Chunks {len(chunks)} exceeded limit {chunker.MAX_CHUNKS_PER_DOCUMENT}"
+        )

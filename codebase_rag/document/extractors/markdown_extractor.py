@@ -33,7 +33,6 @@ class MarkdownExtractor(BaseDocumentExtractor):
     # Regex patterns for section detection
     HEADER_PATTERN = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
     CODE_BLOCK_PATTERN = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
-    RST_HEADER_PATTERN = re.compile(r"^([=\-~^\"']+)\n(.+)\n\1$", re.MULTILINE)
 
     @property
     def supported_extensions(self) -> list[str]:
@@ -126,54 +125,84 @@ class MarkdownExtractor(BaseDocumentExtractor):
         return await asyncio.to_thread(self.extract, file_path)
 
     def _extract_markdown_sections(self, content: str) -> list[ExtractedSection]:
-        """Extract header hierarchy from Markdown."""
-        sections: list[ExtractedSection] = []
+        """Extract header hierarchy from Markdown.
+
+        Builds a hierarchical tree structure where H2 sections are nested
+        under their preceding H1 section, H3 under H2, etc.
+
+        Algorithm uses a stack to track parent sections at each level.
+        """
         lines = content.split("\n")
 
         # Find all header positions
-        header_positions: list[tuple[int, int, str, str]] = []  # (line, level, title, content_start)
+        header_positions: list[tuple[int, int, str]] = []  # (line, level, title)
 
         for i, line in enumerate(lines):
             match = self.HEADER_PATTERN.match(line)
             if match:
                 level = len(match.group(1))
                 title = match.group(2).strip()
-                header_positions.append((i, level, title, i + 1))
+                header_positions.append((i, level, title))
 
-        # Build sections with content
-        for idx, (line_num, level, title, content_start) in enumerate(header_positions):
+        if not header_positions:
+            return []
+
+        # Build hierarchical structure using a stack of parent sections
+        # Stack contains (level, section) tuples
+        root_sections: list[ExtractedSection] = []
+        section_stack: list[tuple[int, ExtractedSection]] = []  # (level, section)
+
+        for idx, (line_num, level, title) in enumerate(header_positions):
             # Determine end line (next header or end of file)
             if idx + 1 < len(header_positions):
                 end_line = header_positions[idx + 1][0] - 1
             else:
                 end_line = len(lines) - 1
 
-            # Extract section content
-            section_content = "\n".join(lines[content_start : end_line + 1])
+            # Extract section content (from line after header to end)
+            section_content = "\n".join(lines[line_num + 1 : end_line + 1])
 
-            sections.append(
-                ExtractedSection(
-                    title=title,
-                    level=level,
-                    start_line=line_num,
-                    end_line=end_line,
-                    content=section_content.strip(),
-                    subsections=[],
-                )
+            section = ExtractedSection(
+                title=title,
+                level=level,
+                start_line=line_num,
+                end_line=end_line,
+                content=section_content.strip(),
+                subsections=[],
             )
 
-        return sections
+            # Pop sections from stack that are at same or higher level
+            # (they can't be parents of this section)
+            while section_stack and section_stack[-1][0] >= level:
+                section_stack.pop()
+
+            # If stack has a section at lower level, it's our parent
+            if section_stack and section_stack[-1][0] < level:
+                parent_section = section_stack[-1][1]
+                parent_section.subsections.append(section)
+            else:
+                # No parent in stack - this is a root-level section
+                root_sections.append(section)
+
+            # Push this section to stack (potential parent for subsequent sections)
+            section_stack.append((level, section))
+
+        return root_sections
 
     def _extract_rst_sections(self, content: str) -> list[ExtractedSection]:
-        """Extract sections from reStructuredText files."""
-        sections: list[ExtractedSection] = []
+        """Extract sections from reStructuredText files.
+
+        Builds a hierarchical tree structure similar to Markdown extraction.
+        RST uses underline characters to indicate levels (first seen = level 1, etc.)
+        """
         lines = content.split("\n")
 
         # RST uses underlines for headers
         # Different characters indicate different levels
         level_map: dict[str, int] = {}
-        current_level = 0
 
+        # First pass: collect all sections with their levels
+        section_data: list[tuple[int, int, str, int, int]] = []  # (index, level, title, start_line, end_line)
         i = 0
         while i < len(lines) - 1:
             line = lines[i]
@@ -184,10 +213,9 @@ class MarkdownExtractor(BaseDocumentExtractor):
                 if line.strip():  # Non-empty title
                     underline_char = next_line[0]
 
-                    # Assign level based on character
+                    # Assign level based on character (first seen = top level)
                     if underline_char not in level_map:
-                        current_level += 1
-                        level_map[underline_char] = current_level
+                        level_map[underline_char] = len(level_map) + 1
 
                     level = level_map[underline_char]
                     title = line.strip()
@@ -203,25 +231,47 @@ class MarkdownExtractor(BaseDocumentExtractor):
                                 end_line = j - 1
                                 break
 
-                    section_content = "\n".join(lines[i + 2 : end_line + 1])
-
-                    sections.append(
-                        ExtractedSection(
-                            title=title,
-                            level=level,
-                            start_line=i,
-                            end_line=end_line,
-                            content=section_content.strip(),
-                            subsections=[],
-                        )
-                    )
-
+                    section_data.append((len(section_data), level, title, i, end_line))
                     i = end_line + 1
                     continue
 
             i += 1
 
-        return sections
+        if not section_data:
+            return []
+
+        # Second pass: build hierarchical structure using stack
+        root_sections: list[ExtractedSection] = []
+        section_stack: list[tuple[int, ExtractedSection]] = []  # (level, section)
+
+        for idx, level, title, start_line, end_line in section_data:
+            section_content = "\n".join(lines[start_line + 2 : end_line + 1])
+
+            section = ExtractedSection(
+                title=title,
+                level=level,
+                start_line=start_line,
+                end_line=end_line,
+                content=section_content.strip(),
+                subsections=[],
+            )
+
+            # Pop sections from stack that are at same or higher level
+            while section_stack and section_stack[-1][0] >= level:
+                section_stack.pop()
+
+            # If stack has a section at lower level, it's our parent
+            if section_stack and section_stack[-1][0] < level:
+                parent_section = section_stack[-1][1]
+                parent_section.subsections.append(section)
+            else:
+                # No parent in stack - this is a root-level section
+                root_sections.append(section)
+
+            # Push this section to stack (potential parent for subsequent sections)
+            section_stack.append((level, section))
+
+        return root_sections
 
     def _extract_code_blocks(self, content: str) -> list[str]:
         """Extract code blocks from Markdown."""

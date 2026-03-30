@@ -21,7 +21,7 @@ class TestMarkdownExtractor:
         assert ".txt" in extractor.supported_extensions
 
     def test_extract_simple_markdown(self, tmp_path):
-        """Test extracting a simple markdown file."""
+        """Test extracting a simple markdown file with hierarchical sections."""
         extractor = MarkdownExtractor()
 
         # Create test file
@@ -50,7 +50,24 @@ Final section.
         assert isinstance(doc, ExtractedDocument)
         assert doc.file_type == ".md"
         assert "Title" in doc.content
-        assert len(doc.sections) >= 2  # At least Section 1 and Section 2
+
+        # Check hierarchical structure
+        # Root: Title (H1)
+        assert len(doc.sections) == 1
+        assert doc.sections[0].title == "Title"
+        assert doc.sections[0].level == 1
+
+        # Title has 2 subsections: Section 1 and Section 2 (both H2)
+        assert len(doc.sections[0].subsections) == 2
+        assert doc.sections[0].subsections[0].title == "Section 1"
+        assert doc.sections[0].subsections[0].level == 2
+        assert doc.sections[0].subsections[1].title == "Section 2"
+        assert doc.sections[0].subsections[1].level == 2
+
+        # Section 1 has 1 subsection: Subsection 1.1 (H3)
+        assert len(doc.sections[0].subsections[0].subsections) == 1
+        assert doc.sections[0].subsections[0].subsections[0].title == "Subsection 1.1"
+        assert doc.sections[0].subsections[0].subsections[0].level == 3
 
     def test_extract_code_blocks(self, tmp_path):
         """Test extracting code blocks from markdown."""
@@ -203,7 +220,7 @@ Just text.
         assert "T" in doc.modified_date  # ISO format
 
     def test_section_levels(self, tmp_path):
-        """Test section levels are correct."""
+        """Test section levels are correct in hierarchical structure."""
         extractor = MarkdownExtractor()
 
         md_file = tmp_path / "levels.md"
@@ -220,7 +237,22 @@ Just text.
 
         doc = extractor.extract(md_file)
 
-        levels = [s.level for s in doc.sections]
-        assert 1 in levels  # H1
-        assert 2 in levels  # H2
-        assert 3 in levels  # H3
+        # Root level has H1
+        assert len(doc.sections) == 1
+        assert doc.sections[0].level == 1
+        assert doc.sections[0].title == "H1"
+
+        # H1 has H2 as subsection
+        assert len(doc.sections[0].subsections) == 1
+        assert doc.sections[0].subsections[0].level == 2
+        assert doc.sections[0].subsections[0].title == "H2"
+
+        # H2 has H3 as subsection
+        assert len(doc.sections[0].subsections[0].subsections) == 1
+        assert doc.sections[0].subsections[0].subsections[0].level == 3
+        assert doc.sections[0].subsections[0].subsections[0].title == "H3"
+
+        # H3 has H4 as subsection
+        assert len(doc.sections[0].subsections[0].subsections[0].subsections) == 1
+        assert doc.sections[0].subsections[0].subsections[0].subsections[0].level == 4
+        assert doc.sections[0].subsections[0].subsections[0].subsections[0].title == "H4"
