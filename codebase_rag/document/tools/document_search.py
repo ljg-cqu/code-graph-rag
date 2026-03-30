@@ -78,7 +78,12 @@ def _search_memgraph_native(
     limit: int,
     min_similarity: float,
 ) -> list[dict]:
-    """Use Memgraph's native vector search."""
+    """Use Memgraph's native vector search.
+
+    Graph structure:
+    - Document-[:CONTAINS_CHUNK]->Chunk
+    - Chunk-[:BELONGS_TO_SECTION]->Section (optional)
+    """
     # Convert embedding to string format for Cypher
     embedding_str = str(embedding)
 
@@ -89,11 +94,12 @@ def _search_memgraph_native(
         $limit
     ) YIELD node, score
     WHERE node.workspace = $workspace AND score >= $min_similarity
-    MATCH (d:Document)-[:CONTAINS_SECTION]->(s:Section)-[:CONTAINS_CHUNK]->(node)
+    MATCH (d:Document)-[:CONTAINS_CHUNK]->(node)
+    OPTIONAL MATCH (node)-[:BELONGS_TO_SECTION]->(s:Section)
     RETURN
         node.content as content,
         node.qualified_name as chunk_qn,
-        node.chunk_index as chunk_index,
+        node.start_line as chunk_start_line,
         s.title as section_title,
         s.qualified_name as section_qn,
         d.path as document_path,
@@ -129,6 +135,11 @@ def search_documents_by_keywords(
 
     Returns:
         List of matching documents/sections
+
+    Note:
+        Graph structure:
+        - Document-[:CONTAINS_CHUNK]->Chunk
+        - Chunk-[:BELONGS_TO_SECTION]->Section (optional)
     """
     # Build keyword search pattern
     keyword_pattern = " OR ".join(
@@ -136,8 +147,9 @@ def search_documents_by_keywords(
     )
 
     query = f"""
-    MATCH (d:Document)-[:CONTAINS_SECTION]->(s:Section)-[:CONTAINS_CHUNK]->(c:Chunk)
+    MATCH (d:Document)-[:CONTAINS_CHUNK]->(c:Chunk)
     WHERE d.workspace = $workspace AND ({keyword_pattern})
+    OPTIONAL MATCH (c)-[:BELONGS_TO_SECTION]->(s:Section)
     RETURN
         c.content as content,
         c.qualified_name as chunk_qn,

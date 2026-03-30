@@ -29,6 +29,10 @@ class ErrorType(StrEnum):
     PATH_TRAVERSAL = "path_traversal"
     FILE_NOT_FOUND = "file_not_found"
     NOT_A_FILE = "not_a_file"
+    EMBEDDING_ERROR = "embedding_error"  # Embedding generation failed
+    CHUNKING_ERROR = "chunking_error"  # Document chunking failed
+    GRAPH_ERROR = "graph_error"  # Database operation failed
+    VERSION_ERROR = "version_error"  # Version cache operation failed
     UNKNOWN = "unknown"
 
 
@@ -40,6 +44,10 @@ RECOVERABLE_ERRORS = frozenset(
         ErrorType.FILE_TOO_LARGE,
         ErrorType.FILE_NOT_FOUND,
         ErrorType.NOT_A_FILE,
+        ErrorType.EMBEDDING_ERROR,
+        ErrorType.CHUNKING_ERROR,
+        ErrorType.GRAPH_ERROR,
+        ErrorType.VERSION_ERROR,
         ErrorType.UNKNOWN,
     }
 )

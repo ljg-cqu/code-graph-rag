@@ -188,6 +188,8 @@ class DocumentGraphUpdater:
                 except ExtractionException as e:
                     logger.error(f"Failed to process {doc_path}: {type(e).__name__}: {e}")
                     stats["failed"] += 1
+                    # Remove stale version cache entry so retry will re-process
+                    self.version_cache.remove(str(doc_path))
                     try:
                         self.dead_letter_queue.enqueue(e.to_extraction_error())
                     except Exception as dlq_error:
@@ -195,6 +197,8 @@ class DocumentGraphUpdater:
                 except Exception as e:
                     logger.error(f"Failed to process {doc_path}: {type(e).__name__}: {e}")
                     stats["failed"] += 1
+                    # Remove stale version cache entry so retry will re-process
+                    self.version_cache.remove(str(doc_path))
                     try:
                         self.dead_letter_queue.enqueue(
                             ExtractionError(
@@ -279,6 +283,8 @@ class DocumentGraphUpdater:
                 except ExtractionException as e:
                     logger.error(f"Failed to process {doc_path}: {type(e).__name__}: {e}")
                     stats["failed"] += 1
+                    # Remove stale version cache entry so retry will re-process
+                    self.version_cache.remove(str(doc_path))
                     try:
                         await asyncio.to_thread(self.dead_letter_queue.enqueue, e.to_extraction_error())
                     except Exception as dlq_error:
@@ -286,6 +292,8 @@ class DocumentGraphUpdater:
                 except Exception as e:
                     logger.error(f"Failed to process {doc_path}: {type(e).__name__}: {e}")
                     stats["failed"] += 1
+                    # Remove stale version cache entry so retry will re-process
+                    self.version_cache.remove(str(doc_path))
                     try:
                         await asyncio.to_thread(
                             self.dead_letter_queue.enqueue,
@@ -458,51 +466,52 @@ class DocumentGraphUpdater:
 
         Raises:
             ExtractionException: If deletion fails (critical for data integrity)
-        """
-        try:
-            # Delete all Sections connected to this document (any format)
-            ingestor.execute_write(
-                """
-                MATCH (d:Document {path: $path})-[:CONTAINS_SECTION]->(s:Section)
-                DETACH DELETE s
-                """,
-                {"path": doc_path},
-            )
 
-            # Delete all Chunks connected to this document
+        Note:
+            All queries include workspace filter to prevent multi-tenancy data leaks.
+            Uses path prefix matching to clean up orphaned nodes.
+        """
+        workspace = self.workspace
+        path_prefix = f"{doc_path}#"
+
+        try:
+            # Combined deletion query for all nodes related to this document
+            # This reduces the number of round-trips and is more atomic
             ingestor.execute_write(
                 """
-                MATCH (d:Document {path: $path})-[:CONTAINS_CHUNK]->(c:Chunk)
+                MATCH (d:Document {path: $path, workspace: $workspace})
+                OPTIONAL MATCH (d)-[:CONTAINS_SECTION]->(s:Section)
+                OPTIONAL MATCH (d)-[:CONTAINS_CHUNK]->(c:Chunk)
+                DETACH DELETE s
                 DETACH DELETE c
                 """,
-                {"path": doc_path},
+                {"path": doc_path, "workspace": workspace},
             )
 
-            # Also delete orphaned sections/chunks that might match by path prefix
-            # (handles old data where document node might not exist)
+            # Clean up orphaned sections/chunks by path prefix (handles edge cases)
             ingestor.execute_write(
                 """
-                MATCH (s:Section)
+                MATCH (s:Section {workspace: $workspace})
                 WHERE s.qualified_name STARTS WITH $path_prefix
                 DETACH DELETE s
                 """,
-                {"path_prefix": f"{doc_path}#"},
+                {"path_prefix": path_prefix, "workspace": workspace},
             )
 
             ingestor.execute_write(
                 """
-                MATCH (c:Chunk)
+                MATCH (c:Chunk {workspace: $workspace})
                 WHERE c.qualified_name STARTS WITH $path_prefix
                 DETACH DELETE c
                 """,
-                {"path_prefix": f"{doc_path}#"},
+                {"path_prefix": path_prefix, "workspace": workspace},
             )
 
             logger.debug(f"Cleaned existing nodes for document: {doc_path}")
         except Exception as e:
             raise ExtractionException(
                 path=doc_path,
-                error_type=ErrorType.UNKNOWN,
+                error_type=ErrorType.GRAPH_ERROR,
                 message=f"Failed to delete existing document nodes: {type(e).__name__}: {e}",
             ) from e
 
@@ -692,7 +701,7 @@ class DocumentGraphUpdater:
             except Exception as e:
                 raise ExtractionException(
                     path=doc.path,
-                    error_type=ErrorType.UNKNOWN,
+                    error_type=ErrorType.EMBEDDING_ERROR,
                     message=f"Embedding generation failed: {type(e).__name__}: {e}",
                 ) from e
             # Return a pseudo-chunk for the fallback case
@@ -728,7 +737,7 @@ class DocumentGraphUpdater:
         except Exception as e:
             raise ExtractionException(
                 path=doc.path,
-                error_type=ErrorType.UNKNOWN,
+                error_type=ErrorType.EMBEDDING_ERROR,
                 message=f"Embedding batch generation failed: {type(e).__name__}: {e}",
             ) from e
 
@@ -736,13 +745,35 @@ class DocumentGraphUpdater:
         if len(embeddings) != len(non_empty_chunks):
             raise ExtractionException(
                 path=doc.path,
-                error_type=ErrorType.UNKNOWN,
+                error_type=ErrorType.EMBEDDING_ERROR,
                 message=f"Embedding provider returned {len(embeddings)} embeddings for {len(non_empty_chunks)} non-empty chunks",
             )
 
-        # Return chunks and embeddings (without original indices)
+        # Validate embedding quality (check for NaN, None, and zero vectors)
+        import math
+        validated_embeddings = []
+        for i, embedding in enumerate(embeddings):
+            if embedding is None:
+                raise ExtractionException(
+                    path=doc.path,
+                    error_type=ErrorType.EMBEDDING_ERROR,
+                    message=f"Embedding provider returned None for chunk {i}",
+                )
+            # Check for NaN values
+            if any(isinstance(v, float) and math.isnan(v) for v in embedding):
+                raise ExtractionException(
+                    path=doc.path,
+                    error_type=ErrorType.EMBEDDING_ERROR,
+                    message=f"Embedding for chunk {i} contains NaN values",
+                )
+            # Check for all-zero embedding (indicates failure)
+            if all(v == 0.0 for v in embedding):
+                logger.warning(f"Embedding for chunk {i} is all zeros, may indicate embedding failure")
+            validated_embeddings.append(embedding)
+
+        # Return chunks and validated embeddings (without original indices)
         chunks_list = [c for i, c in non_empty_chunks]
-        return (chunks_list, embeddings)
+        return (chunks_list, validated_embeddings)
 
     def _store_chunks_with_embeddings(
         self,

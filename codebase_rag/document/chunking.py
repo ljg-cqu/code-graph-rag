@@ -276,12 +276,14 @@ class SemanticDocumentChunker:
 
                     # Validate chunk doesn't exceed max_tokens
                     if actual_tokens > self.max_tokens:
+                        yielded_count = 0
                         for sub_chunk in self._split_oversized_block(
                             chunk_content, section.title, doc_path, chunk_index,
                             current_line_start, 0
                         ):
+                            yielded_count += 1
                             yield sub_chunk
-                            chunk_index += 1
+                        chunk_index += yielded_count
                     else:
                         yield DocumentChunk(
                             content=chunk_content,
@@ -321,12 +323,14 @@ class SemanticDocumentChunker:
 
                 # Validate chunk doesn't exceed max_tokens
                 if actual_tokens > self.max_tokens:
+                    yielded_count = 0
                     for sub_chunk in self._split_oversized_block(
                         chunk_content, section.title, doc_path, chunk_index,
                         current_line_start, 0
                     ):
+                        yielded_count += 1
                         yield sub_chunk
-                        chunk_index += 1
+                    chunk_index += yielded_count
                 else:
                     yield DocumentChunk(
                         content=chunk_content,
@@ -459,12 +463,14 @@ class SemanticDocumentChunker:
                     # P0 FIX: Validate chunk before yielding oversized sentence split
                     if actual_tokens > self.max_tokens:
                         # Split this chunk using _split_oversized_block
+                        yielded_count = 0
                         for sub_chunk in self._split_oversized_block(
                             chunk_content, section_title, doc_path, chunk_index,
                             chunk_start_line, first_sent_pos
                         ):
+                            yielded_count += 1
                             yield sub_chunk
-                            chunk_index += 1
+                        chunk_index += yielded_count
                     else:
                         yield DocumentChunk(
                             content=chunk_content,
@@ -517,13 +523,15 @@ class SemanticDocumentChunker:
                     if actual_tokens > self.max_tokens:
                         single_sentence = current_chunk[0][0]
                         single_pos = current_chunk[0][1]
+                        yielded_count = 0
                         for sub_chunk in self._split_oversized_block(
                             single_sentence, section_title, doc_path, chunk_index,
                             para_start_line + self._find_line_offset(para, single_pos),
                             single_pos
                         ):
+                            yielded_count += 1
                             yield sub_chunk
-                            chunk_index += 1
+                        chunk_index += yielded_count
                         # Add current sentence as new chunk
                         current_chunk = [(sentence, sent_start_pos)]
                         current_tokens = sent_tokens
@@ -849,12 +857,14 @@ class SemanticDocumentChunker:
 
                     # P0 FIX: Validate before yielding
                     if actual_tokens > self.max_tokens:
+                        yielded_count = 0
                         for sub_chunk in self._split_oversized_block(
                             chunk_content, "", doc_path, chunk_index,
                             current_line_start, 0
                         ):
+                            yielded_count += 1
                             yield sub_chunk
-                            chunk_index += 1
+                        chunk_index += yielded_count
                     else:
                         yield DocumentChunk(
                             content=chunk_content,
@@ -893,12 +903,14 @@ class SemanticDocumentChunker:
 
                 # P0 FIX: Validate before yielding
                 if actual_tokens > self.max_tokens:
+                    yielded_count = 0
                     for sub_chunk in self._split_oversized_block(
                         chunk_content, "", doc_path, chunk_index,
                         current_line_start, 0
                     ):
+                        yielded_count += 1
                         yield sub_chunk
-                        chunk_index += 1
+                    chunk_index += yielded_count
                 else:
                     yield DocumentChunk(
                         content=chunk_content,

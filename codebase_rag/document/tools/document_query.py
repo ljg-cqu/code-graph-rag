@@ -123,12 +123,15 @@ def get_section_chunks(
     section_qn: str,
     workspace: str = "default",
 ) -> list[dict]:
-    """Get all chunks for a section."""
+    """Get all chunks for a section.
+
+    Note: Chunks have BELONGS_TO_SECTION relationship to their containing section.
+    """
     query = """
-    MATCH (s:Section)-[:CONTAINS_CHUNK]->(c:Chunk)
+    MATCH (c:Chunk)-[:BELONGS_TO_SECTION]->(s:Section)
     WHERE s.qualified_name = $qn AND s.workspace = $workspace
     RETURN c
-    ORDER BY c.chunk_index
+    ORDER BY c.start_line
     """
     return ingestor.execute_query(
         query, parameters={"qn": section_qn, "workspace": workspace}
