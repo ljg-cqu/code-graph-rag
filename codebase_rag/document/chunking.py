@@ -84,11 +84,15 @@ class SemanticDocumentChunker:
         return text.count("\n") + 1
 
     def _find_line_offset(self, content: str, position: int) -> int:
-        """Find the line number at a given character position in content."""
+        """Find the line number at a given character position in content.
+
+        Returns 0-indexed line offset (0 = first line).
+        Use section.start_line + offset for absolute line number.
+        """
         if position <= 0:
             return 0
-        # Count newlines before the position
-        return content[:position].count("\n") + 1
+        # Count newlines before the position (0-indexed)
+        return content[:position].count("\n")
 
     def chunk_document(self, doc: ExtractedDocument) -> Iterator[DocumentChunk]:
         """
@@ -173,10 +177,13 @@ class SemanticDocumentChunker:
                     current_tokens = 0
 
                 # Split long paragraph by sentences - pass start line for tracking
-                yield from self._split_long_paragraph(
+                yielded_count = 0
+                for chunk in self._split_long_paragraph(
                     para, section.title, doc_path, chunk_index, para_start_line
-                )
-                chunk_index += 1  # Account for yielded chunks
+                ):
+                    yielded_count += 1
+                    yield chunk
+                chunk_index += yielded_count  # Track actual number of chunks yielded
 
                 # Update content position and line tracking
                 content_position += len(para) + 2  # +2 for "\n\n" separator

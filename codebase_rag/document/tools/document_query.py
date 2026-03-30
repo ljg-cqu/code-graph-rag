@@ -5,12 +5,36 @@ Provides Cypher queries for document graph retrieval.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 from loguru import logger
 
 if TYPE_CHECKING:
     from ...services.graph_service import MemgraphIngestor
+
+# Workspace must be a safe identifier (alphanumeric, underscore, hyphen)
+WORKSPACE_PATTERN = re.compile(r"^[\w\-]+$")
+
+
+def _validate_workspace(workspace: str) -> str:
+    """Validate workspace identifier for safe Cypher injection.
+
+    Args:
+        workspace: Workspace name to validate
+
+    Returns:
+        Validated workspace name
+
+    Raises:
+        ValueError: If workspace contains unsafe characters
+    """
+    if not WORKSPACE_PATTERN.match(workspace):
+        raise ValueError(
+            f"Invalid workspace identifier: '{workspace}'. "
+            "Must contain only alphanumeric characters, underscores, and hyphens."
+        )
+    return workspace
 
 
 def query_document_graph(
@@ -24,11 +48,17 @@ def query_document_graph(
     Args:
         ingestor: Graph service instance
         query: Cypher query string
-        workspace: Workspace filter
+        workspace: Workspace filter (validated for safety)
 
     Returns:
         List of matching documents/sections/chunks
+
+    Raises:
+        ValueError: If workspace identifier is invalid
     """
+    # Validate workspace to prevent Cypher injection
+    workspace = _validate_workspace(workspace)
+
     # Prepend workspace filter to query
     workspace_filter = f"workspace = '{workspace}'"
 

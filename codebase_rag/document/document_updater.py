@@ -422,14 +422,19 @@ class DocumentGraphUpdater:
         # Extract content
         doc = extractor.extract(file_path)
 
-        # Delete existing nodes for this document (clean old data with wrong format)
+        # Generate embeddings BEFORE deleting existing nodes
+        # This ensures rollback safety: if embedding fails, old data is preserved
+        chunks = list(self.chunker.chunk_document(doc))
+        embeddings_data = self._prepare_embeddings(doc, chunks)
+
+        # Only delete existing nodes after embeddings are validated
         self._delete_document_nodes(doc.path, ingestor)
 
         # Store document and sections in graph
         store_stats = self._store_document(doc, ingestor)
 
-        # Generate and store chunk embeddings
-        chunk_count = self._generate_and_store_embeddings(doc, ingestor)
+        # Store pre-computed chunks with embeddings
+        chunk_count = self._store_chunks_with_embeddings(doc, chunks, embeddings_data, ingestor)
 
         # Update version cache
         version = self.version_tracker.create_version(doc)
@@ -450,46 +455,56 @@ class DocumentGraphUpdater:
         Args:
             doc_path: Document path to clean up
             ingestor: MemgraphIngestor instance
+
+        Raises:
+            ExtractionException: If deletion fails (critical for data integrity)
         """
-        # Delete all Sections connected to this document (any format)
-        ingestor.execute_write(
-            """
-            MATCH (d:Document {path: $path})-[:CONTAINS_SECTION]->(s:Section)
-            DETACH DELETE s
-            """,
-            {"path": doc_path},
-        )
+        try:
+            # Delete all Sections connected to this document (any format)
+            ingestor.execute_write(
+                """
+                MATCH (d:Document {path: $path})-[:CONTAINS_SECTION]->(s:Section)
+                DETACH DELETE s
+                """,
+                {"path": doc_path},
+            )
 
-        # Delete all Chunks connected to this document
-        ingestor.execute_write(
-            """
-            MATCH (d:Document {path: $path})-[:CONTAINS_CHUNK]->(c:Chunk)
-            DETACH DELETE c
-            """,
-            {"path": doc_path},
-        )
+            # Delete all Chunks connected to this document
+            ingestor.execute_write(
+                """
+                MATCH (d:Document {path: $path})-[:CONTAINS_CHUNK]->(c:Chunk)
+                DETACH DELETE c
+                """,
+                {"path": doc_path},
+            )
 
-        # Also delete orphaned sections/chunks that might match by path prefix
-        # (handles old data where document node might not exist)
-        ingestor.execute_write(
-            """
-            MATCH (s:Section)
-            WHERE s.qualified_name STARTS WITH $path_prefix
-            DETACH DELETE s
-            """,
-            {"path_prefix": f"{doc_path}#"},
-        )
+            # Also delete orphaned sections/chunks that might match by path prefix
+            # (handles old data where document node might not exist)
+            ingestor.execute_write(
+                """
+                MATCH (s:Section)
+                WHERE s.qualified_name STARTS WITH $path_prefix
+                DETACH DELETE s
+                """,
+                {"path_prefix": f"{doc_path}#"},
+            )
 
-        ingestor.execute_write(
-            """
-            MATCH (c:Chunk)
-            WHERE c.qualified_name STARTS WITH $path_prefix
-            DETACH DELETE c
-            """,
-            {"path_prefix": f"{doc_path}#"},
-        )
+            ingestor.execute_write(
+                """
+                MATCH (c:Chunk)
+                WHERE c.qualified_name STARTS WITH $path_prefix
+                DETACH DELETE c
+                """,
+                {"path_prefix": f"{doc_path}#"},
+            )
 
-        logger.debug(f"Cleaned existing nodes for document: {doc_path}")
+            logger.debug(f"Cleaned existing nodes for document: {doc_path}")
+        except Exception as e:
+            raise ExtractionException(
+                path=doc_path,
+                error_type=ErrorType.UNKNOWN,
+                message=f"Failed to delete existing document nodes: {type(e).__name__}: {e}",
+            ) from e
 
     async def _process_document_async(
         self,
@@ -515,13 +530,17 @@ class DocumentGraphUpdater:
         # Async extraction
         doc = await extractor.extract_async(file_path)
 
-        # Delete existing nodes for this document (clean old data)
+        # Generate embeddings BEFORE deleting existing nodes (rollback safety)
+        chunks = list(self.chunker.chunk_document(doc))
+        embeddings_data = await asyncio.to_thread(self._prepare_embeddings, doc, chunks)
+
+        # Only delete existing nodes after embeddings are validated
         await asyncio.to_thread(self._delete_document_nodes, doc.path, ingestor)
 
-        # Store and embed (run in thread to avoid blocking)
+        # Store document and sections (run in thread to avoid blocking)
         store_stats = await asyncio.to_thread(self._store_document, doc, ingestor)
         chunk_count = await asyncio.to_thread(
-            self._generate_and_store_embeddings, doc, ingestor
+            self._store_chunks_with_embeddings, doc, chunks, embeddings_data, ingestor
         )
 
         # Update version
@@ -619,6 +638,127 @@ class DocumentGraphUpdater:
             self._store_section(
                 doc_path, subsection, section_qn, section_qn, ingestor, stats
             )
+
+    def _prepare_embeddings(
+        self,
+        doc: ExtractedDocument,
+        chunks: list,
+    ) -> tuple[list, list[list[float]]]:
+        """Generate embeddings before deleting existing nodes.
+
+        This ensures rollback safety: if embedding fails, old data is preserved.
+
+        Args:
+            doc: Extracted document
+            chunks: List of DocumentChunk objects
+
+        Returns:
+            Tuple of (non_empty_chunks list, embeddings list)
+
+        Raises:
+            ExtractionException: If embedding generation fails
+        """
+        provider = self._embedding_provider
+
+        if not chunks:
+            # Fallback for empty documents
+            if not doc.content or not doc.content.strip():
+                logger.warning(f"Document {doc.path} has no content, skipping embedding")
+                return ([], [])
+            try:
+                doc_embedding = provider.embed(doc.content[:1000])
+            except Exception as e:
+                raise ExtractionException(
+                    path=doc.path,
+                    error_type=ErrorType.UNKNOWN,
+                    message=f"Embedding generation failed: {type(e).__name__}: {e}",
+                ) from e
+            # Return a pseudo-chunk for the fallback case
+            from .chunking import DocumentChunk
+            fallback_chunk = DocumentChunk(
+                content=doc.content[:1000],
+                section_title="",
+                start_line=0,
+                end_line=0,
+                token_count=self.chunker.count_tokens(doc.content[:1000]),
+                document_path=doc.path,
+                chunk_index=0,
+            )
+            return ([fallback_chunk], [doc_embedding])
+
+        # Filter out empty chunks to avoid API errors
+        non_empty_chunks = [(i, c) for i, c in enumerate(chunks) if c.content.strip()]
+        if not non_empty_chunks:
+            logger.warning(f"All chunks in {doc.path} are empty, skipping embedding")
+            return ([], [])
+
+        chunk_contents = [c.content for i, c in non_empty_chunks]
+        batch_size = settings.VECTOR_EMBEDDING_BATCH_SIZE
+        try:
+            embeddings = provider.embed_batch(chunk_contents, batch_size=batch_size)
+        except Exception as e:
+            raise ExtractionException(
+                path=doc.path,
+                error_type=ErrorType.UNKNOWN,
+                message=f"Embedding batch generation failed: {type(e).__name__}: {e}",
+            ) from e
+
+        # Validate embedding count matches non-empty chunk count
+        if len(embeddings) != len(non_empty_chunks):
+            raise ExtractionException(
+                path=doc.path,
+                error_type=ErrorType.UNKNOWN,
+                message=f"Embedding provider returned {len(embeddings)} embeddings for {len(non_empty_chunks)} non-empty chunks",
+            )
+
+        # Return chunks and embeddings (without original indices)
+        chunks_list = [c for i, c in non_empty_chunks]
+        return (chunks_list, embeddings)
+
+    def _store_chunks_with_embeddings(
+        self,
+        doc: ExtractedDocument,
+        chunks: list,
+        embeddings_data: tuple[list, list[list[float]]],
+        ingestor: MemgraphIngestor,
+    ) -> int:
+        """Store chunks with pre-computed embeddings.
+
+        Args:
+            doc: Extracted document
+            chunks: Original chunk list (for reference)
+            embeddings_data: Tuple of (non_empty_chunks, embeddings) from _prepare_embeddings
+            ingestor: MemgraphIngestor instance
+
+        Returns:
+            Number of chunks stored
+        """
+        non_empty_chunks, embeddings = embeddings_data
+
+        if not non_empty_chunks:
+            return 0
+
+        for chunk, embedding in zip(non_empty_chunks, embeddings):
+            ingestor.ensure_node_batch(
+                cs.NodeLabel.CHUNK.value,
+                {
+                    cs.UniqueKeyType.QUALIFIED_NAME.value: chunk.qualified_name,
+                    "workspace": self.workspace,
+                    "content": chunk.content,
+                    "token_count": chunk.token_count,
+                    "section_title": chunk.section_title,
+                    "start_line": chunk.start_line,
+                    "end_line": chunk.end_line,
+                    "embedding": embedding,
+                },
+            )
+            ingestor.ensure_relationship_batch(
+                (cs.NodeLabel.DOCUMENT.value, cs.UniqueKeyType.PATH.value, doc.path),
+                cs.RelationshipType.CONTAINS_CHUNK.value,
+                (cs.NodeLabel.CHUNK.value, cs.UniqueKeyType.QUALIFIED_NAME.value, chunk.qualified_name),
+            )
+
+        return len(non_empty_chunks)
 
     def _generate_and_store_embeddings(
         self, doc: ExtractedDocument, ingestor: MemgraphIngestor
