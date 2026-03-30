@@ -624,16 +624,30 @@ class DocumentGraphUpdater:
         # Track if we'll create a synthetic section (for section_count accuracy)
         will_create_synthetic = not doc.sections and doc.content and doc.content.strip()
 
+        # Check for preamble content (content before first section)
+        preamble_line_count = 0
+        has_preamble = False
+        if doc.sections:
+            first_section_start = doc.sections[0].start_line
+            if first_section_start > 0:
+                lines = doc.content.split("\n")
+                preamble_content = "\n".join(lines[:first_section_start])
+                if preamble_content.strip():
+                    has_preamble = True
+                    preamble_line_count = first_section_start
+
         # Create Document node
         # Note: section_count includes synthetic sections for plain text files
         # and counts ALL sections (root + nested) for accurate total
+        # Also includes preamble section if present
+        preamble_count = 1 if has_preamble else 0
         ingestor.ensure_node_batch(
             cs.NodeLabel.DOCUMENT.value,
             {
                 cs.UniqueKeyType.PATH.value: doc.path,
                 "workspace": self.workspace,
                 "file_type": doc.file_type,
-                "section_count": doc.total_section_count() + (1 if will_create_synthetic else 0),
+                "section_count": doc.total_section_count() + (1 if will_create_synthetic else 0) + preamble_count,
                 "code_block_count": len(doc.code_blocks),
                 "code_references": doc.code_references,
                 "word_count": doc.word_count,
@@ -642,6 +656,39 @@ class DocumentGraphUpdater:
                 "content_hash": doc.content_hash,
             },
         )
+
+        # Create preamble section if there's content before the first section
+        if has_preamble:
+            lines = doc.content.split("\n")
+            preamble_content = "\n".join(lines[:preamble_line_count])
+            preamble_qn = f"{doc.path}#synthetic:Preamble"
+            logger.debug(f"Creating preamble section for {doc.path} ({preamble_line_count} lines)")
+            ingestor.ensure_node_batch(
+                cs.NodeLabel.SECTION.value,
+                {
+                    cs.UniqueKeyType.QUALIFIED_NAME.value: preamble_qn,
+                    "workspace": self.workspace,
+                    "title": "Preamble",
+                    "level": 0,  # Level 0 to indicate it's before the document structure
+                    "start_line": 0,
+                    "end_line": preamble_line_count - 1,
+                    "content_snippet": preamble_content[:500],
+                    "indexed_at": indexed_at,
+                },
+            )
+            ingestor.ensure_relationship_batch(
+                (cs.NodeLabel.DOCUMENT.value, cs.UniqueKeyType.PATH.value, doc.path),
+                cs.RelationshipType.CONTAINS_SECTION.value,
+                (cs.NodeLabel.SECTION.value, cs.UniqueKeyType.QUALIFIED_NAME.value, preamble_qn),
+            )
+            all_section_info.append({
+                "qualified_name": preamble_qn,
+                "title": "Preamble",
+                "start_line": 0,
+                "end_line": preamble_line_count - 1,
+                "level": 0,
+            })
+            stats["sections"] += 1
 
         # Create Section nodes and relationships, collect section info
         for section in doc.sections:

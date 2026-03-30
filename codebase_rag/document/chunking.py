@@ -211,6 +211,7 @@ class SemanticDocumentChunker:
 
         Note:
             Stops yielding after MAX_CHUNKS_PER_DOCUMENT to prevent memory exhaustion.
+            Handles preamble (content before first section) by chunking it separately.
         """
         # Use a mutable counter to track chunk index across recursive calls
         chunk_counter = [0]  # Use list for mutable reference
@@ -226,6 +227,24 @@ class SemanticDocumentChunker:
                     return
                 yield chunk
             return
+
+        # Handle preamble content (content before first section)
+        first_section_start = doc.sections[0].start_line
+        if first_section_start > 0:
+            # Extract preamble content
+            lines = doc.content.split("\n")
+            preamble_lines = lines[:first_section_start]
+            preamble_content = "\n".join(preamble_lines)
+            if preamble_content.strip():
+                logger.debug(f"Chunking preamble content ({first_section_start} lines) for {doc.path}")
+                for chunk in self._chunk_plain_text(preamble_content, doc.path, chunk_counter):
+                    if chunk_counter[0] >= self.MAX_CHUNKS_PER_DOCUMENT:
+                        logger.warning(
+                            f"Document {doc.path} reached MAX_CHUNKS_PER_DOCUMENT ({self.MAX_CHUNKS_PER_DOCUMENT}) "
+                            "limit. Some content may not be indexed."
+                        )
+                        return
+                    yield chunk
 
         for section in doc.sections:
             for chunk in self._chunk_section_recursive(section, doc.path, chunk_counter):
