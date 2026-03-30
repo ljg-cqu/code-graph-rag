@@ -422,6 +422,9 @@ class DocumentGraphUpdater:
         # Extract content
         doc = extractor.extract(file_path)
 
+        # Delete existing nodes for this document (clean old data with wrong format)
+        self._delete_document_nodes(doc.path, ingestor)
+
         # Store document and sections in graph
         store_stats = self._store_document(doc, ingestor)
 
@@ -436,6 +439,57 @@ class DocumentGraphUpdater:
             f"Indexed {file_path}: {store_stats['sections']} sections, {chunk_count} chunks"
         )
         return "indexed"
+
+    def _delete_document_nodes(self, doc_path: str, ingestor: MemgraphIngestor) -> None:
+        """
+        Delete existing Section and Chunk nodes for a document.
+
+        This ensures clean re-indexing without duplicates or stale data.
+        Handles both old-format (#{title}) and new-format (#L{line}:{title}) nodes.
+
+        Args:
+            doc_path: Document path to clean up
+            ingestor: MemgraphIngestor instance
+        """
+        # Delete all Sections connected to this document (any format)
+        ingestor.execute_write(
+            """
+            MATCH (d:Document {path: $path})-[:CONTAINS_SECTION]->(s:Section)
+            DETACH DELETE s
+            """,
+            {"path": doc_path},
+        )
+
+        # Delete all Chunks connected to this document
+        ingestor.execute_write(
+            """
+            MATCH (d:Document {path: $path})-[:CONTAINS_CHUNK]->(c:Chunk)
+            DETACH DELETE c
+            """,
+            {"path": doc_path},
+        )
+
+        # Also delete orphaned sections/chunks that might match by path prefix
+        # (handles old data where document node might not exist)
+        ingestor.execute_write(
+            """
+            MATCH (s:Section)
+            WHERE s.qualified_name STARTS WITH $path_prefix
+            DETACH DELETE s
+            """,
+            {"path_prefix": f"{doc_path}#"},
+        )
+
+        ingestor.execute_write(
+            """
+            MATCH (c:Chunk)
+            WHERE c.qualified_name STARTS WITH $path_prefix
+            DETACH DELETE c
+            """,
+            {"path_prefix": f"{doc_path}#"},
+        )
+
+        logger.debug(f"Cleaned existing nodes for document: {doc_path}")
 
     async def _process_document_async(
         self,
@@ -460,6 +514,9 @@ class DocumentGraphUpdater:
 
         # Async extraction
         doc = await extractor.extract_async(file_path)
+
+        # Delete existing nodes for this document (clean old data)
+        await asyncio.to_thread(self._delete_document_nodes, doc.path, ingestor)
 
         # Store and embed (run in thread to avoid blocking)
         store_stats = await asyncio.to_thread(self._store_document, doc, ingestor)

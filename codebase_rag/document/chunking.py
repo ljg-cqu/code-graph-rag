@@ -77,6 +77,19 @@ class SemanticDocumentChunker:
         # Fallback: approximate
         return int(len(text.split()) / 0.75)
 
+    def _count_lines(self, text: str) -> int:
+        """Count number of lines in text (newline characters + 1)."""
+        if not text:
+            return 0
+        return text.count("\n") + 1
+
+    def _find_line_offset(self, content: str, position: int) -> int:
+        """Find the line number at a given character position in content."""
+        if position <= 0:
+            return 0
+        # Count newlines before the position
+        return content[:position].count("\n") + 1
+
     def chunk_document(self, doc: ExtractedDocument) -> Iterator[DocumentChunk]:
         """
         Chunk document by semantic boundaries.
@@ -123,25 +136,34 @@ class SemanticDocumentChunker:
     def _split_by_paragraphs(
         self, section: ExtractedSection, doc_path: str, start_index: int
     ) -> Iterator[DocumentChunk]:
-        """Split large sections by paragraph boundaries."""
+        """Split large sections by paragraph boundaries with line tracking."""
         paragraphs = section.content.split("\n\n")
         current_chunk: list[str] = []
         current_tokens = 0
         chunk_index = start_index
-        start_line = section.start_line
+        current_line_start = section.start_line
+
+        # Track position in original content for line number calculation
+        content_position = 0
 
         for para in paragraphs:
             para_tokens = self.count_tokens(para)
+
+            # Calculate line offset for this paragraph in original content
+            para_start_line = section.start_line + self._find_line_offset(
+                section.content, content_position
+            )
 
             # Handle very long paragraphs
             if para_tokens > self.max_tokens:
                 # Flush current chunk first
                 if current_chunk:
+                    chunk_content = "\n\n".join(current_chunk)
                     yield DocumentChunk(
-                        content="\n\n".join(current_chunk),
+                        content=chunk_content,
                         section_title=section.title,
-                        start_line=start_line,
-                        end_line=start_line + len("\n\n".join(current_chunk).split("\n")),
+                        start_line=current_line_start,
+                        end_line=current_line_start + self._count_lines(chunk_content) - 1,
                         token_count=current_tokens,
                         document_path=doc_path,
                         chunk_index=chunk_index,
@@ -150,20 +172,24 @@ class SemanticDocumentChunker:
                     current_chunk = []
                     current_tokens = 0
 
-                # Split long paragraph by sentences
+                # Split long paragraph by sentences - pass start line for tracking
                 yield from self._split_long_paragraph(
-                    para, section.title, doc_path, chunk_index
+                    para, section.title, doc_path, chunk_index, para_start_line
                 )
                 chunk_index += 1  # Account for yielded chunks
+
+                # Update content position and line tracking
+                content_position += len(para) + 2  # +2 for "\n\n" separator
                 continue
 
             if current_tokens + para_tokens > self.max_tokens and current_chunk:
                 # Flush current chunk
+                chunk_content = "\n\n".join(current_chunk)
                 yield DocumentChunk(
-                    content="\n\n".join(current_chunk),
+                    content=chunk_content,
                     section_title=section.title,
-                    start_line=start_line,
-                    end_line=start_line + len("\n\n".join(current_chunk).split("\n")),
+                    start_line=current_line_start,
+                    end_line=current_line_start + self._count_lines(chunk_content) - 1,
                     token_count=current_tokens,
                     document_path=doc_path,
                     chunk_index=chunk_index,
@@ -178,22 +204,37 @@ class SemanticDocumentChunker:
                     if overlap_tokens <= self.overlap_tokens:
                         current_chunk = [overlap_para, para]
                         current_tokens = overlap_tokens + para_tokens
+                        # Adjust line start for overlap
+                        overlap_len = len(overlap_para) + 2
+                        content_pos_for_overlap = content_position - overlap_len
+                        current_line_start = section.start_line + self._find_line_offset(
+                            section.content, max(0, content_pos_for_overlap)
+                        )
                     else:
                         current_chunk = [para]
                         current_tokens = para_tokens
+                        current_line_start = para_start_line
                 else:
                     current_chunk = [para]
                     current_tokens = para_tokens
+                    current_line_start = para_start_line
             else:
+                if not current_chunk:
+                    # First paragraph in chunk - set line start
+                    current_line_start = para_start_line
                 current_chunk.append(para)
                 current_tokens += para_tokens
 
+            # Update content position for next paragraph
+            content_position += len(para) + 2  # +2 for "\n\n" separator
+
         # Flush remaining
         if current_chunk:
+            chunk_content = "\n\n".join(current_chunk)
             yield DocumentChunk(
-                content="\n\n".join(current_chunk),
+                content=chunk_content,
                 section_title=section.title,
-                start_line=start_line,
+                start_line=current_line_start,
                 end_line=section.end_line,
                 token_count=current_tokens,
                 document_path=doc_path,
@@ -201,9 +242,9 @@ class SemanticDocumentChunker:
             )
 
     def _split_long_paragraph(
-        self, para: str, section_title: str, doc_path: str, start_index: int
+        self, para: str, section_title: str, doc_path: str, start_index: int, para_start_line: int = 0
     ) -> Iterator[DocumentChunk]:
-        """Split a very long paragraph by sentences."""
+        """Split a very long paragraph by sentences with line tracking."""
         # Simple sentence split on punctuation followed by space
         import re
 
@@ -211,16 +252,24 @@ class SemanticDocumentChunker:
         current_chunk: list[str] = []
         current_tokens = 0
         chunk_index = start_index
+        para_position = 0  # Track position within paragraph for line calculation
 
         for sentence in sentences:
             sent_tokens = self.count_tokens(sentence)
 
+            # Calculate line offset for this sentence in the paragraph
+            sent_start_line = para_start_line + self._find_line_offset(para, para_position)
+            sent_end_line = sent_start_line + self._count_lines(sentence) - 1
+
             if current_tokens + sent_tokens > self.max_tokens and current_chunk:
+                # Use the start line of the first sentence in the chunk
+                first_sent_pos = para_position - len(" ".join(current_chunk))
+                chunk_start_line = para_start_line + self._find_line_offset(para, max(0, first_sent_pos))
                 yield DocumentChunk(
                     content=" ".join(current_chunk),
                     section_title=section_title,
-                    start_line=0,
-                    end_line=0,
+                    start_line=chunk_start_line,
+                    end_line=chunk_start_line + self._count_lines(" ".join(current_chunk)) - 1,
                     token_count=current_tokens,
                     document_path=doc_path,
                     chunk_index=chunk_index,
@@ -232,12 +281,18 @@ class SemanticDocumentChunker:
                 current_chunk.append(sentence)
                 current_tokens += sent_tokens
 
+            # Update position for next sentence
+            para_position += len(sentence) + 1  # +1 for space separator
+
         if current_chunk:
+            # Calculate start line for the final chunk
+            first_sent_pos = para_position - len(" ".join(current_chunk))
+            chunk_start_line = para_start_line + self._find_line_offset(para, max(0, first_sent_pos))
             yield DocumentChunk(
                 content=" ".join(current_chunk),
                 section_title=section_title,
-                start_line=0,
-                end_line=0,
+                start_line=chunk_start_line,
+                end_line=chunk_start_line + self._count_lines(" ".join(current_chunk)) - 1,
                 token_count=current_tokens,
                 document_path=doc_path,
                 chunk_index=chunk_index,
@@ -246,21 +301,28 @@ class SemanticDocumentChunker:
     def _chunk_plain_text(
         self, content: str, doc_path: str, start_index: int
     ) -> Iterator[DocumentChunk]:
-        """Chunk plain text without sections."""
+        """Chunk plain text without sections with line tracking."""
         paragraphs = content.split("\n\n")
         current_chunk: list[str] = []
         current_tokens = 0
         chunk_index = start_index
+        current_line_start = 1  # Documents start from line 1
+        content_position = 0  # Track position in original content
 
         for para in paragraphs:
             para_tokens = self.count_tokens(para)
 
+            # Calculate line offset for this paragraph
+            para_start_line = 1 + self._find_line_offset(content, content_position)
+
             if current_tokens + para_tokens > self.max_tokens and current_chunk:
+                # Flush current chunk
+                chunk_content = "\n\n".join(current_chunk)
                 yield DocumentChunk(
-                    content="\n\n".join(current_chunk),
+                    content=chunk_content,
                     section_title="",
-                    start_line=0,
-                    end_line=0,
+                    start_line=current_line_start,
+                    end_line=current_line_start + self._count_lines(chunk_content) - 1,
                     token_count=current_tokens,
                     document_path=doc_path,
                     chunk_index=chunk_index,
@@ -268,16 +330,25 @@ class SemanticDocumentChunker:
                 chunk_index += 1
                 current_chunk = [para]
                 current_tokens = para_tokens
+                current_line_start = para_start_line
             else:
+                if not current_chunk:
+                    # First paragraph - set line start
+                    current_line_start = para_start_line
                 current_chunk.append(para)
                 current_tokens += para_tokens
 
+            # Update content position for next paragraph
+            content_position += len(para) + 2  # +2 for "\n\n" separator
+
         if current_chunk:
+            chunk_content = "\n\n".join(current_chunk)
+            total_lines = self._count_lines(content)
             yield DocumentChunk(
-                content="\n\n".join(current_chunk),
+                content=chunk_content,
                 section_title="",
-                start_line=0,
-                end_line=0,
+                start_line=current_line_start,
+                end_line=min(current_line_start + self._count_lines(chunk_content) - 1, total_lines),
                 token_count=current_tokens,
                 document_path=doc_path,
                 chunk_index=chunk_index,
