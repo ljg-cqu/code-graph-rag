@@ -305,9 +305,18 @@ class DocumentGraphUpdater:
         """Generate embeddings using existing provider system."""
         from ..config import settings
 
+        config = settings.active_embedding_config
         provider = get_embedding_provider(
-            provider=settings.EMBEDDING_PROVIDER,
-            model_id=settings.EMBEDDING_MODEL,
+            provider=config.provider,
+            model_id=config.model_id,
+            api_key=config.api_key,
+            endpoint=config.endpoint,
+            keep_alive=config.keep_alive,
+            project_id=config.project_id,
+            region=config.region,
+            provider_type=config.provider_type,
+            service_account_file=config.service_account_file,
+            device=config.device,
         )
 
         # Chunk document semantically
@@ -321,7 +330,8 @@ class DocumentGraphUpdater:
 
         # Embed all chunks
         chunk_contents = [c.content for c in chunks]
-        embeddings = provider.embed_batch(chunk_contents)
+        # Use batch_size=10 for OpenAI-compatible APIs (dashscope limit)
+        embeddings = provider.embed_batch(chunk_contents, batch_size=10)
 
         # Store chunk embeddings
         for chunk, embedding in zip(chunks, embeddings):
