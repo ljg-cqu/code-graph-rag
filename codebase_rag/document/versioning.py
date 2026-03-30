@@ -6,7 +6,9 @@ to avoid full re-indexing.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -161,11 +163,15 @@ class VersionCache:
             self._load(cache_path)
 
     def _load(self, path: Path) -> None:
-        """Load version cache from disk."""
-        import json
-
+        """Load version cache from disk with file locking."""
         try:
-            data = json.loads(path.read_text())
+            with open(path) as f:
+                fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+                try:
+                    data = json.loads(f.read())
+                finally:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
             for path_str, version_data in data.items():
                 self._cache[path_str] = DocumentVersion(
                     path=version_data["path"],
@@ -180,9 +186,7 @@ class VersionCache:
             self._cache = {}
 
     def save(self, path: Path | None = None) -> None:
-        """Save version cache to disk."""
-        import json
-
+        """Save version cache to disk with file locking."""
         save_path = path or self._cache_path
         if not save_path:
             return
@@ -198,7 +202,13 @@ class VersionCache:
                 "extractor_version": version.extractor_version,
             }
 
-        save_path.write_text(json.dumps(data, indent=2))
+        # Use file locking for thread safety
+        with open(save_path, "w") as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                f.write(json.dumps(data, indent=2))
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
     def get(self, path: str) -> DocumentVersion | None:
         """Get version for a path."""

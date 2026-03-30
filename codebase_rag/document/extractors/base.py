@@ -221,13 +221,16 @@ class BaseDocumentExtractor(ABC):
         unique_refs = list(dict.fromkeys(refs))[:50]
         return unique_refs
 
-    def _validate_path(self, file_path: Path, repo_root: Path | None = None) -> Path:
+    MAX_SYMLINK_DEPTH = 10
+
+    def _validate_path(self, file_path: Path, repo_root: Path | None = None, depth: int = 0) -> Path:
         """
         Validate path is safe and exists.
 
         Args:
             file_path: Path to validate
             repo_root: Optional repository root for path traversal check
+            depth: Current symlink recursion depth (internal use)
 
         Returns:
             Resolved path
@@ -235,6 +238,13 @@ class BaseDocumentExtractor(ABC):
         Raises:
             ExtractionException: If path is invalid or unsafe
         """
+        if depth > self.MAX_SYMLINK_DEPTH:
+            raise ExtractionException(
+                path=str(file_path),
+                error_type=ErrorType.PATH_TRAVERSAL,
+                message="Symlink chain too deep (potential cycle)",
+            )
+
         if not file_path.exists():
             raise ExtractionException(
                 path=str(file_path),
@@ -252,19 +262,30 @@ class BaseDocumentExtractor(ABC):
         resolved = file_path.resolve()
 
         # Path traversal check if repo_root provided
+        # Use proper path containment check (Python 3.9+)
         if repo_root:
             repo_resolved = repo_root.resolve()
-            if not str(resolved).startswith(str(repo_resolved)):
-                raise ExtractionException(
-                    path=str(file_path),
-                    error_type=ErrorType.PATH_TRAVERSAL,
-                    message=f"Path traversal detected: {file_path}",
-                )
+            try:
+                if not resolved.is_relative_to(repo_resolved):
+                    raise ExtractionException(
+                        path=str(file_path),
+                        error_type=ErrorType.PATH_TRAVERSAL,
+                        message=f"Path traversal detected: {file_path}",
+                    )
+            except (OSError, ValueError):
+                # Fallback for edge cases
+                try:
+                    resolved.relative_to(repo_resolved)
+                except ValueError:
+                    raise ExtractionException(
+                        path=str(file_path),
+                        error_type=ErrorType.PATH_TRAVERSAL,
+                        message=f"Path traversal detected: {file_path}",
+                    )
 
-        # Symlink check
+        # Symlink check - recursively validate with depth limit
         if resolved.is_symlink():
-            # Recursively validate symlink target
-            return self._validate_path(resolved.resolve(), repo_root)
+            return self._validate_path(resolved.resolve(), repo_root, depth + 1)
 
         return resolved
 

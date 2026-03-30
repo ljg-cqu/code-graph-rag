@@ -55,6 +55,16 @@ class MarkdownExtractor(BaseDocumentExtractor):
         # Validate path
         validated_path = self._validate_path(file_path)
 
+        # Check file size limit
+        max_size_mb = self.get_config("max_file_size_mb", 50)
+        file_size_mb = validated_path.stat().st_size / (1024 * 1024)
+        if file_size_mb > max_size_mb:
+            raise ExtractionException(
+                path=str(file_path),
+                error_type=ErrorType.FILE_TOO_LARGE,
+                message=f"File size ({file_size_mb:.1f}MB) exceeds limit ({max_size_mb}MB)",
+            )
+
         # Read file content
         try:
             content = validated_path.read_text(encoding="utf-8")
