@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Iterator
 from loguru import logger
 
 if TYPE_CHECKING:
+    from tiktoken import Encoding
     from .extractors.base import ExtractedDocument, ExtractedSection
 
 
@@ -118,7 +119,7 @@ class SemanticDocumentChunker:
         self.overlap_tokens = overlap_tokens
         self._encoder = None
 
-    def _get_encoder(self):
+    def _get_encoder(self) -> Encoding | None:
         """Lazy-load tiktoken encoder."""
         if self._encoder is None:
             try:
@@ -126,7 +127,7 @@ class SemanticDocumentChunker:
 
                 self._encoder = tiktoken.get_encoding(self.ENCODING_MODEL)
             except ImportError:
-                # Fallback: approximate tokens as words / 0.75
+                # Fallback: approximate tokens as words * 1.3
                 self._encoder = None
         return self._encoder
 
@@ -135,8 +136,9 @@ class SemanticDocumentChunker:
         encoder = self._get_encoder()
         if encoder:
             return len(encoder.encode(text))
-        # Fallback: approximate
-        return int(len(text.split()) / 0.75)
+        # Fallback: approximate tokens as words * 1.3 (cl100k_base ratio)
+        # This is a rough approximation - actual tokenization varies by content
+        return int(len(text.split()) * 1.3)
 
     def _reduce_segment_to_fit(self, segment: str) -> tuple[str, int]:
         """Reduce a segment until it fits within max_tokens.
@@ -327,20 +329,13 @@ class SemanticDocumentChunker:
         current_tokens = 0
         current_line = start_line
 
-        # Track line positions within content
-        line_positions = []
-        line_idx = 0
-        for i, char in enumerate(content):
-            if char == '\n':
-                line_idx += 1
-            line_positions.append(line_idx)
-
         for para in paragraphs:
             if not para.strip():
                 continue
 
             para_tokens = self.count_tokens(para)
-            sep_tokens = 1 if current_chunk else 0  # \n\n = ~1 token
+            # \n\n typically tokenizes as ~2 tokens in cl100k_base
+            sep_tokens = 2 if current_chunk else 0
 
             if current_tokens + sep_tokens + para_tokens <= self.max_tokens:
                 current_chunk.append(para)
@@ -570,203 +565,6 @@ class SemanticDocumentChunker:
                 chunk_index=chunk_counter[0],
             )
             chunk_counter[0] += 1
-
-    def _chunk_section(
-        self, section: ExtractedSection, doc_path: str, chunk_counter: list[int]
-    ) -> Iterator[DocumentChunk]:
-        """Chunk a single section, respecting token limits.
-
-        Line tracking note: section.start_line is the header line.
-        section.content starts at section.start_line + 1.
-        Chunk line numbers must account for this +1 offset.
-
-        Args:
-            section: Section to chunk
-            doc_path: Document path
-            chunk_counter: Mutable counter [current_index] for tracking unique chunk indices
-        """
-        # Skip sections with empty content
-        if not section.content or not section.content.strip():
-            return
-
-        tokens = self.count_tokens(section.content)
-
-        if tokens <= self.max_tokens:
-            # Section fits in one chunk
-            # Content starts at header line + 1
-            content_start_line = section.start_line + 1
-            yield DocumentChunk(
-                content=section.content,
-                section_title=section.title,
-                start_line=content_start_line,
-                end_line=section.end_line,
-                token_count=tokens,
-                document_path=doc_path,
-                chunk_index=chunk_counter[0],
-            )
-            chunk_counter[0] += 1
-        else:
-            # Split by paragraphs within section
-            yield from self._split_by_paragraphs(section, doc_path, chunk_counter)
-
-    def _split_by_paragraphs(
-        self, section: ExtractedSection, doc_path: str, chunk_counter: list[int]
-    ) -> Iterator[DocumentChunk]:
-        """Split large sections by paragraph boundaries with line tracking.
-
-        Line tracking note: section.start_line is the header line.
-        section.content starts at section.start_line + 1.
-        All chunk line numbers are relative to content, so we add +1 offset.
-
-        Args:
-            section: Section to split
-            doc_path: Document path
-            chunk_counter: Mutable counter [current_index] for tracking unique chunk indices
-        """
-        paragraphs = section.content.split("\n\n")
-        current_chunk: list[str] = []
-        current_tokens = 0  # Tokens including separator tokens
-        # Content starts at header line + 1
-        content_start_offset = section.start_line + 1
-        current_line_start = content_start_offset
-
-        # Track position in original content for line number calculation
-        content_position = 0
-
-        for para in paragraphs:
-            para_tokens = self.count_tokens(para)
-
-            # Calculate line offset for this paragraph in original content
-            # Use content_start_offset (header+1) as base
-            para_start_line = content_start_offset + self._find_line_offset(
-                section.content, content_position
-            )
-
-            # Handle very long paragraphs
-            if para_tokens > self.max_tokens:
-                # Flush current chunk first with validation
-                if current_chunk:
-                    chunk_content = "\n\n".join(current_chunk)
-                    actual_tokens = self.count_tokens(chunk_content)
-
-                    # Validate chunk doesn't exceed max_tokens
-                    if actual_tokens > self.max_tokens:
-                        yield from self._split_oversized_block(
-                            chunk_content, section.title, doc_path, chunk_counter,
-                            current_line_start, 0
-                        )
-                    else:
-                        yield DocumentChunk(
-                            content=chunk_content,
-                            section_title=section.title,
-                            start_line=current_line_start,
-                            end_line=current_line_start + self._count_lines(chunk_content) - 1,
-                            token_count=actual_tokens,
-                            document_path=doc_path,
-                            chunk_index=chunk_counter[0],
-                        )
-                        chunk_counter[0] += 1
-                    current_chunk = []
-                    current_tokens = 0
-
-                # Split long paragraph by sentences - pass counter for tracking
-                yield from self._split_long_paragraph(
-                    para, section.title, doc_path, chunk_counter, para_start_line, section.content, content_position
-                )
-
-                # Update content position and line tracking
-                content_position += len(para) + 2  # +2 for "\n\n" separator
-                continue
-
-            # Account for separator tokens in the split decision
-            # If current_chunk is not empty, adding para will add separator
-            separator_tokens = 2 if current_chunk else 0  # "\n\n" tokens
-            effective_tokens = current_tokens + separator_tokens + para_tokens
-
-            if effective_tokens > self.max_tokens and current_chunk:
-                # Flush current chunk with validation
-                chunk_content = "\n\n".join(current_chunk)
-                actual_tokens = self.count_tokens(chunk_content)
-
-                # Validate chunk doesn't exceed max_tokens
-                if actual_tokens > self.max_tokens:
-                    yield from self._split_oversized_block(
-                        chunk_content, section.title, doc_path, chunk_counter,
-                        current_line_start, 0
-                    )
-                else:
-                    yield DocumentChunk(
-                        content=chunk_content,
-                        section_title=section.title,
-                        start_line=current_line_start,
-                        end_line=current_line_start + self._count_lines(chunk_content) - 1,
-                        token_count=actual_tokens,
-                        document_path=doc_path,
-                        chunk_index=chunk_counter[0],
-                    )
-                    chunk_counter[0] += 1
-
-                # Start new chunk with overlap
-                if self.overlap_tokens > 0:  # current_chunk guaranteed non-empty here
-                    # Include last paragraph as overlap
-                    overlap_para = current_chunk[-1]
-                    overlap_tok = self.count_tokens(overlap_para)
-                    # Account for separator tokens
-                    sep_tokens = 2  # "\n\n" typically tokenizes as ~2 tokens
-                    combined_tokens = overlap_tok + sep_tokens + para_tokens
-
-                    # Only add overlap if it doesn't exceed max_tokens
-                    if overlap_tok <= self.overlap_tokens and combined_tokens <= self.max_tokens:
-                        current_chunk = [overlap_para, para]
-                        current_tokens = overlap_tok + sep_tokens + para_tokens
-                        # Adjust line start for overlap using content_start_offset
-                        overlap_len = len(overlap_para) + 2
-                        content_pos_for_overlap = content_position - overlap_len
-                        current_line_start = content_start_offset + self._find_line_offset(
-                            section.content, max(0, content_pos_for_overlap)
-                        )
-                    else:
-                        # Overlap would exceed limits, start fresh
-                        current_chunk = [para]
-                        current_tokens = para_tokens
-                        current_line_start = para_start_line
-                else:
-                    current_chunk = [para]
-                    current_tokens = para_tokens
-                    current_line_start = para_start_line
-            else:
-                if not current_chunk:
-                    # First paragraph - set line start
-                    current_line_start = para_start_line
-                current_chunk.append(para)
-                current_tokens += separator_tokens + para_tokens
-
-            # Update content position for next paragraph
-            content_position += len(para) + 2  # +2 for "\n\n" separator
-
-        # Flush remaining
-        if current_chunk:
-            chunk_content = "\n\n".join(current_chunk)
-            actual_tokens = self.count_tokens(chunk_content)
-
-            # P0 FIX: Validate final chunk doesn't exceed max_tokens
-            if actual_tokens > self.max_tokens:
-                # Use _split_oversized_block for any oversized final chunk
-                yield from self._split_oversized_block(
-                    chunk_content, section.title, doc_path, chunk_counter,
-                    current_line_start, 0
-                )
-            else:
-                yield DocumentChunk(
-                    content=chunk_content,
-                    section_title=section.title,
-                    start_line=current_line_start,
-                    end_line=current_line_start + self._count_lines(chunk_content) - 1,
-                    token_count=actual_tokens,
-                    document_path=doc_path,
-                    chunk_index=chunk_counter[0],
-                )
-                chunk_counter[0] += 1
 
     def _split_long_paragraph(
         self, para: str, section_title: str, doc_path: str, chunk_counter: list[int],

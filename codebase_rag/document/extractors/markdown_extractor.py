@@ -11,6 +11,8 @@ import re
 from datetime import UTC, datetime
 from pathlib import Path
 
+from loguru import logger
+
 from .base import (
     BaseDocumentExtractor,
     ExtractedDocument,
@@ -71,13 +73,14 @@ class MarkdownExtractor(BaseDocumentExtractor):
             content = validated_path.read_text(encoding="utf-8")
         except UnicodeDecodeError as e:
             # Try with latin-1 as fallback
+            logger.debug(f"UTF-8 decoding failed for {file_path}, trying latin-1 fallback")
             try:
                 content = validated_path.read_text(encoding="latin-1")
-            except Exception:
+            except (UnicodeDecodeError, OSError) as fallback_error:
                 raise ExtractionException(
                     path=str(file_path),
                     error_type=ErrorType.ENCODING_ERROR,
-                    message=f"Cannot decode file: {e}",
+                    message=f"Cannot decode file (UTF-8 error: {e}, fallback error: {fallback_error})",
                 )
         except PermissionError as e:
             raise ExtractionException(
@@ -106,6 +109,11 @@ class MarkdownExtractor(BaseDocumentExtractor):
         code_blocks = self._extract_code_blocks(content)
         code_references = self._extract_code_references(content)
         word_count = len(content.split())
+
+        logger.debug(
+            f"Extracted {file_path}: {len(sections)} sections, "
+            f"{len(code_blocks)} code blocks, {word_count} words"
+        )
 
         return ExtractedDocument(
             path=str(file_path),

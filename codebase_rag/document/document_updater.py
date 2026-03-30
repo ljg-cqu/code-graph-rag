@@ -6,6 +6,7 @@ Pattern follows GraphUpdater from codebase_rag/graph_updater.py
 from __future__ import annotations
 
 import asyncio
+import math
 import re
 from datetime import UTC, datetime
 from pathlib import Path
@@ -246,9 +247,9 @@ class DocumentGraphUpdater:
                     "MATCH (c:Chunk {workspace: $ws}) RETURN count(c) as count",
                     {"ws": self.workspace}
                 )
-                if section_result:
+                if section_result and len(section_result) > 0:
                     stats["sections_created"] = section_result[0].get("count", 0)
-                if chunk_result:
+                if chunk_result and len(chunk_result) > 0:
                     stats["chunks_created"] = chunk_result[0].get("count", 0)
             except Exception as e:
                 logger.warning(f"Could not query stats from graph: {e}")
@@ -344,9 +345,9 @@ class DocumentGraphUpdater:
                     "MATCH (c:Chunk {workspace: $ws}) RETURN count(c) as count",
                     {"ws": self.workspace}
                 )
-                if section_result:
+                if section_result and len(section_result) > 0:
                     stats["sections_created"] = section_result[0].get("count", 0)
-                if chunk_result:
+                if chunk_result and len(chunk_result) > 0:
                     stats["chunks_created"] = chunk_result[0].get("count", 0)
             except Exception as e:
                 logger.warning(f"Could not query stats from graph: {e}")
@@ -839,7 +840,6 @@ class DocumentGraphUpdater:
             )
 
         # Validate embedding quality (check for NaN, None, and zero vectors)
-        import math
         validated_embeddings = []
         for i, embedding in enumerate(embeddings):
             if embedding is None:
@@ -894,9 +894,17 @@ class DocumentGraphUpdater:
         if not non_empty_chunks:
             return 0
 
+        # Safety check: ensure we have sections for chunk-to-section mapping
+        if not section_info:
+            logger.error(
+                f"No sections available for chunks in {doc.path}. "
+                "This indicates a bug in section creation. Skipping chunk storage."
+            )
+            return 0
+
         # Determine fallback section for chunks that don't match any section
         # (shouldn't happen with synthetic section creation, but safety fallback)
-        fallback_section = section_info[0] if section_info else None
+        fallback_section = section_info[0]
 
         for chunk, embedding in zip(non_empty_chunks, embeddings):
             ingestor.ensure_node_batch(
@@ -928,8 +936,9 @@ class DocumentGraphUpdater:
                     cs.RelationshipType.BELONGS_TO_SECTION.value,
                     (cs.NodeLabel.SECTION.value, cs.UniqueKeyType.QUALIFIED_NAME.value, matching_section["qualified_name"]),
                 )
-            elif fallback_section:
+            else:
                 # Fallback: Use first section (typically synthetic section for plain text)
+                # This branch is reached when matching_section is None
                 logger.warning(
                     f"Chunk {chunk.qualified_name} has no overlapping section, "
                     f"using fallback section: {fallback_section['qualified_name']}"
@@ -938,12 +947,6 @@ class DocumentGraphUpdater:
                     (cs.NodeLabel.CHUNK.value, cs.UniqueKeyType.QUALIFIED_NAME.value, chunk.qualified_name),
                     cs.RelationshipType.BELONGS_TO_SECTION.value,
                     (cs.NodeLabel.SECTION.value, cs.UniqueKeyType.QUALIFIED_NAME.value, fallback_section["qualified_name"]),
-                )
-            else:
-                # This should never happen - indicates a bug in section creation
-                logger.error(
-                    f"Chunk {chunk.qualified_name} has no BELONGS_TO_SECTION relationship "
-                    f"and no fallback section available. This is a bug."
                 )
 
         return len(non_empty_chunks)
