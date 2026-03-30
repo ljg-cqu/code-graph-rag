@@ -32,6 +32,17 @@ class ExtractedSection:
     content: str
     subsections: list[ExtractedSection] = field(default_factory=list)
 
+    def count_all_subsections(self) -> int:
+        """Recursively count all nested subsections.
+
+        Returns:
+            Total count of nested subsections (not including this section)
+        """
+        count = len(self.subsections)
+        for subsection in self.subsections:
+            count += subsection.count_all_subsections()
+        return count
+
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization."""
         return {
@@ -62,6 +73,17 @@ class ExtractedDocument:
         """Compute content hash if not provided."""
         if not self.content_hash:
             self.content_hash = hashlib.sha256(self.content.encode()).hexdigest()
+
+    def total_section_count(self) -> int:
+        """Count all sections including nested subsections.
+
+        Returns:
+            Total count of all sections (root + nested)
+        """
+        count = len(self.sections)
+        for section in self.sections:
+            count += section.count_all_subsections()
+        return count
 
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization."""

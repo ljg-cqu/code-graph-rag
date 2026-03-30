@@ -625,13 +625,14 @@ class DocumentGraphUpdater:
 
         # Create Document node
         # Note: section_count includes synthetic sections for plain text files
+        # and counts ALL sections (root + nested) for accurate total
         ingestor.ensure_node_batch(
             cs.NodeLabel.DOCUMENT.value,
             {
                 cs.UniqueKeyType.PATH.value: doc.path,
                 "workspace": self.workspace,
                 "file_type": doc.file_type,
-                "section_count": len(doc.sections) + (1 if will_create_synthetic else 0),
+                "section_count": doc.total_section_count() + (1 if will_create_synthetic else 0),
                 "code_block_count": len(doc.code_blocks),
                 "code_references": doc.code_references,
                 "word_count": doc.word_count,

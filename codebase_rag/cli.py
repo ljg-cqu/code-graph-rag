@@ -762,6 +762,9 @@ def index_docs(
     repo_path: str | None = typer.Option(
         None, "--repo-path", help=ch.HELP_REPO_PATH_RETRIEVAL
     ),
+    force: bool = typer.Option(
+        False, "--force", "-f", help="Force re-indexing (ignore version cache)"
+    ),
 ) -> None:
     """Index documents into the document graph."""
     from .document.document_updater import DocumentGraphUpdater
@@ -777,7 +780,7 @@ def index_docs(
             port=settings.DOC_MEMGRAPH_PORT,
             repo_path=repo_to_index,
         )
-        stats = updater.run()
+        stats = updater.run(force=force)
 
         table = Table(
             title=style("Document Indexing Results", cs.Color.GREEN),
