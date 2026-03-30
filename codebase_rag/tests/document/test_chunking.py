@@ -550,9 +550,9 @@ class TestLineTrackingAccuracy:
 
         chunks = list(chunker.chunk_document(doc))
         assert len(chunks) == 1
-        # Chunk should use section's line numbers
-        assert chunks[0].start_line == 10
-        assert chunks[0].end_line <= 20
+        # Chunk content starts after header line, so start_line = section.start_line + 1
+        assert chunks[0].start_line == 11  # Header at line 10, content at line 11
+        assert chunks[0].end_line == 20
 
 
 class TestEdgeCaseHandling:

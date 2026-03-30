@@ -209,7 +209,12 @@ class SemanticDocumentChunker:
     def _chunk_section(
         self, section: ExtractedSection, doc_path: str, start_index: int
     ) -> Iterator[DocumentChunk]:
-        """Chunk a single section, respecting token limits."""
+        """Chunk a single section, respecting token limits.
+
+        Line tracking note: section.start_line is the header line.
+        section.content starts at section.start_line + 1.
+        Chunk line numbers must account for this +1 offset.
+        """
         # Skip sections with empty content
         if not section.content or not section.content.strip():
             return
@@ -218,10 +223,12 @@ class SemanticDocumentChunker:
 
         if tokens <= self.max_tokens:
             # Section fits in one chunk
+            # Content starts at header line + 1
+            content_start_line = section.start_line + 1
             yield DocumentChunk(
                 content=section.content,
                 section_title=section.title,
-                start_line=section.start_line,
+                start_line=content_start_line,
                 end_line=section.end_line,
                 token_count=tokens,
                 document_path=doc_path,
@@ -234,12 +241,19 @@ class SemanticDocumentChunker:
     def _split_by_paragraphs(
         self, section: ExtractedSection, doc_path: str, start_index: int
     ) -> Iterator[DocumentChunk]:
-        """Split large sections by paragraph boundaries with line tracking."""
+        """Split large sections by paragraph boundaries with line tracking.
+
+        Line tracking note: section.start_line is the header line.
+        section.content starts at section.start_line + 1.
+        All chunk line numbers are relative to content, so we add +1 offset.
+        """
         paragraphs = section.content.split("\n\n")
         current_chunk: list[str] = []
         current_tokens = 0  # Tokens including separator tokens
         chunk_index = start_index
-        current_line_start = section.start_line
+        # Content starts at header line + 1
+        content_start_offset = section.start_line + 1
+        current_line_start = content_start_offset
 
         # Track position in original content for line number calculation
         content_position = 0
@@ -248,7 +262,8 @@ class SemanticDocumentChunker:
             para_tokens = self.count_tokens(para)
 
             # Calculate line offset for this paragraph in original content
-            para_start_line = section.start_line + self._find_line_offset(
+            # Use content_start_offset (header+1) as base
+            para_start_line = content_start_offset + self._find_line_offset(
                 section.content, content_position
             )
 
@@ -337,10 +352,10 @@ class SemanticDocumentChunker:
                     if overlap_tok <= self.overlap_tokens and combined_tokens <= self.max_tokens:
                         current_chunk = [overlap_para, para]
                         current_tokens = overlap_tok + sep_tokens + para_tokens
-                        # Adjust line start for overlap
+                        # Adjust line start for overlap using content_start_offset
                         overlap_len = len(overlap_para) + 2
                         content_pos_for_overlap = content_position - overlap_len
-                        current_line_start = section.start_line + self._find_line_offset(
+                        current_line_start = content_start_offset + self._find_line_offset(
                             section.content, max(0, content_pos_for_overlap)
                         )
                     else:
