@@ -187,6 +187,7 @@ class DocumentGraphUpdater:
         ) as ingestor:
             ingestor.ensure_constraints()
             self._ensure_vector_index(ingestor)
+            self._ensure_document_indexes(ingestor)
             documents = self._collect_documents()
             stats["total_documents"] = len(documents)
 
@@ -281,6 +282,8 @@ class DocumentGraphUpdater:
             batch_size=self.batch_size,
         ) as ingestor:
             await asyncio.to_thread(ingestor.ensure_constraints)
+            await asyncio.to_thread(self._ensure_vector_index, ingestor)
+            await asyncio.to_thread(self._ensure_document_indexes, ingestor)
             documents = await asyncio.to_thread(self._collect_documents)
             stats["total_documents"] = len(documents)
 
@@ -367,10 +370,23 @@ class DocumentGraphUpdater:
 
         Vector indexes enable efficient similarity search on embeddings.
         Uses Memgraph's CREATE VECTOR INDEX syntax with capacity from config.
+
+        Raises:
+            ExtractionException: If embedding dimension is invalid (0 or negative).
         """
         # Use the embedding provider's dimension property (already has correct mapping)
         # The provider's dimension is determined from known model dimensions
         dimension = self._embedding_provider.dimension
+
+        # Validate embedding dimension before creating index
+        if not dimension or dimension <= 0:
+            raise ExtractionException(
+                path=str(self.repo_path),
+                error_type=ErrorType.EMBEDDING_ERROR,
+                message=f"Invalid embedding dimension: {dimension}. "
+                f"Provider '{self._embedding_provider.provider}' returned invalid dimension. "
+                f"Check EMBEDDING_MODEL configuration.",
+            )
 
         capacity = settings.DOC_MEMGRAPH_VECTOR_CAPACITY
         index_name = settings.DOC_MEMGRAPH_VECTOR_INDEX_NAME
@@ -395,6 +411,38 @@ class DocumentGraphUpdater:
             else:
                 logger.error(f"Failed to create vector index '{index_name}': {e}")
                 # Non-fatal: indexing can proceed without vector index
+
+    def _ensure_document_indexes(self, ingestor: MemgraphIngestor) -> None:
+        """Create indexes for document graph queries.
+
+        Creates indexes for:
+        - workspace property on Document, Section, Chunk nodes (multi-tenant queries)
+        - start_line property on Section, Chunk nodes (ORDER BY queries)
+
+        Note: These are non-unique indexes for query performance.
+        """
+        index_specs = [
+            ("Document", "workspace"),
+            ("Section", "workspace"),
+            ("Chunk", "workspace"),
+            ("Section", "start_line"),
+            ("Chunk", "start_line"),
+        ]
+
+        for label, prop in index_specs:
+            try:
+                cypher = f"CREATE INDEX ON :{label}({prop});"
+                ingestor.execute_write(cypher, {})
+                logger.debug(f"Created index on :{label}({prop})")
+            except Exception as e:
+                error_str = str(e).lower()
+                if "already exists" in error_str or "duplicate" in error_str:
+                    logger.debug(f"Index on :{label}({prop}) already exists")
+                else:
+                    logger.warning(f"Failed to create index on :{label}({prop}): {e}")
+                    # Non-fatal: indexing can proceed without these indexes
+
+        logger.info("Document graph indexes ensured")
 
     def _collect_documents(self) -> list[Path]:
         """Collect all eligible document files."""
@@ -889,7 +937,8 @@ class DocumentGraphUpdater:
                 message=f"Embedding provider returned {len(embeddings)} embeddings for {len(non_empty_chunks)} non-empty chunks",
             )
 
-        # Validate embedding quality (check for NaN, None, and zero vectors)
+        # Validate embedding quality (check for NaN, None, zero vectors, and dimension mismatch)
+        expected_dimension = self._embedding_provider.dimension
         validated_embeddings = []
         for i, embedding in enumerate(embeddings):
             if embedding is None:
@@ -897,6 +946,15 @@ class DocumentGraphUpdater:
                     path=doc.path,
                     error_type=ErrorType.EMBEDDING_ERROR,
                     message=f"Embedding provider returned None for chunk {i}",
+                )
+            # Check for dimension mismatch
+            if expected_dimension and len(embedding) != expected_dimension:
+                raise ExtractionException(
+                    path=doc.path,
+                    error_type=ErrorType.EMBEDDING_ERROR,
+                    message=f"Embedding dimension mismatch for chunk {i}: "
+                    f"expected {expected_dimension}, got {len(embedding)}. "
+                    f"Check that EMBEDDING_MODEL matches the vector index configuration.",
                 )
             # Check for NaN values
             if any(isinstance(v, float) and math.isnan(v) for v in embedding):

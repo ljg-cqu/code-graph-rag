@@ -39,10 +39,19 @@ def document_semantic_search(
     Returns:
         List of matching chunks with similarity scores
     """
-    # Get embedding for query
+    # Get embedding for query using active embedding config
+    config = settings.active_embedding_config
     provider = get_embedding_provider(
-        provider=settings.EMBEDDING_PROVIDER,
-        model_id=settings.EMBEDDING_MODEL,
+        provider=config.provider,
+        model_id=config.model_id,
+        api_key=config.api_key,
+        endpoint=config.endpoint,
+        keep_alive=config.keep_alive,
+        project_id=config.project_id,
+        region=config.region,
+        provider_type=config.provider_type,
+        service_account_file=config.service_account_file,
+        device=config.device,
     )
     query_embedding = provider.embed(query)
 
