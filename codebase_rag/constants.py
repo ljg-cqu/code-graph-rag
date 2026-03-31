@@ -1054,6 +1054,7 @@ IGNORE_PATTERNS = frozenset(
         "coverage",
         "dist",
         "env",
+        "grammars",  # Tree-sitter grammar submodules (not user code)
         "htmlcov",
         "node_modules",
         "obj",
