@@ -163,7 +163,7 @@ class ValidationTriggerAPI:
         if request.scope == "all":
             estimated_claims = doc_stats.get("estimated_claims", 10)
         elif request.scope == "sections":
-            estimated_claims = doc_stats.get("section_count", 5) * 2
+            estimated_claims = doc_stats.get("total_section_count", 5) * 2
         else:
             estimated_claims = 3  # Single claim validation
 
@@ -190,11 +190,12 @@ class ValidationTriggerAPI:
 
     async def _get_document_stats(self, document_path: str) -> dict:
         """Get document statistics from graph (no LLM)."""
-        # Query graph for: section_count, code_reference_count, word_count
+        # Query graph for: total_section_count, code_reference_count, word_count
+        # Note: total_section_count includes all nested sections (root + subsections)
         # These are stored at index time, not computed here
         # TODO: Implement actual graph query
         return {
-            "section_count": 5,
+            "total_section_count": 5,
             "estimated_claims": 10,
             "word_count": 1000,
         }

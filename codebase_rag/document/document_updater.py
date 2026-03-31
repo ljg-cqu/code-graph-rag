@@ -422,9 +422,11 @@ class DocumentGraphUpdater:
         Creates indexes for:
         - workspace property on Document, Section, Chunk nodes (multi-tenant queries)
         - start_line property on Section, Chunk nodes (ORDER BY queries)
+        - Composite indexes for workspace+start_line (optimized query patterns)
 
         Note: These are non-unique indexes for query performance.
         """
+        # Single-property indexes
         index_specs = [
             ("Document", "workspace"),
             ("Section", "workspace"),
@@ -444,6 +446,27 @@ class DocumentGraphUpdater:
                     logger.debug(f"Index on :{label}({prop}) already exists")
                 else:
                     logger.warning(f"Failed to create index on :{label}({prop}): {e}")
+                    # Non-fatal: indexing can proceed without these indexes
+
+        # Composite indexes for optimized query patterns
+        # These improve queries that filter by workspace AND order by start_line
+        composite_index_specs = [
+            ("Section", ["workspace", "start_line"]),
+            ("Chunk", ["workspace", "start_line"]),
+        ]
+
+        for label, props in composite_index_specs:
+            try:
+                props_str = ", ".join(props)
+                cypher = f"CREATE INDEX ON :{label}({props_str});"
+                ingestor.execute_write(cypher, {})
+                logger.debug(f"Created composite index on :{label}({props_str})")
+            except Exception as e:
+                error_str = str(e).lower()
+                if "already exists" in error_str or "duplicate" in error_str:
+                    logger.debug(f"Composite index on :{label}({props_str}) already exists")
+                else:
+                    logger.warning(f"Failed to create composite index on :{label}({props_str}): {e}")
                     # Non-fatal: indexing can proceed without these indexes
 
         logger.info("Document graph indexes ensured")
@@ -693,9 +716,11 @@ class DocumentGraphUpdater:
         will_create_synthetic = not doc.sections and doc.content and doc.content.strip() and not has_preamble
 
         # Create Document node
-        # Note: section_count includes synthetic sections for plain text files
-        # and counts ALL sections (root + nested) for accurate total
-        # Also includes preamble section if present
+        # Note: total_section_count includes synthetic sections for plain text files
+        # and counts ALL sections (root + nested) for accurate total.
+        # Also includes preamble section if present.
+        # This differs from CONTAINS_SECTION relationships which only connect
+        # top-level sections (nested sections use HAS_SUBSECTION relationships).
         preamble_count = 1 if has_preamble else 0
         ingestor.ensure_node_batch(
             cs.NodeLabel.DOCUMENT.value,
@@ -703,7 +728,7 @@ class DocumentGraphUpdater:
                 cs.UniqueKeyType.PATH.value: doc.path,
                 "workspace": self.workspace,
                 "file_type": doc.file_type,
-                "section_count": doc.total_section_count() + (1 if will_create_synthetic else 0) + preamble_count,
+                "total_section_count": doc.total_section_count() + (1 if will_create_synthetic else 0) + preamble_count,
                 "code_block_count": len(doc.code_blocks),
                 "code_references": doc.code_references,
                 "word_count": doc.word_count,
@@ -1182,4 +1207,92 @@ class DocumentGraphUpdater:
             return "failed"
 
 
-__all__ = ["DocumentGraphUpdater"]
+def migrate_section_count_property(
+    host: str = "localhost",
+    port: int = 7688,
+    workspace: str = "default",
+) -> dict:
+    """
+    Migrate old 'section_count' property to 'total_section_count' on Document nodes.
+
+    This migration handles the property rename from section_count to total_section_count.
+    It renames the property on existing Document nodes to maintain consistency.
+
+    Handles two cases:
+    1. Documents with only old property -> rename to new property
+    2. Documents with both properties -> remove old property
+
+    Args:
+        host: Memgraph host
+        port: Memgraph port
+        workspace: Workspace to migrate (default: all workspaces if None)
+
+    Returns:
+        Dict with migration statistics
+    """
+    stats = {"migrated": 0, "cleaned": 0, "errors": 0}
+
+    with MemgraphIngestor(host=host, port=port) as ingestor:
+        # Case 1: Documents with only old property -> rename to new
+        if workspace:
+            query1 = """
+            MATCH (d:Document)
+            WHERE d.section_count IS NOT NULL AND d.total_section_count IS NULL
+            AND d.workspace = $workspace
+            SET d.total_section_count = d.section_count
+            REMOVE d.section_count
+            RETURN count(d) as migrated
+            """
+            params1 = {"workspace": workspace}
+        else:
+            query1 = """
+            MATCH (d:Document)
+            WHERE d.section_count IS NOT NULL AND d.total_section_count IS NULL
+            SET d.total_section_count = d.section_count
+            REMOVE d.section_count
+            RETURN count(d) as migrated
+            """
+            params1 = {}
+
+        try:
+            result = ingestor.fetch_all(query1, params1)
+            if result:
+                stats["migrated"] = result[0].get("migrated", 0)
+            logger.info(f"Migrated {stats['migrated']} Document nodes from section_count to total_section_count")
+        except Exception as e:
+            logger.error(f"Migration (case 1) failed: {e}")
+            stats["errors"] += 1
+
+        # Case 2: Documents with both properties -> remove old
+        if workspace:
+            query2 = """
+            MATCH (d:Document)
+            WHERE d.section_count IS NOT NULL AND d.total_section_count IS NOT NULL
+            AND d.workspace = $workspace
+            REMOVE d.section_count
+            RETURN count(d) as cleaned
+            """
+            params2 = {"workspace": workspace}
+        else:
+            query2 = """
+            MATCH (d:Document)
+            WHERE d.section_count IS NOT NULL AND d.total_section_count IS NOT NULL
+            REMOVE d.section_count
+            RETURN count(d) as cleaned
+            """
+            params2 = {}
+
+        try:
+            result = ingestor.fetch_all(query2, params2)
+            if result:
+                stats["cleaned"] = result[0].get("cleaned", 0)
+            if stats["cleaned"] > 0:
+                logger.info(f"Cleaned {stats['cleaned']} Document nodes with duplicate property")
+        except Exception as e:
+            logger.error(f"Migration (case 2) failed: {e}")
+            stats["errors"] += 1
+
+    return stats
+
+
+__all__ = ["DocumentGraphUpdater", "migrate_section_count_property"]

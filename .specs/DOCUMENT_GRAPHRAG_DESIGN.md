@@ -314,7 +314,7 @@ CREATE INDEX ON :File(path);
     path: string,                    // Unique identifier
     workspace: string,                // Workspace isolation (LightRAG pattern, default: "default")
     file_type: string,               // .md, .pdf, .docx, .rst
-    section_count: int,              // Number of sections
+    total_section_count: int,        // Total sections (includes nested subsections, not just direct CONTAINS_SECTION)
     code_block_count: int,           // Number of code blocks
     code_references: list[string],   // Extracted function/class names
     word_count: int,                 // Total word count
@@ -1205,12 +1205,13 @@ class DocumentGraphUpdater:
         """Store document and sections in graph."""
 
         # Create document node
+        # Note: total_section_count includes all nested subsections, not just direct CONTAINS_SECTION children
         ingestor.ensure_node_batch(
             'Document',
             {
                 'path': doc.path,
                 'file_type': doc.file_type,
-                'section_count': len(doc.sections),
+                'total_section_count': doc.total_section_count(),
                 'code_block_count': len(doc.code_blocks),
                 'code_references': doc.code_references,
                 'word_count': doc.word_count,
@@ -1856,7 +1857,7 @@ class ValidationTriggerAPI:
         if request.scope == "all":
             estimated_claims = doc_stats.get("estimated_claims", 10)
         elif request.scope == "sections":
-            estimated_claims = doc_stats.get("section_count", 5) * 2
+            estimated_claims = doc_stats.get("total_section_count", 5) * 2
         else:
             estimated_claims = 3  # Single claim validation
 
@@ -1877,7 +1878,8 @@ class ValidationTriggerAPI:
 
     async def _get_document_stats(self, document_path: str) -> dict:
         """Get document statistics from graph (no LLM)."""
-        # Query graph for: section_count, code_reference_count, word_count
+        # Query graph for: total_section_count, code_reference_count, word_count
+        # Note: total_section_count includes all nested sections (root + subsections)
         # These are stored at index time, not computed here
         pass
 
@@ -3304,7 +3306,7 @@ class DocProcessingStatus:
     status: DocStatus
     file_path: str
     content_hash: str
-    section_count: int
+    total_section_count: int
     error_message: str | None = None
     last_updated: datetime | None = None
 ```

@@ -52,11 +52,17 @@ def read_document_content(
         return {"error": "Document not found", "path": document_path}
 
     document = results[0]
+    # Backward compatibility: check both new and old property names
+    # Old property name was 'section_count', new is 'total_section_count'
+    total_section_count = document.get("total_section_count")
+    if total_section_count is None:
+        total_section_count = document.get("section_count")
+
     content = {
         "path": document_path,
         "file_type": document.get("file_type"),
         "word_count": document.get("word_count"),
-        "section_count": document.get("section_count"),
+        "total_section_count": total_section_count,
         "modified_date": document.get("modified_date"),
     }
 
@@ -203,8 +209,8 @@ def read_section_content(
     RETURN s
     """
 
-    results = ingestor.execute_query(
-        query, parameters={"qn": section_qn, "workspace": workspace}
+    results = ingestor.fetch_all(
+        query, params={"qn": section_qn, "workspace": workspace}
     )
 
     if not results:
@@ -235,8 +241,8 @@ def read_chunk_content(
     RETURN c
     """
 
-    results = ingestor.execute_query(
-        query, parameters={"qn": chunk_qn, "workspace": workspace}
+    results = ingestor.fetch_all(
+        query, params={"qn": chunk_qn, "workspace": workspace}
     )
 
     if not results:
