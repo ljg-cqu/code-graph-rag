@@ -51,6 +51,7 @@ class DocumentGraphUpdater:
             ".ruff_cache",
             ".qdrant_code_embeddings",
             ".embedding_cache",
+            "grammars",  # Tree-sitter grammar submodules (not user code)
         }
     )
 
