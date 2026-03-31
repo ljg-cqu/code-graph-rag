@@ -746,6 +746,132 @@ class TestSecurityBounds:
         )
 
 
+class TestContentBetweenSubsections:
+    """Tests for content between sibling subsections being preserved.
+
+    This tests the bug fix where content between sibling subsections
+    was lost during recursive chunking.
+    """
+
+    def test_content_between_subsections_preserved(self):
+        """Verify content between sibling subsections is not lost."""
+        chunker = SemanticDocumentChunker(max_tokens=512)
+
+        # Create a document with content between subsections:
+        # # Section (line 0)
+        # Intro text (lines 1-2)
+        # ## Subsection A (line 4)
+        # A content (lines 5-6)
+        # Between text (lines 8-9)  <- THIS SHOULD BE PRESERVED
+        # ## Subsection B (line 11)
+        # B content (lines 12-13)
+        doc = ExtractedDocument(
+            path="/test/between.md",
+            file_type=".md",
+            content="",
+            sections=[
+                ExtractedSection(
+                    title="Section",
+                    level=1,
+                    start_line=0,
+                    end_line=13,
+                    content="Intro text here.\n\n\n## Subsection A\nA content here.\n\nBetween text that should be preserved.\n\n## Subsection B\nB content here.",
+                    subsections=[
+                        ExtractedSection(
+                            title="Subsection A",
+                            level=2,
+                            start_line=4,
+                            end_line=6,
+                            content="A content here.",
+                            subsections=[],
+                        ),
+                        ExtractedSection(
+                            title="Subsection B",
+                            level=2,
+                            start_line=11,
+                            end_line=13,
+                            content="B content here.",
+                            subsections=[],
+                        ),
+                    ],
+                ),
+            ],
+            code_blocks=[],
+            code_references=[],
+            word_count=20,
+            modified_date="2024-01-01",
+        )
+
+        chunks = list(chunker.chunk_document(doc))
+        chunk_contents = [c.content for c in chunks]
+
+        # Verify intro text is captured
+        assert any("Intro text" in c for c in chunk_contents), "Intro text not found in chunks"
+
+        # Verify subsection A content is captured
+        assert any("A content" in c for c in chunk_contents), "Subsection A content not found"
+
+        # CRITICAL: Verify between text is captured (the bug fix)
+        assert any("Between text" in c for c in chunk_contents), (
+            "Content between subsections was lost! This is the bug we fixed."
+        )
+
+        # Verify subsection B content is captured
+        assert any("B content" in c for c in chunk_contents), "Subsection B content not found"
+
+    def test_trailing_content_after_last_subsection_preserved(self):
+        """Verify trailing content after the last subsection is preserved."""
+        chunker = SemanticDocumentChunker(max_tokens=512)
+
+        # Create a document with trailing content after last subsection.
+        # section.content when split by '\n':
+        #   Index 0: ''          -> document line 1
+        #   Index 1: ''          -> document line 2
+        #   Index 2: '## Sub A'  -> document line 3 (subsection header)
+        #   Index 3: 'A content.'-> document line 4
+        #   Index 4: ''          -> document line 5
+        #   Index 5: 'Trailing...' -> document line 6
+        doc = ExtractedDocument(
+            path="/test/trailing.md",
+            file_type=".md",
+            content="",
+            sections=[
+                ExtractedSection(
+                    title="Section",
+                    level=1,
+                    start_line=0,  # Section header line
+                    end_line=6,     # Last line of content (document line 6)
+                    content="\n\n## Sub A\nA content.\n\nTrailing text here.",
+                    subsections=[
+                        ExtractedSection(
+                            title="Sub A",
+                            level=2,
+                            start_line=3,  # ## Sub A header at document line 3
+                            end_line=4,    # A content at document line 4
+                            content="A content.",
+                            subsections=[],
+                        ),
+                    ],
+                ),
+            ],
+            code_blocks=[],
+            code_references=[],
+            word_count=10,
+            modified_date="2024-01-01",
+        )
+
+        chunks = list(chunker.chunk_document(doc))
+        chunk_contents = [c.content for c in chunks]
+
+        # Debug: print chunks
+        print(f"Chunks: {chunk_contents}")
+
+        # CRITICAL: Verify trailing content is captured
+        assert any("Trailing text" in c for c in chunk_contents), (
+            "Trailing content after last subsection was lost!"
+        )
+
+
 class TestChunkIndexUniqueness:
     """Tests for chunk_index uniqueness and sequential ordering.
 
