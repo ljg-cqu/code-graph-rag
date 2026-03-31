@@ -857,6 +857,24 @@ For languages hosted outside the standard tree-sitter organization:
 cgr language add-grammar --grammar-url https://github.com/custom/tree-sitter-mylang
 ```
 
+#### Recommended Grammar URLs
+
+For languages not in the standard tree-sitter organization, use these verified grammars:
+
+| Language | Grammar URL | Notes |
+|----------|-------------|-------|
+| **AutoHotkey** | `https://github.com/alfredomtx/tree-sitter-autohotkey` | AHK v1, includes LSP/debugger |
+| **Solidity** | `https://github.com/JoranHonig/tree-sitter-solidity` | Most popular Solidity grammar (185+ stars) |
+
+**Example:**
+```bash
+# Add AutoHotkey support
+cgr language add-grammar --grammar-url https://github.com/alfredomtx/tree-sitter-autohotkey
+
+# Add Solidity support
+cgr language add-grammar --grammar-url https://github.com/JoranHonig/tree-sitter-solidity
+```
+
 #### What Happens Automatically
 
 When you add a language, the tool automatically:

@@ -125,6 +125,8 @@ class ImportProcessor:
                     self._parse_lua_imports(captures, module_qn)
                 case cs.SupportedLanguage.PHP:
                     self._parse_php_imports(captures, module_qn)
+                case cs.SupportedLanguage.AUTOHOTKEY:
+                    self._parse_ahk_imports(captures, module_qn)
                 case _:
                     self._parse_generic_imports(captures, module_qn, lang_config)
 
@@ -1008,3 +1010,154 @@ class ImportProcessor:
             return safe_decode_text(first_child.children[0])
 
         return None
+
+    # ==================== AutoHotkey Import Methods ====================
+
+    def _parse_ahk_imports(self, captures: dict, module_qn: str) -> None:
+        """Parse AutoHotkey #Include/#Require directives.
+
+        In the alfredomtx/tree-sitter-autohotkey grammar, these are
+        generic 'directive' nodes. We parse the text to determine type.
+
+        Populates self.import_mapping[module_qn] with:
+        - Key: include path (from directive)
+        - Value: resolved absolute path (or original path if unresolved)
+
+        Args:
+            captures: Tree-sitter query captures dict
+            module_qn: Module qualified name
+        """
+        self.import_mapping[module_qn] = {}
+
+        # Query captures for directives (include/require are directive nodes)
+        for node in captures.get(cs.CAPTURE_IMPORT, []):
+            if node.type != cs.TS_AHK_DIRECTIVE:
+                continue
+
+            # Check if it's an include or require directive by text content
+            text = safe_decode_text(node) or ""
+            is_require = text.lower().startswith("#requires")
+            is_include = text.lower().startswith("#include")
+
+            if not (is_require or is_include):
+                continue
+
+            include_path = self._extract_ahk_include_path(node)
+            if include_path:
+                resolved = self._resolve_ahk_include_path(include_path)
+                # Store mapping: include_path -> resolved_path
+                key = f"{'require:' if is_require else ''}{include_path}"
+                self.import_mapping[module_qn][key] = (
+                    str(resolved) if resolved else include_path
+                )
+                logger.debug(
+                    ls.IMP_GENERIC,
+                    language="autohotkey",
+                    node_type=node.type,
+                )
+
+    def _extract_ahk_include_path(self, node: Node) -> str | None:
+        """Extract include path from directive node.
+
+        Args:
+            node: directive AST node (containing #Include or #Require)
+
+        Returns:
+            Include path string or None
+        """
+        # The grammar has directive_arguments for the path
+        for child in node.children:
+            # Check for string literal
+            if child.type == cs.TS_AHK_STRING and child.text:
+                text = safe_decode_text(child)
+                if text:
+                    # AHK strings may have quotes, strip them
+                    return text.strip('"').strip("'")
+            # Check for identifier (unquoted path)
+            if child.type == cs.TS_AHK_IDENTIFIER and child.text:
+                return safe_decode_text(child)
+
+        return None
+
+    def _resolve_ahk_include_path(self, include_path: str) -> Path | None:
+        """Resolve AHK include path with standard resolution order.
+
+        Resolution order (per AHK documentation):
+        1. Absolute path
+        2. Relative to current file (would need self.current_file)
+        3. Standard AHK include directories (lib/, Lib/, includes/, src/, scripts/)
+        4. Script directory (repo root)
+
+        Args:
+            include_path: Path from #Include/#Require directive
+
+        Returns:
+            Resolved Path or None if not found
+        """
+        # Expand AHK variables first
+        include_path = self._expand_ahk_variables(include_path)
+
+        # 1. Absolute path
+        if Path(include_path).is_absolute():
+            path = Path(include_path)
+            if path.exists():
+                return path
+            path_ahk = path.with_suffix(cs.EXT_AHK)
+            if path_ahk.exists():
+                return path_ahk
+            return None
+
+        # 2. Search standard AHK include directories
+        for include_dir in self._get_ahk_include_dirs():
+            candidate = include_dir / include_path
+            if candidate.exists():
+                return candidate
+            candidate_ahk = candidate.with_suffix(cs.EXT_AHK)
+            if candidate_ahk.exists():
+                return candidate_ahk
+
+        return None
+
+    def _expand_ahk_variables(self, path: str) -> str:
+        """Expand AHK built-in variables in path.
+
+        Common variables (expand to repository-relative paths for static analysis):
+        - A_ScriptDir: Directory of current script
+        - A_MyDocuments: User's Documents folder -> placeholder (cross-platform)
+        - A_AppData: Application Data folder -> placeholder (cross-platform)
+
+        Args:
+            path: Path potentially containing AHK variables
+
+        Returns:
+            Path with variables expanded
+        """
+        # For cross-platform static analysis, use placeholders for system paths
+        # These won't resolve to actual files but allow analysis of intent
+        if "A_MyDocuments" in path:
+            path = path.replace("A_MyDocuments", "<A_MyDocuments>")
+
+        if "A_AppData" in path:
+            path = path.replace("A_AppData", "<A_AppData>")
+
+        if "A_ScriptDir" in path:
+            # Replace with repo root for static analysis
+            path = path.replace("A_ScriptDir", str(self.repo_path))
+
+        return path
+
+    def _get_ahk_include_dirs(self) -> list[Path]:
+        """Get standard AHK include directories for the project.
+
+        Returns:
+            List of Path objects for include search (existing directories only)
+        """
+        dirs = []
+        # Common AHK library directories (both lowercase and uppercase)
+        for dir_name in ["lib", "Lib", "includes", "src", "scripts"]:
+            dir_path = self.repo_path / dir_name
+            if dir_path.exists() and dir_path.is_dir():
+                dirs.append(dir_path)
+        # Always include repo root (script directory)
+        dirs.append(self.repo_path)
+        return dirs

@@ -16,6 +16,40 @@ from .type_inference import TypeInferenceEngine
 _SEPARATOR_PATTERN = re.compile(r"[.:]|::")
 _CHAINED_METHOD_PATTERN = re.compile(r"\.([^.()]+)$")
 
+# AHK coordinate variable patterns:
+# - Variables ending in X/Y (e.g., FoundX, SelectCurrencyPanX)
+# - Variables with X/Y followed by suffixes (e.g., PreviewConversionButtonXRisk)
+_AHK_COORD_PATTERN = re.compile(r".+[XY](Risk|Volatile)?$")
+
+# AHK string/variable patterns that get incorrectly parsed as commands
+# These are lowercase or mixed-case variable names passed as arguments
+_AHK_VAR_PATTERN = re.compile(r"^[a-z]+[A-Z][a-zA-Z]*$")
+
+
+def _is_ahk_coord_variable(call_name: str) -> bool:
+    """Check if call name matches AHK coordinate variable pattern.
+
+    Variables ending in X or Y (like FoundX, FromCurrency1X) are typically
+    coordinate positions, not function calls. The tree-sitter grammar
+    incorrectly parses these as command nodes when they appear as arguments.
+
+    Also matches coordinate variables with suffixes like:
+    - PreviewConversionButtonXRisk (X coordinate for risk scenario)
+    - ConvertButtonXVolatile (X coordinate for volatile scenario)
+    """
+    return _AHK_COORD_PATTERN.match(call_name) is not None
+
+
+def _is_ahk_variable_reference(call_name: str) -> bool:
+    """Check if call name is likely an AHK variable reference, not a function call.
+
+    The tree-sitter-autohotkey grammar incorrectly parses variable arguments
+    as command nodes. This heuristic identifies likely false positives:
+    - camelCase names starting with lowercase (e.g., gainConvertFrom)
+    - These are typically variable references passed as arguments to commands
+    """
+    return _AHK_VAR_PATTERN.match(call_name) is not None
+
 
 class CallResolver:
     __slots__ = (
@@ -477,6 +511,28 @@ class CallResolver:
                     return inherited_method
 
         return None
+
+    def should_skip_ahk_call(self, call_name: str) -> bool:
+        """Check if an AHK call should be skipped.
+
+        The tree-sitter-autohotkey grammar incorrectly parses variable arguments
+        as standalone 'command' nodes. These are actually variable references
+        and should be skipped entirely.
+
+        AHK built-in commands are also skipped since they're external runtime
+        functions that don't exist in the user's codebase - we don't create
+        CALLS relationships to them.
+        """
+        # Skip coordinate variables (ending in X/Y or X/Y + suffix)
+        if _is_ahk_coord_variable(call_name):
+            return True
+        # Skip camelCase variable references (e.g., gainConvertFrom, lossConvertTo)
+        if _is_ahk_variable_reference(call_name):
+            return True
+        # Skip AHK built-in commands (external runtime functions)
+        if call_name in cs.AHK_BUILTIN_COMMANDS:
+            return True
+        return False
 
     def resolve_builtin_call(self, call_name: str) -> tuple[str, str] | None:
         if call_name in cs.JS_BUILTIN_PATTERNS:

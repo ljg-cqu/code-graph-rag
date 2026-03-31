@@ -131,6 +131,9 @@ EXT_CS = ".cs"
 EXT_PHP = ".php"
 EXT_LUA = ".lua"
 EXT_SOL = ".sol"
+EXT_AHK = ".ahk"
+EXT_AH1 = ".ah1"
+EXT_AH2 = ".ah2"
 
 # (H) File extension tuples by language
 PY_EXTENSIONS = (EXT_PY,)
@@ -157,6 +160,7 @@ CS_EXTENSIONS = (EXT_CS,)
 PHP_EXTENSIONS = (EXT_PHP,)
 LUA_EXTENSIONS = (EXT_LUA,)
 SOLIDITY_EXTENSIONS = (EXT_SOL,)
+AUTOHOTKEY_EXTENSIONS = (EXT_AHK, EXT_AH1, EXT_AH2)
 
 # (H) Package indicator files
 PKG_INIT_PY = "__init__.py"
@@ -411,6 +415,11 @@ class NodeLabel(StrEnum):
     DOCUMENT = "Document"
     SECTION = "Section"
     CHUNK = "Chunk"
+    # AutoHotkey nodes
+    HOTKEY = "Hotkey"
+    HOTSTRING = "Hotstring"
+    LABEL = "Label"
+    CLASS_AHK = "AhkClass"
 
 
 _NODE_LABEL_UNIQUE_KEYS: dict[NodeLabel, UniqueKeyType] = {
@@ -440,6 +449,11 @@ _NODE_LABEL_UNIQUE_KEYS: dict[NodeLabel, UniqueKeyType] = {
     NodeLabel.DOCUMENT: UniqueKeyType.PATH,
     NodeLabel.SECTION: UniqueKeyType.QUALIFIED_NAME,
     NodeLabel.CHUNK: UniqueKeyType.QUALIFIED_NAME,
+    # AutoHotkey nodes
+    NodeLabel.HOTKEY: UniqueKeyType.QUALIFIED_NAME,
+    NodeLabel.HOTSTRING: UniqueKeyType.QUALIFIED_NAME,
+    NodeLabel.LABEL: UniqueKeyType.QUALIFIED_NAME,
+    NodeLabel.CLASS_AHK: UniqueKeyType.QUALIFIED_NAME,
 }
 
 _missing_keys = set(NodeLabel) - set(_NODE_LABEL_UNIQUE_KEYS.keys())
@@ -487,6 +501,18 @@ class RelationshipType(StrEnum):
     CONTAINS_CHUNK = "CONTAINS_CHUNK"
     BELONGS_TO_SECTION = "BELONGS_TO_SECTION"
     REFERENCES_CODE = "REFERENCES_CODE"
+    # AutoHotkey-specific relationships
+    DEFINES_HOTKEY = "DEFINES_HOTKEY"
+    DEFINES_HOTSTRING = "DEFINES_HOTSTRING"
+    DEFINES_LABEL = "DEFINES_LABEL"
+    TRIGGERS_HOTKEY = "TRIGGERS_HOTKEY"
+    CALLS_COMMAND = "CALLS_COMMAND"
+    CREATES_COM_OBJECT = "CREATES_COM_OBJECT"
+    SENDS_KEYS = "SENDS_KEYS"
+    CLICKS_ELEMENT = "CLICKS_ELEMENT"
+    CREATES_GUI = "CREATES_GUI"
+    CONTROLS_GUI = "CONTROLS_GUI"
+    INCLUDES_FILE = "INCLUDES_FILE"
 
 
 NODE_PROJECT = NodeLabel.PROJECT
@@ -623,6 +649,7 @@ class SupportedLanguage(StrEnum):
     PHP = "php"
     LUA = "lua"
     SOLIDITY = "solidity"
+    AUTOHOTKEY = "autohotkey"
 
 
 class LanguageStatus(StrEnum):
@@ -701,6 +728,11 @@ LANGUAGE_METADATA: dict[SupportedLanguage, LanguageMetadata] = {
         LanguageStatus.FULL,
         "Contracts, interfaces, libraries, events, modifiers, state variables",
         "Solidity",
+    ),
+    SupportedLanguage.AUTOHOTKEY: LanguageMetadata(
+        LanguageStatus.DEV,
+        "Hotkeys, hotstrings, GUI creation, Windows automation",
+        "AutoHotkey",
     ),
 }
 
@@ -789,6 +821,13 @@ FIELD_FIELD = "field"
 FIELD_SUPERCLASS = "superclass"
 FIELD_SUPERCLASSES = "superclasses"
 FIELD_INTERFACES = "interfaces"
+# AutoHotkey field names (per alfredomtx/tree-sitter-autohotkey grammar)
+FIELD_OPTIONS = "options"
+FIELD_TRIGGER = "trigger"
+FIELD_REPLACEMENT = "replacement"
+FIELD_TARGET = "target"
+FIELD_PATH = "path"
+FIELD_VERSION = "version"
 
 # (H) Method name constants for getattr/hasattr
 METHOD_FIND_WITH_PREFIX = "find_with_prefix"
@@ -933,6 +972,7 @@ class TreeSitterModule(StrEnum):
     LUA = "tree_sitter_lua"
     PHP = "tree_sitter_php"
     SOLIDITY = "tree_sitter_solidity"
+    AUTOHOTKEY = "tree_sitter_autohotkey"
 
 
 # (H) Query dict keys
@@ -2004,6 +2044,58 @@ TS_SOL_INHERITANCE_SPECIFIER = "inheritance_specifier"
 TS_SOL_VISIBILITY = "visibility"
 TS_SOL_STATE_MUTABILITY = "state_mutability"
 
+# (H) Tree-sitter AutoHotkey node types (alfredomtx/tree-sitter-autohotkey grammar)
+TS_AHK_SOURCE_FILE = "source_file"
+TS_AHK_HOTKEY = "hotkey"
+TS_AHK_HOTSTRING_DEFINITION = "hotstring_definition"
+TS_AHK_HOTSTRING_OPTIONS = "hotstring_options"
+TS_AHK_HOTSTRING_TRIGGER = "hotstring_trigger"
+TS_AHK_HOTSTRING_REPLACEMENT = "hotstring_replacement"
+TS_AHK_FUNCTION_DEFINITION = "function_definition"
+TS_AHK_LABEL = "label"
+TS_AHK_CLASS_DEFINITION = "class_definition"
+TS_AHK_CLASS_METHOD = "method_definition"
+TS_AHK_CLASS_PROPERTY = "class_property"
+TS_AHK_ASSIGNMENT_EXPRESSION = "assignment_expression"
+TS_AHK_COMMAND = "command"
+TS_AHK_DIRECTIVE = "directive"
+TS_AHK_IF_DIRECTIVE = "if_directive"
+TS_AHK_IF_WIN_DIRECTIVE = "if_win_directive"
+TS_AHK_FUNCTION_CALL = "function_call"
+TS_AHK_METHOD_CALL = "method_call"
+TS_AHK_MEMBER_EXPRESSION = "member_expression"
+TS_AHK_INDEX_EXPRESSION = "index_expression"
+TS_AHK_IDENTIFIER = "identifier"
+TS_AHK_STRING = "string"
+TS_AHK_NUMBER = "number"
+TS_AHK_BOOLEAN = "boolean"
+TS_AHK_ARRAY_LITERAL = "array_literal"
+TS_AHK_OBJECT_LITERAL = "object_literal"
+TS_AHK_VARIABLE_REF = "variable_ref"
+TS_AHK_COMMENT = "comment"
+TS_AHK_BLOCK_COMMENT = "block_comment"
+TS_AHK_DOC_COMMENT = "doc_comment"
+TS_AHK_GUI_ACTION = "gui_action"
+TS_AHK_GUI_ACTION_SPACED = "gui_action_spaced"
+TS_AHK_GUI_OPTIONS = "gui_options"
+TS_AHK_GUI_OPTIONS_SPACED = "gui_options_spaced"
+TS_AHK_GUI_TARGET = "gui_target"
+TS_AHK_IF_STATEMENT = "if_statement"
+TS_AHK_IF_COMMAND = "if_command"
+TS_AHK_LOOP_STATEMENT = "loop_statement"
+TS_AHK_WHILE_STATEMENT = "while_statement"
+TS_AHK_FOR_STATEMENT = "for_statement"
+TS_AHK_RETURN_STATEMENT = "return_statement"
+TS_AHK_TRY_STATEMENT = "try_statement"
+TS_AHK_CATCH_CLAUSE = "catch_clause"
+TS_AHK_FINALLY_CLAUSE = "finally_clause"
+TS_AHK_SWITCH_STATEMENT = "switch_statement"
+TS_AHK_CASE_CLAUSE = "case_clause"
+TS_AHK_DEFAULT_CLAUSE = "default_clause"
+TS_AHK_PARAMETER = "parameter"
+TS_AHK_PARAMETER_LIST = "parameter_list"
+TS_AHK_ARGUMENT_LIST = "argument_list"
+
 # (H) Solidity field names
 FIELD_VISIBILITY = "visibility"
 FIELD_STATE_MUTABILITY = "state_mutability"
@@ -2076,6 +2168,95 @@ LUA_STDLIB_MODULES = frozenset(
         "bit32",
     }
 )
+
+# (H) AutoHotkey built-in commands and functions (v1 and v2)
+# These are runtime commands that won't resolve to user-defined code
+AHK_BUILTIN_COMMANDS: frozenset[str] = frozenset(
+    {
+        # Control flow
+        "If", "Else", "Loop", "While", "For", "Switch", "Case", "Break", "Continue",
+        "Return", "Try", "Catch", "Finally", "Throw", "Goto", "Exit", "ExitApp",
+        # File operations
+        "FileRead", "FileWrite", "FileAppend", "FileDelete", "FileCopy", "FileMove",
+        "FileExist", "FileGetAttrib", "FileSetAttrib", "FileGetSize", "FileGetTime",
+        "FileSetTime", "FileGetVersion", "FileInstall", "FileRecycle", "FileRecycleEmpty",
+        "FileSelectFile", "FileSelectFolder", "FileCreateDir", "FileRemoveDir",
+        # GUI commands
+        "Gui", "GuiControl", "GuiControlGet", "GuiNew", "GuiShow", "GuiHide",
+        "GuiClose", "GuiEscape", "GuiSize", "GuiContextMenu", "GuiDropFiles",
+        "MsgBox", "InputBox", "Progress", "SplashImage", "SplashTextOn", "SplashTextOff",
+        # Window management
+        "WinExist", "WinActive", "WinWait", "WinWaitActive", "WinWaitClose",
+        "WinWaitNotActive", "WinActivate", "WinActivateBottom", "WinClose",
+        "WinKill", "WinHide", "WinShow", "WinMinimize", "WinMaximize", "WinRestore",
+        "WinMove", "WinGetTitle", "WinGetClass", "WinGetText", "WinGetPos",
+        "WinGetID", "WinGetIDLast", "WinGetPID", "WinGetProcessName",
+        "WinGetProcessPath", "WinGetCount", "WinGetList", "WinGetMinMax",
+        "WinGetTransparent", "WinGetTransColor", "WinSetTitle", "WinSetTransparent",
+        "WinSetTransColor", "WinSetAlwaysOnTop", "WinSetTopMost", "WinSetBottom",
+        "WinSetRegion", "WinSetStyle", "WinSetExStyle", "WinSetOwner",
+        # Mouse and keyboard
+        "MouseMove", "MouseClick", "MouseClickDrag", "MouseGetPos",
+        "Send", "SendInput", "SendPlay", "SendEvent", "SendRaw",
+        "KeyWait", "GetKeyState", "KeyHistory", "Hotkey", "Hotstring",
+        "SetKeyDelay", "SetMouseDelay", "SetDefaultMouseSpeed",
+        # Clipboard
+        "Clipboard", "ClipboardAll", "OnClipboardChange",
+        # Sound
+        "SoundPlay", "SoundGetVolume", "SoundSetVolume", "SoundGetMute",
+        "SoundSetMute", "SoundGetWaveVolume", "SoundSetWaveVolume",
+        # Registry
+        "RegRead", "RegWrite", "RegDelete", "RegExist",
+        # String manipulation
+        "StrLen", "StrSplit", "StrReplace", "StrLower", "StrUpper", "SubStr",
+        "InStr", "RegExMatch", "RegExReplace", "Format", "FormatTime",
+        # Math
+        "Abs", "Ceil", "Floor", "Mod", "Round", "Sqrt", "Log", "Ln",
+        "Exp", "Sin", "Cos", "Tan", "ASin", "ACos", "ATan",
+        # Environment and system
+        "EnvGet", "EnvSet", "EnvUpdate", "Run", "RunWait", "RunAs",
+        "Shutdown", "Sleep", "SetTimer", "DllCall", "ComObjCreate",
+        "ComObjGet", "ComObjConnect", "ComObjActive", "ComObjError",
+        "ComObjParameter", "ComObjType", "ComObjValue", "ObjCreate",
+        "ObjGet", "ObjBindMethod", "ObjAddRef", "ObjRelease",
+        # Image/Pixel
+        "ImageSearch", "PixelSearch", "PixelGetColor",
+        # Variables and expressions
+        "SetEnv", "GetEnv", "VarSetCapacity", "IsSet", "IsByRef",
+        # Date/Time
+        "Now", "NowUTC", "A_Now", "A_NowUTC",
+        # Tray icon
+        "TrayTip", "Menu", "MenuFromHandle",
+        # Arrays and objects
+        "Array", "Map", "Object", "GuiFromHwnd",
+        # Control flow helpers
+        "IfEqual", "IfNotEqual", "IfLess", "IfLessOrEqual", "IfGreater",
+        "IfGreaterOrEqual", "IfInString", "IfNotInString", "IfContains",
+        "IfWinExist", "IfWinNotExist", "IfWinActive", "IfWinNotActive",
+        "ElseIf", "ElseIfEqual", "ElseIfNotEqual", "ElseIfLess",
+        # Commands (legacy)
+        "AutoTrim", "BlockInput", "Click", "ControlSend", "ControlSendRaw",
+        "ControlClick", "ControlFocus", "ControlGet", "ControlGetFocus",
+        "ControlGetText", "ControlMove", "ControlSetText", "CoordMode",
+        "Critical", "DetectHiddenText", "DetectHiddenWindows",
+        "Drive", "DriveGet", "DriveSpaceFree", "Edit", "GetKeyName",
+        "GetKeyVK", "GetKeySC", "GroupActivate", "GroupAdd", "GroupDeactivate",
+        "GroupClose", "Iniread", "IniWrite", "IniDelete", "Input",
+        "ListHotkeys", "ListLines", "ListVars", "LoadPicture",
+        "OutputDebug", "Pause", "PixelSearch", "PostMessage",
+        "Random", "Reload", "SendMessage", "SetBatchLines",
+        "SetCapsLockState", "SetNumLockState", "SetScrollLockState",
+        "SetRegView", "SetStoreCapsLockMode", "SetWorkingDir",
+        "Sort", "Suspend", "Thread", "ToolTip", "Transform",
+        "URLDownloadToFile", "VarSetCapacity", "WaitForInputIdle",
+        "WinMinimizeAll", "WinMinimizeAllUndo", "WinRestore",
+        "OutputVar", "InputVar",
+    }
+)
+
+# (H) AutoHotkey coordinate variable suffix patterns
+# Variables ending in X/Y are typically coordinate positions, not function calls
+AHK_COORD_SUFFIXES: frozenset[str] = frozenset({"X", "Y"})
 
 # (H) Entity type names
 ENTITY_CLASS = "Class"
@@ -3173,6 +3354,43 @@ SPEC_SOL_PACKAGE_INDICATORS = (
     PKG_HARDHAT_CONFIG_TS,
     PKG_REMAPPINGS_TXT,
 )
+
+# (H) FQN node type tuples for AutoHotkey
+FQN_AHK_SCOPE_TYPES = (
+    TS_AHK_SOURCE_FILE,
+    TS_AHK_CLASS_DEFINITION,
+)
+FQN_AHK_FUNCTION_TYPES = (
+    TS_AHK_FUNCTION_DEFINITION,
+    TS_AHK_HOTKEY,
+    TS_AHK_HOTSTRING_DEFINITION,
+    TS_AHK_LABEL,
+)
+
+# (H) LANGUAGE_SPECS node type tuples for AutoHotkey
+SPEC_AHK_FUNCTION_TYPES = (
+    TS_AHK_FUNCTION_DEFINITION,
+    TS_AHK_HOTKEY,
+    TS_AHK_HOTSTRING_DEFINITION,
+    TS_AHK_LABEL,
+    TS_AHK_CLASS_METHOD,
+)
+SPEC_AHK_CLASS_TYPES = (TS_AHK_CLASS_DEFINITION,)
+SPEC_AHK_MODULE_TYPES = (TS_AHK_SOURCE_FILE,)
+SPEC_AHK_CALL_TYPES = (
+    TS_AHK_FUNCTION_CALL,
+    TS_AHK_METHOD_CALL,
+    TS_AHK_COMMAND,
+    TS_AHK_GUI_ACTION,
+    TS_AHK_GUI_ACTION_SPACED,
+)
+SPEC_AHK_IMPORT_TYPES = (TS_AHK_DIRECTIVE,)
+SPEC_AHK_IMPORT_FROM_TYPES = (TS_AHK_DIRECTIVE,)
+SPEC_AHK_PACKAGE_INDICATORS = ("main.ahk", "index.ahk")
+
+# (H) AHK version detection patterns
+AHK_V2_DIRECTIVE = "#Requires AutoHotkey v2"
+AHK_V1_DIRECTIVE = "#Requires AutoHotkey v1"
 
 HEALTH_CHECK_DOCKER_RUNNING = "Docker daemon is running"
 HEALTH_CHECK_DOCKER_NOT_RUNNING = "Docker daemon is not running"

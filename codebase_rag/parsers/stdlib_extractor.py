@@ -169,6 +169,8 @@ class StdlibExtractor:
                 return self._extract_java_stdlib_path(full_qualified_name)
             case cs.SupportedLanguage.LUA:
                 return self._extract_lua_stdlib_path(full_qualified_name)
+            case cs.SupportedLanguage.AUTOHOTKEY:
+                return self._extract_ahk_stdlib_path(full_qualified_name)
             case _:
                 return self._extract_generic_stdlib_path(full_qualified_name)
 
@@ -750,6 +752,30 @@ end
             entity_name = parts[-1]
             if entity_name[:1].isupper() or entity_name in cs.LUA_STDLIB_MODULES:
                 return cs.SEPARATOR_DOT.join(parts[:-1])
+
+        return full_qualified_name
+
+    def _extract_ahk_stdlib_path(self, full_qualified_name: str) -> str:
+        """Extract module path for AutoHotkey built-in commands/functions.
+
+        AHK built-in functions don't have module paths - they're runtime commands.
+        Returns 'ahk.builtin' for built-in commands to mark them as external.
+        """
+        parts = full_qualified_name.split(cs.SEPARATOR_DOT)
+        entity_name = parts[-1]
+
+        # Check if this is a known AHK built-in command
+        if entity_name in cs.AHK_BUILTIN_COMMANDS:
+            return "ahk.builtin"
+
+        # For coordinate variables (ending in X/Y), mark as variables not functions
+        if len(entity_name) >= 2 and entity_name[-1] in cs.AHK_COORD_SUFFIXES:
+            # These are variables, not function calls
+            return full_qualified_name
+
+        # Default: return the module path if it exists
+        if len(parts) >= 2:
+            return cs.SEPARATOR_DOT.join(parts[:-1])
 
         return full_qualified_name
 

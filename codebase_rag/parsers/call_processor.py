@@ -312,6 +312,11 @@ class CallProcessor:
             if not call_name:
                 continue
 
+            # Skip AHK coordinate variables and built-ins
+            if language == cs.SupportedLanguage.AUTOHOTKEY:
+                if self._resolver.should_skip_ahk_call(call_name):
+                    continue
+
             if (
                 language == cs.SupportedLanguage.JAVA
                 and call_node.type == cs.TS_METHOD_INVOCATION

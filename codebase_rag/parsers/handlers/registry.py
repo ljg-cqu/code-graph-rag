@@ -3,6 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 
 from ...constants import SupportedLanguage
+from .autohotkey import AutoHotkeyHandler
 from .base import BaseLanguageHandler
 from .cpp import CppHandler
 from .java import JavaHandler
@@ -24,6 +25,7 @@ _HANDLERS: dict[SupportedLanguage, type[BaseLanguageHandler]] = {
     SupportedLanguage.LUA: LuaHandler,
     SupportedLanguage.PHP: PhpHandler,
     SupportedLanguage.SOLIDITY: SolidityHandler,
+    SupportedLanguage.AUTOHOTKEY: AutoHotkeyHandler,
 }
 
 _DEFAULT_HANDLER = BaseLanguageHandler

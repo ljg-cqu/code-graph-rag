@@ -143,6 +143,72 @@ def _solidity_file_to_module(file_path: Path, repo_root: Path) -> list[str]:
         return []
 
 
+def _ahk_get_name(node: Node) -> str | None:
+    """Extract name from AutoHotkey AST node.
+
+    AutoHotkey has unique naming patterns:
+    - Hotkeys: Combination like "^!s" (Ctrl+Alt+s) or "F1"
+    - Hotstrings: Pattern like "::btw::by the way"
+    - Functions: Standard identifier
+    - Labels: Identifier followed by colon
+    - Classes: Standard identifier (AHK v2)
+    """
+    if node.type == cs.TS_AHK_HOTKEY:
+        # Hotkey is a token - get text directly and strip "::"
+        if node.text:
+            text = node.text.decode(cs.ENCODING_UTF8)
+            return text.rstrip("::")
+        return None
+
+    if node.type == cs.TS_AHK_HOTSTRING_DEFINITION:
+        # Hotstring name is the trigger pattern (field: 'trigger')
+        trigger_node = node.child_by_field_name(cs.FIELD_TRIGGER)
+        if trigger_node and trigger_node.text:
+            return trigger_node.text.decode(cs.ENCODING_UTF8)
+        return None
+
+    if node.type in (
+        cs.TS_AHK_FUNCTION_DEFINITION,
+        cs.TS_AHK_LABEL,
+        cs.TS_AHK_CLASS_DEFINITION,
+    ):
+        name_node = node.child_by_field_name(cs.FIELD_NAME)
+        if name_node and name_node.text:
+            return name_node.text.decode(cs.ENCODING_UTF8)
+        # Fallback: first identifier child
+        for child in node.children:
+            if child.type == cs.TS_AHK_IDENTIFIER and child.text:
+                return child.text.decode(cs.ENCODING_UTF8)
+
+    return _generic_get_name(node)
+
+
+def _ahk_file_to_module(file_path: Path, repo_root: Path) -> list[str]:
+    """Convert AHK file path to module parts.
+
+    AHK projects typically have flat structure or simple folders.
+    Common patterns:
+    - main.ahk at root
+    - lib/ folder for libraries
+    - includes/ for #Include files
+    """
+    try:
+        rel = file_path.relative_to(repo_root)
+        parts = list(rel.with_suffix("").parts)
+
+        # Handle common AHK project structures
+        if parts and parts[0] in ("lib", "includes", "src", "scripts"):
+            parts = parts[1:]
+
+        # Remove main/index indicators
+        if parts and parts[-1] in ("main", "index"):
+            parts = parts[:-1]
+
+        return parts
+    except ValueError:
+        return []
+
+
 def _c_unwrap_declarator(declarator: Node | None) -> Node | None:
     while declarator and declarator.type == cs.CppNodeType.POINTER_DECLARATOR:
         declarator = declarator.child_by_field_name(cs.FIELD_DECLARATOR)
@@ -270,6 +336,13 @@ SOLIDITY_FQN_SPEC = FQNSpec(
     file_to_module_parts=_solidity_file_to_module,
 )
 
+AUTOHOTKEY_FQN_SPEC = FQNSpec(
+    scope_node_types=frozenset(cs.FQN_AHK_SCOPE_TYPES),
+    function_node_types=frozenset(cs.FQN_AHK_FUNCTION_TYPES),
+    get_name=_ahk_get_name,
+    file_to_module_parts=_ahk_file_to_module,
+)
+
 LANGUAGE_FQN_SPECS: dict[cs.SupportedLanguage, FQNSpec] = {
     cs.SupportedLanguage.PYTHON: PYTHON_FQN_SPEC,
     cs.SupportedLanguage.JS: JS_FQN_SPEC,
@@ -284,6 +357,7 @@ LANGUAGE_FQN_SPECS: dict[cs.SupportedLanguage, FQNSpec] = {
     cs.SupportedLanguage.CSHARP: CSHARP_FQN_SPEC,
     cs.SupportedLanguage.PHP: PHP_FQN_SPEC,
     cs.SupportedLanguage.SOLIDITY: SOLIDITY_FQN_SPEC,
+    cs.SupportedLanguage.AUTOHOTKEY: AUTOHOTKEY_FQN_SPEC,
 }
 
 
@@ -590,6 +664,41 @@ LANGUAGE_SPECS: dict[cs.SupportedLanguage, LanguageSpec] = {
         (emit_statement
             name: (expression
                 (identifier) @name)) @call
+        """,
+    ),
+    cs.SupportedLanguage.AUTOHOTKEY: LanguageSpec(
+        language=cs.SupportedLanguage.AUTOHOTKEY,
+        file_extensions=cs.AUTOHOTKEY_EXTENSIONS,
+        function_node_types=cs.SPEC_AHK_FUNCTION_TYPES,
+        class_node_types=cs.SPEC_AHK_CLASS_TYPES,
+        module_node_types=cs.SPEC_AHK_MODULE_TYPES,
+        call_node_types=cs.SPEC_AHK_CALL_TYPES,
+        import_node_types=cs.SPEC_AHK_IMPORT_TYPES,
+        import_from_node_types=cs.SPEC_AHK_IMPORT_FROM_TYPES,
+        package_indicators=cs.SPEC_AHK_PACKAGE_INDICATORS,
+        function_query="""
+        (function_definition
+            name: (identifier) @name) @function
+        (hotkey) @function
+        (hotstring_definition
+            trigger: (hotstring_trigger) @name) @function
+        (label
+            name: (identifier) @name) @function
+        (method_definition
+            name: (identifier) @name) @function
+        """,
+        class_query="""
+        (class_definition
+            name: (identifier) @name) @class
+        """,
+        call_query="""
+        (function_call
+            name: (identifier) @name) @call
+        (method_call
+            method: (identifier) @name) @call
+        (command
+            name: (identifier) @name) @call
+        (gui_action) @call
         """,
     ),
 }

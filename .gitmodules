@@ -1,0 +1,3 @@
+[submodule "grammars/tree-sitter-autohotkey"]
+	path = grammars/tree-sitter-autohotkey
+	url = https://github.com/alfredomtx/tree-sitter-autohotkey

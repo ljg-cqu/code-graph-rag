@@ -166,6 +166,12 @@ def _import_language_loaders() -> dict[cs.SupportedLanguage, LanguageLoader]:
             cs.QUERY_LANGUAGE,
             cs.SupportedLanguage.SOLIDITY,
         ),
+        LanguageImport(
+            cs.SupportedLanguage.AUTOHOTKEY,
+            cs.TreeSitterModule.AUTOHOTKEY,
+            cs.QUERY_LANGUAGE,
+            cs.SupportedLanguage.AUTOHOTKEY,
+        ),
     ]
 
     loaders: dict[cs.SupportedLanguage, LanguageLoader] = {
