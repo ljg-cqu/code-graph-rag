@@ -146,7 +146,7 @@ class SemanticDocumentChunker:
         Uses iterative 25% reduction with a safety limit to prevent
         unbounded loops on pathological inputs.
 
-        GUARANTEES: returned segment_tokens <= self.max_tokens (or empty string).
+        GUARANTEES: returned segment_tokens <= self.max_tokens (or empty string with 0 tokens).
 
         Args:
             segment: Text segment to reduce
@@ -159,7 +159,7 @@ class SemanticDocumentChunker:
 
         while (
             segment_tokens > self.max_tokens
-            and len(segment) > 1
+            and len(segment) > 0
             and iterations < self.MAX_REDUCTION_ITERATIONS
         ):
             # Use max(1, ...) to prevent integer truncation producing empty string
@@ -237,7 +237,7 @@ class SemanticDocumentChunker:
             preamble_content = "\n".join(preamble_lines)
             if preamble_content.strip():
                 logger.debug(f"Chunking preamble content ({first_section_start} lines) for {doc.path}")
-                for chunk in self._chunk_plain_text(preamble_content, doc.path, chunk_counter):
+                for chunk in self._chunk_plain_text(preamble_content, doc.path, chunk_counter, section_title="Preamble"):
                     if chunk_counter[0] >= self.MAX_CHUNKS_PER_DOCUMENT:
                         logger.warning(
                             f"Document {doc.path} reached MAX_CHUNKS_PER_DOCUMENT ({self.MAX_CHUNKS_PER_DOCUMENT}) "
@@ -987,7 +987,7 @@ class SemanticDocumentChunker:
                 chunk_counter[0] += 1
 
     def _chunk_plain_text(
-        self, content: str, doc_path: str, chunk_counter: list[int]
+        self, content: str, doc_path: str, chunk_counter: list[int], section_title: str = ""
     ) -> Iterator[DocumentChunk]:
         """Chunk plain text without sections with line tracking.
 
@@ -997,6 +997,7 @@ class SemanticDocumentChunker:
             content: Document content to chunk
             doc_path: Document path
             chunk_counter: Mutable counter [current_index] for tracking unique chunk indices
+            section_title: Section title for chunks (default: empty string)
         """
         # P1 FIX: Check for whitespace-only content (consistent with _chunk_section)
         if not content or not content.strip():
@@ -1029,13 +1030,13 @@ class SemanticDocumentChunker:
                     # P0 FIX: Validate before yielding
                     if actual_tokens > self.max_tokens:
                         yield from self._split_oversized_block(
-                            chunk_content, "", doc_path, chunk_counter,
+                            chunk_content, section_title, doc_path, chunk_counter,
                             current_line_start, 0
                         )
                     else:
                         yield DocumentChunk(
                             content=chunk_content,
-                            section_title="",
+                            section_title=section_title,
                             start_line=current_line_start,
                             end_line=current_line_start + self._count_lines(chunk_content) - 1,
                             token_count=actual_tokens,
@@ -1048,7 +1049,7 @@ class SemanticDocumentChunker:
 
                 # Split oversized paragraph by sentences
                 yield from self._split_long_paragraph(
-                    para, "", doc_path, chunk_counter, para_start_line, content, content_position
+                    para, section_title, doc_path, chunk_counter, para_start_line, content, content_position
                 )
 
                 # Update position and continue
@@ -1067,13 +1068,13 @@ class SemanticDocumentChunker:
                 # P0 FIX: Validate before yielding
                 if actual_tokens > self.max_tokens:
                     yield from self._split_oversized_block(
-                        chunk_content, "", doc_path, chunk_counter,
+                        chunk_content, section_title, doc_path, chunk_counter,
                         current_line_start, 0
                     )
                 else:
                     yield DocumentChunk(
                         content=chunk_content,
-                        section_title="",
+                        section_title=section_title,
                         start_line=current_line_start,
                         end_line=current_line_start + self._count_lines(chunk_content) - 1,
                         token_count=actual_tokens,
@@ -1120,14 +1121,14 @@ class SemanticDocumentChunker:
 
             if actual_tokens > self.max_tokens:
                 yield from self._split_oversized_block(
-                    chunk_content, "", doc_path, chunk_counter,
+                    chunk_content, section_title, doc_path, chunk_counter,
                     current_line_start, 0
                 )
             else:
                 total_lines = self._count_lines(content)
                 yield DocumentChunk(
                     content=chunk_content,
-                    section_title="",
+                    section_title=section_title,
                     start_line=current_line_start,
                     end_line=min(current_line_start + self._count_lines(chunk_content) - 1, total_lines - 1),
                     token_count=actual_tokens,

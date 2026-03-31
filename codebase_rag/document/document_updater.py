@@ -621,20 +621,24 @@ class DocumentGraphUpdater:
 
         logger.debug(f"Storing document: {doc.path}")
 
-        # Track if we'll create a synthetic section (for section_count accuracy)
-        will_create_synthetic = not doc.sections and doc.content and doc.content.strip()
-
         # Check for preamble content (content before first section)
+        # Cache lines to avoid redundant split operations
         preamble_line_count = 0
         has_preamble = False
-        if doc.sections:
+        preamble_content = ""
+        doc_lines = doc.content.split("\n") if doc.content else []
+
+        if doc.sections and doc_lines:
             first_section_start = doc.sections[0].start_line
             if first_section_start > 0:
-                lines = doc.content.split("\n")
-                preamble_content = "\n".join(lines[:first_section_start])
+                preamble_content = "\n".join(doc_lines[:first_section_start])
                 if preamble_content.strip():
                     has_preamble = True
                     preamble_line_count = first_section_start
+
+        # Track if we'll create a synthetic section (for documents without sections)
+        # Note: Synthetic section and preamble are mutually exclusive
+        will_create_synthetic = not doc.sections and doc.content and doc.content.strip() and not has_preamble
 
         # Create Document node
         # Note: section_count includes synthetic sections for plain text files
@@ -659,8 +663,6 @@ class DocumentGraphUpdater:
 
         # Create preamble section if there's content before the first section
         if has_preamble:
-            lines = doc.content.split("\n")
-            preamble_content = "\n".join(lines[:preamble_line_count])
             preamble_qn = f"{doc.path}#synthetic:Preamble"
             logger.debug(f"Creating preamble section for {doc.path} ({preamble_line_count} lines)")
             ingestor.ensure_node_batch(
@@ -671,7 +673,7 @@ class DocumentGraphUpdater:
                     "title": "Preamble",
                     "level": 0,  # Level 0 to indicate it's before the document structure
                     "start_line": 0,
-                    "end_line": preamble_line_count - 1,
+                    "end_line": max(0, preamble_line_count - 1),
                     "content_snippet": preamble_content[:500],
                     "indexed_at": indexed_at,
                 },
@@ -685,7 +687,7 @@ class DocumentGraphUpdater:
                 "qualified_name": preamble_qn,
                 "title": "Preamble",
                 "start_line": 0,
-                "end_line": preamble_line_count - 1,
+                "end_line": max(0, preamble_line_count - 1),
                 "level": 0,
             })
             stats["sections"] += 1
@@ -699,6 +701,7 @@ class DocumentGraphUpdater:
         # create a synthetic "Document Content" section so chunks have a section to belong to.
         # Use "#synthetic:" prefix instead of "#L0:" to avoid collision with real sections
         # that might start at line 0 (edge case for malformed documents).
+        # Note: This is mutually exclusive with preamble section creation.
         if will_create_synthetic:
             synthetic_qn = f"{doc.path}#synthetic:Document Content"
             ingestor.ensure_node_batch(
