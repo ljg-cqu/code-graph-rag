@@ -76,7 +76,7 @@ def query_document_graph(
                 )
 
     try:
-        results = ingestor.execute_query(query)
+        results = ingestor.fetch_all(query, params={})
         logger.debug(f"Document graph query returned {len(results)} results")
         return results
     except Exception as e:
@@ -95,8 +95,8 @@ def get_document_by_path(
     WHERE d.path = $path AND d.workspace = $workspace
     RETURN d
     """
-    results = ingestor.execute_query(
-        query, parameters={"path": document_path, "workspace": workspace}
+    results = ingestor.fetch_all(
+        query, params={"path": document_path, "workspace": workspace}
     )
     return results[0] if results else None
 
@@ -120,8 +120,8 @@ def get_document_sections(
     RETURN s
     ORDER BY s.start_line
     """
-    return ingestor.execute_query(
-        query, parameters={"path": document_path, "workspace": workspace}
+    return ingestor.fetch_all(
+        query, params={"path": document_path, "workspace": workspace}
     )
 
 
@@ -166,8 +166,8 @@ def get_section_chunks(
         RETURN c
         ORDER BY c.start_line
         """
-    return ingestor.execute_query(
-        query, parameters={"qn": section_qn, "workspace": workspace}
+    return ingestor.fetch_all(
+        query, params={"qn": section_qn, "workspace": workspace}
     )
 
 

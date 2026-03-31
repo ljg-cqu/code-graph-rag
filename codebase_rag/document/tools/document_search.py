@@ -55,6 +55,14 @@ def document_semantic_search(
     )
     query_embedding = provider.embed(query)
 
+    # Validate embedding dimension
+    expected_dimension = provider.dimension
+    if expected_dimension and len(query_embedding) != expected_dimension:
+        raise ValueError(
+            f"Query embedding dimension mismatch: expected {expected_dimension}, "
+            f"got {len(query_embedding)}. Check EMBEDDING_MODEL configuration."
+        )
+
     # Use vector backend for similarity search
     if vector_backend:
         results = vector_backend.search(
@@ -93,9 +101,6 @@ def _search_memgraph_native(
     - Document-[:CONTAINS_CHUNK]->Chunk
     - Chunk-[:BELONGS_TO_SECTION]->Section (optional)
     """
-    # Convert embedding to string format for Cypher
-    embedding_str = str(embedding)
-
     query = """
     CALL vector_search.search(
         'doc_embeddings',
@@ -116,9 +121,9 @@ def _search_memgraph_native(
     ORDER BY score DESC
     """
 
-    return ingestor.execute_query(
+    return ingestor.fetch_all(
         query,
-        parameters={
+        params={
             "embedding": embedding,
             "workspace": workspace,
             "limit": limit,
@@ -166,9 +171,9 @@ def search_documents_by_keywords(
     LIMIT $limit
     """
 
-    return ingestor.execute_query(
+    return ingestor.fetch_all(
         query,
-        parameters={"workspace": workspace, "keywords": keywords, "limit": limit},
+        params={"workspace": workspace, "keywords": keywords, "limit": limit},
     )
 
 

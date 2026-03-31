@@ -43,8 +43,8 @@ def read_document_content(
     RETURN d
     """
 
-    results = ingestor.execute_query(
-        query, parameters={"path": document_path, "workspace": workspace}
+    results = ingestor.fetch_all(
+        query, params={"path": document_path, "workspace": workspace}
     )
 
     if not results:
@@ -110,8 +110,8 @@ def _get_sections_with_content(
         ORDER BY s.start_line
         """
 
-    sections = ingestor.execute_query(
-        query, parameters={"path": document_path, "workspace": workspace}
+    sections = ingestor.fetch_all(
+        query, params={"path": document_path, "workspace": workspace}
     )
 
     section_list = []
@@ -176,8 +176,8 @@ def _get_chunks_for_section(
         ORDER BY c.start_line
         """
 
-    return ingestor.execute_query(
-        query, parameters={"qn": section_qn, "workspace": workspace}
+    return ingestor.fetch_all(
+        query, params={"qn": section_qn, "workspace": workspace}
     )
 
 

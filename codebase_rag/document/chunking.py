@@ -263,6 +263,7 @@ class SemanticDocumentChunker:
 
         Each section only chunks its "own" content - the content between
         its header and the next subsection's header (or its end_line).
+        Also processes content BETWEEN sibling subsections to prevent data loss.
 
         Line tracking note: section.start_line is the header line.
         section.content starts at section.start_line + 1.
@@ -320,9 +321,83 @@ class SemanticDocumentChunker:
                         own_content, section.title, content_start, own_content_end, doc_path, chunk_counter
                     )
 
-        # Recursively process subsections with updated counter
-        for subsection in section.subsections:
+        # Process subsections and content BETWEEN them
+        # Sort subsections by start_line to process in order
+        sorted_subsections = sorted(section.subsections, key=lambda s: s.start_line)
+
+        # Track the end of the previous subsection to find "between" content
+        prev_end = own_content_end if subsection_starts else section.end_line
+        all_lines = section.content.split("\n")
+
+        for subsection in sorted_subsections:
+            # Check for content between previous content and this subsection
+            if subsection.start_line > prev_end + 1:
+                # There's content between prev_end and this subsection
+                between_start = prev_end + 1
+                between_end = subsection.start_line - 1
+
+                # Calculate line offset within section.content
+                # section.content starts at section.start_line + 1
+                content_offset = content_start
+                between_start_idx = between_start - content_offset
+                between_end_idx = between_end - content_offset + 1
+
+                if between_end_idx <= len(all_lines) and between_start_idx >= 0:
+                    between_lines = all_lines[between_start_idx:between_end_idx]
+                    between_content = "\n".join(between_lines)
+
+                    if between_content.strip():
+                        tokens = self.count_tokens(between_content)
+                        if tokens <= self.max_tokens:
+                            yield DocumentChunk(
+                                content=between_content,
+                                section_title=section.title,  # Belongs to parent section
+                                start_line=between_start,
+                                end_line=between_end,
+                                token_count=tokens,
+                                document_path=doc_path,
+                                chunk_index=chunk_counter[0],
+                            )
+                            chunk_counter[0] += 1
+                        else:
+                            yield from self._split_section_content(
+                                between_content, section.title, between_start, between_end, doc_path, chunk_counter
+                            )
+
+            # Process this subsection
             yield from self._chunk_section_recursive(subsection, doc_path, chunk_counter)
+            prev_end = subsection.end_line
+
+        # Check for trailing content after the last subsection
+        if sorted_subsections and prev_end < section.end_line:
+            trailing_start = prev_end + 1
+            trailing_end = section.end_line
+
+            content_offset = content_start
+            trailing_start_idx = trailing_start - content_offset
+            trailing_end_idx = trailing_end - content_offset + 1
+
+            if trailing_end_idx <= len(all_lines) and trailing_start_idx >= 0:
+                trailing_lines = all_lines[trailing_start_idx:trailing_end_idx]
+                trailing_content = "\n".join(trailing_lines)
+
+                if trailing_content.strip():
+                    tokens = self.count_tokens(trailing_content)
+                    if tokens <= self.max_tokens:
+                        yield DocumentChunk(
+                            content=trailing_content,
+                            section_title=section.title,
+                            start_line=trailing_start,
+                            end_line=trailing_end,
+                            token_count=tokens,
+                            document_path=doc_path,
+                            chunk_index=chunk_counter[0],
+                        )
+                        chunk_counter[0] += 1
+                    else:
+                        yield from self._split_section_content(
+                            trailing_content, section.title, trailing_start, trailing_end, doc_path, chunk_counter
+                        )
 
     def _split_section_content(
         self,
@@ -587,7 +662,7 @@ class SemanticDocumentChunker:
 
     def _split_long_paragraph(
         self, para: str, section_title: str, doc_path: str, chunk_counter: list[int],
-        para_start_line: int, original_content: str = "", content_position: int = 0
+        para_start_line: int
     ) -> Iterator[DocumentChunk]:
         """Split a very long paragraph by sentences with accurate line tracking.
 
@@ -600,8 +675,6 @@ class SemanticDocumentChunker:
             doc_path: Document path
             chunk_counter: Mutable counter [current_index] for tracking unique chunk indices
             para_start_line: Starting line number (0-indexed)
-            original_content: Original section content for line tracking (optional)
-            content_position: Position of paragraph in original content (optional)
         """
         # Split on sentence boundaries, keeping punctuation with the sentence
         raw_splits = _SENTENCE_BOUNDARY_RE.split(para)
@@ -1049,7 +1122,7 @@ class SemanticDocumentChunker:
 
                 # Split oversized paragraph by sentences
                 yield from self._split_long_paragraph(
-                    para, section_title, doc_path, chunk_counter, para_start_line, content, content_position
+                    para, section_title, doc_path, chunk_counter, para_start_line
                 )
 
                 # Update position and continue

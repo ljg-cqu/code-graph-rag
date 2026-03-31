@@ -9,6 +9,9 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import os
+import tempfile
+import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -153,11 +156,13 @@ class VersionCache:
     Cache for document versions.
 
     Stores version metadata for quick lookup during incremental updates.
+    Thread-safe with in-memory locking and atomic disk writes.
     """
 
     def __init__(self, cache_path: Path | None = None) -> None:
         self._cache: dict[str, DocumentVersion] = {}
         self._cache_path = cache_path
+        self._lock = threading.RLock()  # Reentrant lock for thread safety
 
         if cache_path and cache_path.exists():
             self._load(cache_path)
@@ -172,62 +177,88 @@ class VersionCache:
                 finally:
                     fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
-            for path_str, version_data in data.items():
-                self._cache[path_str] = DocumentVersion(
-                    path=version_data["path"],
-                    content_hash=version_data["content_hash"],
-                    modified_date=version_data["modified_date"],
-                    indexed_at=version_data["indexed_at"],
-                    section_hashes=version_data.get("section_hashes", []),
-                    extractor_version=version_data.get("extractor_version", "1.0"),
-                )
+            with self._lock:
+                for path_str, version_data in data.items():
+                    self._cache[path_str] = DocumentVersion(
+                        path=version_data["path"],
+                        content_hash=version_data["content_hash"],
+                        modified_date=version_data["modified_date"],
+                        indexed_at=version_data["indexed_at"],
+                        section_hashes=version_data.get("section_hashes", []),
+                        extractor_version=version_data.get("extractor_version", "1.0"),
+                    )
         except (json.JSONDecodeError, KeyError):
             # Start fresh if cache is corrupted
-            self._cache = {}
+            with self._lock:
+                self._cache.clear()
 
     def save(self, path: Path | None = None) -> None:
-        """Save version cache to disk with file locking."""
+        """Save version cache to disk atomically with file locking.
+
+        Uses atomic write pattern: write to temp file, then rename.
+        This prevents corruption if the process crashes mid-write.
+        """
         save_path = path or self._cache_path
         if not save_path:
             return
 
-        data = {}
-        for path_str, version in self._cache.items():
-            data[path_str] = {
-                "path": version.path,
-                "content_hash": version.content_hash,
-                "modified_date": version.modified_date,
-                "indexed_at": version.indexed_at,
-                "section_hashes": version.section_hashes,
-                "extractor_version": version.extractor_version,
-            }
+        with self._lock:
+            data = {}
+            for path_str, version in self._cache.items():
+                data[path_str] = {
+                    "path": version.path,
+                    "content_hash": version.content_hash,
+                    "modified_date": version.modified_date,
+                    "indexed_at": version.indexed_at,
+                    "section_hashes": version.section_hashes,
+                    "extractor_version": version.extractor_version,
+                }
 
-        # Use file locking for thread safety
-        with open(save_path, "w") as f:
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        # Atomic write: write to temp file, then rename
+        save_path_parent = save_path.parent
+        save_path_parent.mkdir(parents=True, exist_ok=True)
+
+        # Create temp file in same directory for atomic rename
+        fd, temp_path = tempfile.mkstemp(dir=save_path_parent, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                try:
+                    f.write(json.dumps(data, indent=2))
+                finally:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            # Atomic rename (on POSIX systems)
+            os.replace(temp_path, save_path)
+        except Exception:
+            # Clean up temp file on failure
             try:
-                f.write(json.dumps(data, indent=2))
-            finally:
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                os.unlink(temp_path)
+            except OSError:
+                pass
+            raise
 
     def get(self, path: str) -> DocumentVersion | None:
         """Get version for a path."""
-        return self._cache.get(path)
+        with self._lock:
+            return self._cache.get(path)
 
     def set(self, version: DocumentVersion) -> None:
         """Set version for a path."""
-        self._cache[version.path] = version
+        with self._lock:
+            self._cache[version.path] = version
 
     def remove(self, path: str) -> bool:
         """Remove version for a path."""
-        if path in self._cache:
-            del self._cache[path]
-            return True
-        return False
+        with self._lock:
+            if path in self._cache:
+                del self._cache[path]
+                return True
+            return False
 
     def clear(self) -> None:
         """Clear all versions."""
-        self._cache.clear()
+        with self._lock:
+            self._cache.clear()
 
 
 __all__ = [

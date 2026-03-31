@@ -149,6 +149,10 @@ class DocumentGraphUpdater:
 
     def _map_error_type(self, exc: Exception) -> ErrorType:
         """Map common exception types to ErrorType for better classification."""
+        from ..exceptions import EmbeddingError
+
+        if isinstance(exc, EmbeddingError):
+            return ErrorType.EMBEDDING_ERROR
         if isinstance(exc, FileNotFoundError):
             return ErrorType.FILE_NOT_FOUND
         if isinstance(exc, PermissionError):
@@ -956,12 +960,12 @@ class DocumentGraphUpdater:
                     f"expected {expected_dimension}, got {len(embedding)}. "
                     f"Check that EMBEDDING_MODEL matches the vector index configuration.",
                 )
-            # Check for NaN values
-            if any(isinstance(v, float) and math.isnan(v) for v in embedding):
+            # Check for NaN or infinity values (invalid for vector operations)
+            if any(isinstance(v, float) and (math.isnan(v) or math.isinf(v)) for v in embedding):
                 raise ExtractionException(
                     path=doc.path,
                     error_type=ErrorType.EMBEDDING_ERROR,
-                    message=f"Embedding for chunk {i} contains NaN values",
+                    message=f"Embedding for chunk {i} contains NaN or infinity values",
                 )
             # Check for all-zero embedding (indicates failure)
             if all(v == 0.0 for v in embedding):
