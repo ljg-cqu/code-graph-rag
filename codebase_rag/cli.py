@@ -17,6 +17,7 @@ from .main import (
     _check_graph_freshness,
     _prompt_for_reindex,
     app_context,
+    connect_doc_memgraph,
     connect_memgraph,
     export_graph_to_file,
     main_async,
@@ -72,6 +73,155 @@ def _update_and_validate_models(orchestrator: str | None, cypher: str | None) ->
         raise typer.Exit(1) from e
 
     validate_models_early()
+
+
+def _handle_indexing(
+    repo_path: Path,
+    update_graph: bool,
+    index_docs: bool,
+    index_all: bool,
+    with_docs: bool,
+    clean: bool,
+    batch_size: int,
+    project_name: str | None,
+    exclude: list[str] | None,
+    interactive_setup: bool,
+    doc_workspace: str = "default",
+    output: str | None = None,
+    index_timeout: int = 300,
+) -> tuple[bool, bool, bool]:
+    """Handle code and document indexing before chat.
+
+    Args:
+        repo_path: Repository path
+        update_graph: --update-graph flag
+        index_docs: --index-docs flag
+        index_all: --index-all flag
+        with_docs: --with-docs flag
+        clean: --clean flag
+        batch_size: Batch size
+        project_name: Project name override
+        exclude: Exclude patterns
+        interactive_setup: Interactive setup flag
+        doc_workspace: Document workspace identifier (default: 'default')
+        output: Output path for graph export (optional)
+        index_timeout: Maximum seconds for indexing operations (default: 300s)
+
+    Returns:
+        Tuple of (code_indexed, docs_indexed, effective_with_docs)
+
+    Raises:
+        typer.Exit: If code indexing fails with --update-graph flag (blocking)
+        Note: Document indexing failures are non-blocking, return docs_indexed=False
+    """
+    code_indexed = False
+    docs_indexed = False
+    effective_with_docs = with_docs
+
+    # Resolve effective flags
+    effective_update_graph = update_graph or index_all
+    effective_index_docs = index_docs or index_all
+
+    # Implied --with-docs if indexing docs
+    if effective_index_docs:
+        effective_with_docs = True
+
+    # === Code Indexing ===
+    if effective_update_graph:
+        _info(style(cs.CLI_MSG_UPDATING_GRAPH.format(path=repo_path), cs.Color.GREEN))
+
+        cgrignore = load_cgrignore_patterns(repo_path)
+        cli_excludes = frozenset(exclude) if exclude else frozenset()
+        exclude_paths = cli_excludes | cgrignore.exclude or None
+        unignore_paths: frozenset[str] | None = None
+
+        if interactive_setup:
+            unignore_paths = prompt_for_unignored_directories(repo_path, exclude)
+        else:
+            _info(style(cs.CLI_MSG_AUTO_EXCLUDE, cs.Color.YELLOW))
+            unignore_paths = cgrignore.unignore or None
+
+        with connect_memgraph(batch_size) as ingestor:
+            if clean:
+                _info(style(cs.CLI_MSG_CLEANING_DB, cs.Color.YELLOW))
+                ingestor.clean_database()
+                _delete_hash_cache(repo_path)
+
+            ingestor.ensure_constraints()
+            parsers, queries = load_parsers()
+
+            updater = GraphUpdater(
+                ingestor=ingestor,
+                repo_path=str(repo_path),
+                parsers=parsers,
+                queries=queries,
+                unignore_paths=unignore_paths,
+                exclude_paths=exclude_paths,
+                project_name=project_name,
+            )
+            updater.run(force=clean)
+
+            if output:
+                _info(style(cs.CLI_MSG_EXPORTING_TO.format(path=output), cs.Color.CYAN))
+                if not export_graph_to_file(ingestor, output):
+                    raise typer.Exit(1)
+
+        _info(style(cs.CLI_MSG_GRAPH_UPDATED, cs.Color.GREEN))
+        code_indexed = True
+
+    # === Document Indexing ===
+    if effective_index_docs:
+        _info(
+            style(
+                f"Indexing documents in: {repo_path} (workspace: {doc_workspace})",
+                cs.Color.CYAN,
+            )
+        )
+
+        try:
+            from codebase_rag.document.document_updater import DocumentGraphUpdater
+
+            # Clean document database if requested
+            if clean:
+                with connect_doc_memgraph(batch_size) as doc_ingestor:
+                    _info(style("Cleaning document database...", cs.Color.YELLOW))
+                    doc_ingestor.clean_database()
+                    _info(style("Document database cleaned.", cs.Color.GREEN))
+
+            updater = DocumentGraphUpdater(
+                host=settings.DOC_MEMGRAPH_HOST,
+                port=settings.DOC_MEMGRAPH_PORT,
+                repo_path=repo_path,
+                batch_size=batch_size,
+                workspace=doc_workspace,
+            )
+            # DocumentGraphUpdater.run() returns dict with keys:
+            # documents_indexed, sections_created, chunks_created, errors
+            stats = updater.run(force=clean)
+
+            # Display indexing stats
+            table = Table(
+                title=style("Document Indexing Results", cs.Color.GREEN),
+                show_header=True,
+                header_style=f"{cs.StyleModifier.BOLD} {cs.Color.MAGENTA}",
+            )
+            table.add_column("Metric", style=cs.Color.CYAN)
+            table.add_column("Count", style=cs.Color.YELLOW, justify="right")
+
+            for key, value in stats.items():
+                table.add_row(key.replace("_", " ").title(), str(value))
+
+            app_context.console.print(table)
+            docs_indexed = True
+
+        except Exception as e:
+            _info(style(f"Document indexing failed: {e}", cs.Color.RED))
+            logger.exception("Document indexing failed")
+            # Don't block chat - continue with code only
+            docs_indexed = False
+            effective_with_docs = False  # Disable doc queries if indexing failed
+
+    return (code_indexed, docs_indexed, effective_with_docs)
 
 
 @app.callback()
@@ -283,115 +433,28 @@ def start(
     _update_and_validate_models(orchestrator, cypher)
 
     # === Handle indexing with new flags ===
-    effective_update_graph = update_graph or index_all
-    effective_index_docs = index_docs or index_all
+    code_indexed, docs_indexed, effective_with_docs = _handle_indexing(
+        repo_path=Path(target_repo_path),
+        update_graph=update_graph,
+        index_docs=index_docs,
+        index_all=index_all,
+        with_docs=with_docs,
+        clean=clean,
+        batch_size=effective_batch_size,
+        project_name=project_name,
+        exclude=exclude,
+        interactive_setup=interactive_setup,
+        doc_workspace=doc_workspace,
+        output=output,
+        index_timeout=index_timeout,
+    )
 
-    # Implied --with-docs if indexing docs
-    if effective_index_docs:
-        effective_with_docs = True
-
-    # === Code Indexing ===
-    if effective_update_graph:
-        repo_to_update = Path(target_repo_path)
-        _info(
-            style(cs.CLI_MSG_UPDATING_GRAPH.format(path=repo_to_update), cs.Color.GREEN)
-        )
-
-        cgrignore = load_cgrignore_patterns(repo_to_update)
-        cli_excludes = frozenset(exclude) if exclude else frozenset()
-        exclude_paths = cli_excludes | cgrignore.exclude or None
-        unignore_paths: frozenset[str] | None = None
-        if interactive_setup:
-            unignore_paths = prompt_for_unignored_directories(repo_to_update, exclude)
-        else:
-            _info(style(cs.CLI_MSG_AUTO_EXCLUDE, cs.Color.YELLOW))
-            unignore_paths = cgrignore.unignore or None
-
-        with connect_memgraph(effective_batch_size) as ingestor:
-            if clean:
-                _info(style(cs.CLI_MSG_CLEANING_DB, cs.Color.YELLOW))
-                ingestor.clean_database()
-                _delete_hash_cache(repo_to_update)
-
-            ingestor.ensure_constraints()
-
-            parsers, queries = load_parsers()
-
-            updater = GraphUpdater(
-                ingestor=ingestor,
-                repo_path=repo_to_update,
-                parsers=parsers,
-                queries=queries,
-                unignore_paths=unignore_paths,
-                exclude_paths=exclude_paths,
-                project_name=project_name,
-            )
-            updater.run(force=clean)
-
-            if output:
-                _info(style(cs.CLI_MSG_EXPORTING_TO.format(path=output), cs.Color.CYAN))
-                if not export_graph_to_file(ingestor, output):
-                    raise typer.Exit(1)
-
-        _info(style(cs.CLI_MSG_GRAPH_UPDATED, cs.Color.GREEN))
-
-        # If only updating graph (no chat), return
-        if not effective_with_docs and not ask_agent:
-            return
-
-    # === Document Indexing ===
-    if effective_index_docs:
-        repo_to_index = Path(target_repo_path)
-        _info(
-            style(
-                f"Indexing documents in: {repo_to_index} (workspace: {doc_workspace})",
-                cs.Color.CYAN,
-            )
-        )
-
-        try:
-            from codebase_rag.document.document_updater import DocumentGraphUpdater
-            from codebase_rag.services.graph_service import MemgraphIngestor as DocIngestor
-
-            # Clean document database if requested
-            if clean:
-                with DocIngestor(
-                    host=settings.DOC_MEMGRAPH_HOST,
-                    port=settings.DOC_MEMGRAPH_PORT,
-                ) as doc_ingestor:
-                    _info(style("Cleaning document database...", cs.Color.YELLOW))
-                    doc_ingestor.clean_database()
-                    _info(style("Document database cleaned.", cs.Color.GREEN))
-
-            updater = DocumentGraphUpdater(
-                host=settings.DOC_MEMGRAPH_HOST,
-                port=settings.DOC_MEMGRAPH_PORT,
-                repo_path=repo_to_index,
-                workspace=doc_workspace,
-            )
-            stats = updater.run(force=clean)
-
-            # Display indexing stats
-            doc_table = Table(
-                title=style("Document Indexing Results", cs.Color.GREEN),
-                show_header=True,
-            )
-            doc_table.add_column("Metric", style=cs.Color.CYAN)
-            doc_table.add_column("Count", style=cs.Color.YELLOW, justify="right")
-
-            for key, value in stats.items():
-                doc_table.add_row(key.replace("_", " ").title(), str(value))
-
-            app_context.console.print(doc_table)
-
-        except Exception as e:
-            _info(style(f"Document indexing failed: {e}", cs.Color.RED))
-            logger.exception("Document indexing failed")
-            # Don't block chat - continue with code only
-            effective_with_docs = False
+    # If only updating graph (no chat), return
+    if code_indexed and not effective_with_docs and not ask_agent:
+        return
 
     # === Freshness Check ===
-    if check_freshness and not effective_update_graph and not effective_index_docs:
+    if check_freshness and not code_indexed and not docs_indexed:
         # Only check freshness if we haven't just indexed
         repo_to_check = Path(target_repo_path)
         code_fresh, docs_fresh, warnings = _check_graph_freshness(
@@ -456,7 +519,7 @@ def start(
                 main_unified_async(
                     target_repo_path,
                     effective_batch_size,
-                    with_docs=True,
+                    with_docs=effective_with_docs,
                     query_mode=query_mode,
                     doc_workspace=doc_workspace,
                 )
