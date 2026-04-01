@@ -966,6 +966,110 @@ def connect_both_graphs(
         code_graph.__exit__(None, None, None)
 
 
+def _check_graph_freshness(
+    repo_path: Path,
+    with_docs: bool,
+    doc_workspace: str = "default",
+) -> tuple[bool, bool, list[str]]:
+    """Check if code and document graphs are up-to-date.
+
+    Args:
+        repo_path: Repository path
+        with_docs: Whether to check document graph
+        doc_workspace: Document workspace identifier
+
+    Returns:
+        Tuple of (code_fresh, docs_fresh, warnings)
+
+    Note: This is a best-effort check. For comprehensive freshness validation,
+    use file hash comparison.
+    """
+    warnings: list[str] = []
+    code_fresh = True
+    docs_fresh = True
+
+    # === Check Code Graph Freshness ===
+    try:
+        with connect_memgraph(batch_size=1) as ingestor:
+            # Check if graph has nodes
+            result = ingestor.fetch_all("MATCH (n) RETURN count(n) as count")
+            if not result or result[0].get("count", 0) == 0:
+                code_fresh = False
+                warnings.append("Code graph is empty")
+            else:
+                # Check hash cache exists (basic check)
+                cache_path = repo_path / cs.HASH_CACHE_FILENAME
+                if not cache_path.exists():
+                    warnings.append("Code hash cache not found (may be stale)")
+    except Exception as e:
+        logger.warning(f"Could not check code graph freshness: {e}")
+        warnings.append(f"Code graph check failed: {e}")
+
+    # === Check Document Graph Freshness ===
+    if with_docs:
+        try:
+            with connect_doc_memgraph(batch_size=1) as ingestor:
+                # Check if document graph has nodes for this workspace
+                result = ingestor.fetch_all(
+                    "MATCH (d:Document {workspace: $ws}) RETURN count(d) as count",
+                    {"ws": doc_workspace},
+                )
+                if not result or result[0].get("count", 0) == 0:
+                    docs_fresh = False
+                    warnings.append(f"No documents indexed for workspace '{doc_workspace}'")
+                else:
+                    # Check version cache exists
+                    cgr_dir = repo_path / ".cgr"
+                    version_cache_path = cgr_dir / "doc_versions.json"
+                    if not version_cache_path.exists():
+                        docs_fresh = False
+                        warnings.append("Document version cache not found")
+        except Exception as e:
+            logger.warning(f"Could not check document graph freshness: {e}")
+            warnings.append(f"Document graph check failed: {e}")
+
+    return (code_fresh, docs_fresh, warnings)
+
+
+def _prompt_for_reindex(
+    code_fresh: bool,
+    docs_fresh: bool,
+    warnings: list[str],
+) -> tuple[bool, bool]:
+    """Prompt user to re-index if graphs are stale.
+
+    Args:
+        code_fresh: Is code graph up-to-date
+        docs_fresh: Is document graph up-to-date
+        warnings: List of freshness warnings
+
+    Returns:
+        Tuple of (should_index_code, should_index_docs)
+    """
+    should_index_code = False
+    should_index_docs = False
+
+    # Display warnings
+    if warnings:
+        app_context.console.print(
+            style("\n⚠️  Graph Freshness Warnings:", cs.Color.YELLOW)
+        )
+        for warning in warnings:
+            app_context.console.print(f"  - {warning}")
+
+    # Prompt for code indexing
+    if not code_fresh:
+        if Confirm.ask("\nCode graph appears stale. Index now?"):
+            should_index_code = True
+
+    # Prompt for document indexing
+    if not docs_fresh:
+        if Confirm.ask("Document graph appears stale. Index now?"):
+            should_index_docs = True
+
+    return (should_index_code, should_index_docs)
+
+
 def export_graph_to_file(ingestor: MemgraphIngestor, output: str) -> bool:
     output_path = Path(output)
 

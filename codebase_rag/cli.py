@@ -14,6 +14,8 @@ from . import logs as ls
 from .config import load_cgrignore_patterns, settings
 from .graph_updater import GraphUpdater
 from .main import (
+    _check_graph_freshness,
+    _prompt_for_reindex,
     app_context,
     connect_memgraph,
     export_graph_to_file,
@@ -393,6 +395,62 @@ def start(
             logger.exception("Document indexing failed")
             # Don't block chat - continue with code only
             effective_with_docs = False
+
+    # === Freshness Check ===
+    if check_freshness and not effective_update_graph and not effective_index_docs:
+        # Only check freshness if we haven't just indexed
+        repo_to_check = Path(target_repo_path)
+        code_fresh, docs_fresh, warnings = _check_graph_freshness(
+            repo_to_check, effective_with_docs, doc_workspace
+        )
+
+        if warnings:
+            should_index_code, should_index_docs = _prompt_for_reindex(
+                code_fresh, docs_fresh, warnings
+            )
+
+            # Handle re-indexing if user confirmed
+            if should_index_code:
+                _info(
+                    style(
+                        cs.CLI_MSG_UPDATING_GRAPH.format(path=repo_to_check),
+                        cs.Color.GREEN,
+                    )
+                )
+                with connect_memgraph(effective_batch_size) as ingestor:
+                    ingestor.ensure_constraints()
+                    parsers, queries = load_parsers()
+                    updater = GraphUpdater(
+                        ingestor=ingestor,
+                        repo_path=repo_to_check,
+                        parsers=parsers,
+                        queries=queries,
+                    )
+                    updater.run(force=False)
+                    _info(style(cs.CLI_MSG_GRAPH_UPDATED, cs.Color.GREEN))
+
+            if should_index_docs:
+                _info(
+                    style(
+                        f"Indexing documents in: {repo_to_check}",
+                        cs.Color.CYAN,
+                    )
+                )
+                try:
+                    from codebase_rag.document.document_updater import DocumentGraphUpdater
+
+                    updater = DocumentGraphUpdater(
+                        host=settings.DOC_MEMGRAPH_HOST,
+                        port=settings.DOC_MEMGRAPH_PORT,
+                        repo_path=repo_to_check,
+                        workspace=doc_workspace,
+                    )
+                    stats = updater.run(force=False)
+                    _info(style(f"Documents indexed: {stats}", cs.Color.GREEN))
+                    effective_with_docs = True
+                except Exception as e:
+                    _info(style(f"Document indexing failed: {e}", cs.Color.RED))
+                    effective_with_docs = False
 
     # === Start chat session ===
     try:
