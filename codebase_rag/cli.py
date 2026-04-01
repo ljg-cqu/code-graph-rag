@@ -762,12 +762,18 @@ def index_docs(
     repo_path: str | None = typer.Option(
         None, "--repo-path", help=ch.HELP_REPO_PATH_RETRIEVAL
     ),
+    clean: bool = typer.Option(
+        False,
+        "--clean",
+        help=ch.HELP_CLEAN_DOC_DB,
+    ),
     force: bool = typer.Option(
         False, "--force", "-f", help="Force re-indexing (ignore version cache)"
     ),
 ) -> None:
     """Index documents into the document graph."""
     from .document.document_updater import DocumentGraphUpdater
+    from .services.graph_service import MemgraphIngestor
 
     target_repo_path = repo_path or settings.TARGET_REPO_PATH
     repo_to_index = Path(target_repo_path)
@@ -775,6 +781,15 @@ def index_docs(
     _info(style(f"Indexing documents in: {repo_to_index}", cs.Color.CYAN))
 
     try:
+        with MemgraphIngestor(
+            host=settings.DOC_MEMGRAPH_HOST,
+            port=settings.DOC_MEMGRAPH_PORT,
+        ) as ingestor:
+            if clean:
+                _info(style("Cleaning document database...", cs.Color.YELLOW))
+                ingestor.clean_database()
+                _info(style("Document database cleaned.", cs.Color.GREEN))
+
         updater = DocumentGraphUpdater(
             host=settings.DOC_MEMGRAPH_HOST,
             port=settings.DOC_MEMGRAPH_PORT,

@@ -479,6 +479,13 @@ cgr index-docs --repo-path /path/to/your/repo
 
 This indexes Markdown, PDF, DOCX, and text files, creating Document, Section, and Chunk nodes with embeddings.
 
+**For the first document indexing (clean start):**
+```bash
+cgr index-docs --repo-path /path/to/your/repo --clean
+```
+
+The `--clean` flag clears the document database before indexing, similar to the code GraphRAG `--clean` option.
+
 **Query the document graph only:**
 ```bash
 cgr query-docs "How do I use the authentication API?" --repo-path /path/to/your/repo

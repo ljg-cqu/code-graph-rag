@@ -126,6 +126,7 @@ HELP_DOC_PATH = "Path to the document to validate"
 HELP_SCOPE = "Scope of validation: 'all', 'sections', or 'claims'"
 HELP_MAX_COST = "Maximum cost budget for validation in USD"
 HELP_DRY_RUN = "Estimate cost without running validation"
+HELP_CLEAN_DOC_DB = "Clean the document database before indexing (use when adding first documents)"
 
 CLI_COMMANDS: dict[CLICommandName, str] = {
     CLICommandName.START: CMD_START,
