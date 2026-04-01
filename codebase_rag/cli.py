@@ -219,7 +219,8 @@ def _handle_indexing(
             logger.exception("Document indexing failed")
             # Don't block chat - continue with code only
             docs_indexed = False
-            effective_with_docs = False  # Disable doc queries if indexing failed
+            # Preserve user's explicit --with-docs flag; only disable if indexing was the only reason
+            effective_with_docs = with_docs
 
     return (code_indexed, docs_indexed, effective_with_docs)
 
@@ -412,23 +413,22 @@ def start(
 
     target_repo_path = repo_path or settings.TARGET_REPO_PATH
 
-    if output and not update_graph:
+    # --output requires --update-graph or --index-all (which triggers code update)
+    if output and not (update_graph or index_all):
         app_context.console.print(
             style(cs.CLI_ERR_OUTPUT_REQUIRES_UPDATE, cs.Color.RED)
         )
         raise typer.Exit(1)
 
+    # --clean requires --update-graph, --index-docs, or --index-all
+    if clean and not (update_graph or index_docs or index_all):
+        typer.echo(
+            "ERROR: --clean requires --update-graph, --index-docs, or --index-all.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
     effective_batch_size = settings.resolve_batch_size(batch_size)
-
-    if clean and not update_graph:
-        repo_to_clean = Path(target_repo_path)
-        with connect_memgraph(effective_batch_size) as ingestor:
-            _info(style(cs.CLI_MSG_CLEANING_DB, cs.Color.YELLOW))
-            ingestor.clean_database()
-
-        _delete_hash_cache(repo_to_clean)
-        _info(style(cs.CLI_MSG_CLEAN_DONE, cs.Color.GREEN))
-        return
 
     _update_and_validate_models(orchestrator, cypher)
 
