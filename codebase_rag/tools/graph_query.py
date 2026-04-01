@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from loguru import logger
 from pydantic_ai import Tool
 
 if TYPE_CHECKING:
@@ -42,7 +41,7 @@ def create_graph_query_tool(query_router: QueryRouter) -> Tool:
             Formatted query results with source attribution
         """
         # Parse mode override
-        effective_mode = query_router.current_mode
+        effective_mode = getattr(query_router, 'current_mode', QueryMode.CODE_ONLY)
         if mode:
             try:
                 effective_mode = QueryMode(mode.lower())

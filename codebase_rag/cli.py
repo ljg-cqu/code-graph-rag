@@ -233,12 +233,10 @@ def start(
 
     # Mode validation: non-code_only modes require --with-docs
     if mode != "code_only" and not effective_with_docs:
-        app_context.console.print(
-            style(
-                f"ERROR: Mode '{mode}' requires document graph. "
-                f"Add --with-docs, --index-docs, or --index-all flag.",
-                cs.Color.RED,
-            )
+        typer.echo(
+            f"ERROR: Mode '{mode}' requires document graph. "
+            f"Add --with-docs, --index-docs, or --index-all flag.",
+            err=True,
         )
         raise typer.Exit(1)
 
@@ -246,23 +244,19 @@ def start(
     try:
         query_mode = QueryMode(mode.lower())
     except ValueError:
-        app_context.console.print(
-            style(
-                f"ERROR: Invalid mode '{mode}'. "
-                f"Valid modes: code_only, document_only, both_merged, code_vs_doc, doc_vs_code",
-                cs.Color.RED,
-            )
+        typer.echo(
+            f"ERROR: Invalid mode '{mode}'. "
+            f"Valid modes: code_only, document_only, both_merged, code_vs_doc, doc_vs_code",
+            err=True,
         )
         raise typer.Exit(1)
 
     # Workspace validation: valid identifier pattern
     if not re.match(r"^[a-zA-Z0-9_-]{1,64}$", doc_workspace):
-        app_context.console.print(
-            style(
-                f"ERROR: Invalid workspace '{doc_workspace}'. "
-                f"Must be 1-64 chars: letters, numbers, underscore, hyphen only.",
-                cs.Color.RED,
-            )
+        typer.echo(
+            f"ERROR: Invalid workspace '{doc_workspace}'. "
+            f"Must be 1-64 chars: letters, numbers, underscore, hyphen only.",
+            err=True,
         )
         raise typer.Exit(1)
 
