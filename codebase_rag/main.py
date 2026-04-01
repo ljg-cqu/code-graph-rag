@@ -20,7 +20,7 @@ from prompt_toolkit import prompt
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.shortcuts import print_formatted_text
-from pydantic_ai import DeferredToolRequests, DeferredToolResults, ToolDenied
+from pydantic_ai import DeferredToolRequests, DeferredToolResults, Tool, ToolDenied
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
@@ -1324,10 +1324,24 @@ def _initialize_services_and_agent(
         project_root=repo_path, timeout=settings.SHELL_COMMAND_TIMEOUT
     )
     directory_lister = DirectoryLister(project_root=repo_path)
-    document_analyzer = DocumentAnalyzer(
-        project_root=repo_path,
-        doc_graph=doc_ingestor,
-    )
+
+    # === Document-aware services ===
+    if doc_ingestor:
+        document_analyzer = DocumentAnalyzer(
+            project_root=repo_path,
+            doc_graph=doc_ingestor,
+        )
+
+        # Create QueryRouter for dual-graph queries
+        query_router = QueryRouter(
+            code_graph=ingestor,
+            doc_graph=doc_ingestor,
+        )
+        # Store mode in router instance
+        query_router.current_mode = query_mode
+    else:
+        document_analyzer = DocumentAnalyzer(project_root=repo_path)
+        query_router = None
 
     query_tool = create_query_tool(ingestor, cypher_generator, app_context.console)
     code_tool = create_code_retrieval_tool(code_retriever)
@@ -1336,29 +1350,48 @@ def _initialize_services_and_agent(
     file_editor_tool = create_file_editor_tool(file_editor)
     shell_command_tool = create_shell_command_tool(shell_commander)
     directory_lister_tool = create_directory_lister_tool(directory_lister)
+
+    # Enhanced document analyzer tool (returns list[Tool])
     document_analyzer_tools = create_document_analyzer_tool(
         document_analyzer,
         enable_graph_queries=doc_ingestor is not None,
         workspace=doc_workspace,
     )
+
     semantic_search_tool = create_semantic_search_tool()
     function_source_tool = create_get_function_source_tool()
 
-    # Document GraphRAG tools
-    # Create QueryRouter for document queries with optional doc graph
-    query_router = QueryRouter(
-        code_graph=ingestor,
-        doc_graph=doc_ingestor,
-    )
-    # Set current mode from parameter
-    query_router.current_mode = query_mode
+    # Build tools list
+    tools: list[Tool] = [
+        query_tool,
+        code_tool,
+        file_reader_tool,
+        file_writer_tool,
+        file_editor_tool,
+        shell_command_tool,
+        directory_lister_tool,
+        *document_analyzer_tools,
+        semantic_search_tool,
+        function_source_tool,
+    ]
 
-    query_document_graph_tool = create_query_document_graph_tool(query_router)
-    query_both_graphs_tool = create_query_both_graphs_tool(query_router)
-    validate_code_tool = create_validate_code_against_spec_tool(query_router)
-    validate_doc_tool = create_validate_doc_against_code_tool(query_router)
-    index_docs_tool = create_index_documents_tool()
-    graph_query_tool = create_graph_query_tool(query_router)
+    # Add Document GraphRAG tools only if query_router is available
+    if query_router:
+        query_document_graph_tool = create_query_document_graph_tool(query_router)
+        query_both_graphs_tool = create_query_both_graphs_tool(query_router)
+        validate_code_tool = create_validate_code_against_spec_tool(query_router)
+        validate_doc_tool = create_validate_doc_against_code_tool(query_router)
+        index_docs_tool = create_index_documents_tool()
+        graph_query_tool = create_graph_query_tool(query_router)
+
+        tools.extend([
+            query_document_graph_tool,
+            query_both_graphs_tool,
+            validate_code_tool,
+            validate_doc_tool,
+            index_docs_tool,
+            graph_query_tool,
+        ])
 
     confirmation_tool_names = ConfirmationToolNames(
         replace_code=file_editor_tool.name,
@@ -1366,27 +1399,7 @@ def _initialize_services_and_agent(
         shell_command=shell_command_tool.name,
     )
 
-    rag_agent = create_rag_orchestrator(
-        tools=[
-            query_tool,
-            code_tool,
-            file_reader_tool,
-            file_writer_tool,
-            file_editor_tool,
-            shell_command_tool,
-            directory_lister_tool,
-            *document_analyzer_tools,
-            semantic_search_tool,
-            function_source_tool,
-            # Document GraphRAG tools (6 tools)
-            query_document_graph_tool,
-            query_both_graphs_tool,
-            validate_code_tool,
-            validate_doc_tool,
-            index_docs_tool,
-            graph_query_tool,
-        ]
-    )
+    rag_agent = create_rag_orchestrator(tools=tools)
     return rag_agent, confirmation_tool_names, query_router
 
 
