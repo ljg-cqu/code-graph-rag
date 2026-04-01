@@ -133,7 +133,8 @@ class TestDocumentAnalyzerToolIntegration:
                 return_value=mock_genai_client,
             ):
                 analyzer = DocumentAnalyzer(str(temp_test_repo))
-                tool = create_document_analyzer_tool(analyzer)
+                tools = create_document_analyzer_tool(analyzer)
+                tool = tools[0]
                 result = tool.function(
                     file_path="readme.txt",
                     question="What is in this file?",
@@ -152,7 +153,8 @@ class TestDocumentAnalyzerToolIntegration:
                 return_value=mock_genai_client,
             ):
                 analyzer = DocumentAnalyzer(str(temp_test_repo))
-                tool = create_document_analyzer_tool(analyzer)
+                tools = create_document_analyzer_tool(analyzer)
+                tool = tools[0]
                 result = tool.function(
                     file_path="missing.txt",
                     question="What is this?",

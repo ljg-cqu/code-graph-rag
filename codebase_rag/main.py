@@ -1324,7 +1324,10 @@ def _initialize_services_and_agent(
         project_root=repo_path, timeout=settings.SHELL_COMMAND_TIMEOUT
     )
     directory_lister = DirectoryLister(project_root=repo_path)
-    document_analyzer = DocumentAnalyzer(project_root=repo_path)
+    document_analyzer = DocumentAnalyzer(
+        project_root=repo_path,
+        doc_graph=doc_ingestor,
+    )
 
     query_tool = create_query_tool(ingestor, cypher_generator, app_context.console)
     code_tool = create_code_retrieval_tool(code_retriever)
@@ -1333,7 +1336,11 @@ def _initialize_services_and_agent(
     file_editor_tool = create_file_editor_tool(file_editor)
     shell_command_tool = create_shell_command_tool(shell_commander)
     directory_lister_tool = create_directory_lister_tool(directory_lister)
-    document_analyzer_tool = create_document_analyzer_tool(document_analyzer)
+    document_analyzer_tools = create_document_analyzer_tool(
+        document_analyzer,
+        enable_graph_queries=doc_ingestor is not None,
+        workspace=doc_workspace,
+    )
     semantic_search_tool = create_semantic_search_tool()
     function_source_tool = create_get_function_source_tool()
 
@@ -1368,7 +1375,7 @@ def _initialize_services_and_agent(
             file_editor_tool,
             shell_command_tool,
             directory_lister_tool,
-            document_analyzer_tool,
+            *document_analyzer_tools,
             semantic_search_tool,
             function_source_tool,
             # Document GraphRAG tools (6 tools)

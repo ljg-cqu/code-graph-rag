@@ -4,7 +4,7 @@ import mimetypes
 import shutil
 import uuid
 from pathlib import Path
-from typing import NoReturn
+from typing import TYPE_CHECKING, NoReturn
 
 from google import genai
 from google.genai import types
@@ -19,6 +19,9 @@ from .. import tool_errors as te
 from ..config import settings
 from . import tool_descriptions as td
 
+if TYPE_CHECKING:
+    from ..services.graph_service import MemgraphIngestor
+
 
 class _NotSupportedClient:
     __slots__ = ()
@@ -28,13 +31,27 @@ class _NotSupportedClient:
 
 
 class DocumentAnalyzer:
-    __slots__ = ("project_root", "client")
+    """Document analyzer with optional document graph support."""
 
-    def __init__(self, project_root: str) -> None:
+    __slots__ = ("project_root", "client", "doc_graph")
+
+    def __init__(
+        self,
+        project_root: str,
+        doc_graph: MemgraphIngestor | None = None,
+    ) -> None:
+        """Initialize document analyzer.
+
+        Args:
+            project_root: Project root path
+            doc_graph: Optional document graph ingestor for graph queries
+        """
         self.project_root = Path(project_root).resolve()
         # If project_root is a file, use its parent directory
         if self.project_root.is_file():
             self.project_root = self.project_root.parent
+
+        self.doc_graph = doc_graph
 
         orchestrator_config = settings.active_orchestrator_config
         orchestrator_provider = orchestrator_config.provider
@@ -153,9 +170,77 @@ class DocumentAnalyzer:
         except Exception as e:
             return self._handle_analyze_error(e, file_path)
 
+    def analyze_from_graph(
+        self,
+        question: str,
+        top_k: int = 5,
+        workspace: str = "default",
+    ) -> str:
+        """Query document graph for relevant documentation.
 
-def create_document_analyzer_tool(analyzer: DocumentAnalyzer) -> Tool:
+        Args:
+            question: Natural language query
+            top_k: Maximum results
+            workspace: Document workspace identifier
+
+        Returns:
+            Formatted document search results
+        """
+        if not self.doc_graph:
+            return "Document graph is not available."
+
+        from ..document.tools.document_search import document_semantic_search
+
+        results = document_semantic_search(
+            query=question,
+            ingestor=self.doc_graph,
+            vector_backend=None,
+            workspace=workspace,
+            limit=top_k,
+        )
+
+        if not results:
+            return f"No relevant documents found for: {question}"
+
+        # Format results
+        parts = ["**Relevant Documentation:**\n"]
+        for i, result in enumerate(results, 1):
+            section_title = result.get("section_title", "Unknown")
+            doc_path = result.get("document_path", "unknown")
+            content = result.get("content", "")
+            preview = content[:200] if content else ""
+
+            parts.append(
+                f"{i}. **{section_title}** ({doc_path})\n"
+                f"   {preview}...\n"
+            )
+
+        return "\n".join(parts)
+
+
+def create_document_analyzer_tool(
+    analyzer: DocumentAnalyzer,
+    enable_graph_queries: bool = False,
+    workspace: str = "default",
+) -> list[Tool]:
+    """Create document analyzer tool(s).
+
+    Args:
+        analyzer: DocumentAnalyzer instance
+        enable_graph_queries: If True, add graph query capability
+        workspace: Document workspace identifier for graph queries
+
+    Returns:
+        List of Tool instances
+
+    Note:
+        BREAKING CHANGE: Return type changed from Tool to list[Tool].
+        Update all callers to handle list return type (use extend() instead of append()).
+    """
+    tools: list[Tool] = []
+
     def analyze_document(file_path: str, question: str) -> str:
+        """Analyze a document file (PDF, image, etc.) with a question."""
         try:
             result = analyzer.analyze(file_path, question)
             preview = result[:100] if result else "None"
@@ -167,8 +252,38 @@ def create_document_analyzer_tool(analyzer: DocumentAnalyzer) -> Tool:
                 return str(e)
             return te.DOC_DURING_ANALYSIS.format(error=e)
 
-    return Tool(
-        function=analyze_document,
-        name=td.AgenticToolName.ANALYZE_DOCUMENT,
-        description=td.ANALYZE_DOCUMENT,
+    # Always add base analyze_document tool
+    tools.append(
+        Tool(
+            function=analyze_document,
+            name=td.AgenticToolName.ANALYZE_DOCUMENT,
+            description=td.ANALYZE_DOCUMENT,
+        )
     )
+
+    # Add graph query tool if enabled and available
+    if enable_graph_queries and analyzer.doc_graph:
+
+        def analyze_docs(question: str, top_k: int = 5) -> str:
+            """Search document graph for relevant documentation.
+
+            Use this for searching indexed documentation files.
+
+            Args:
+                question: Natural language query about documentation
+                top_k: Maximum number of results to return
+
+            Returns:
+                Relevant documentation sections
+            """
+            return analyzer.analyze_from_graph(question, top_k, workspace)
+
+        tools.append(
+            Tool(
+                function=analyze_docs,
+                name="analyze_docs",
+                description="Search the document graph for relevant documentation. Use this for finding information in indexed markdown, PDF, and doc files.",
+            )
+        )
+
+    return tools

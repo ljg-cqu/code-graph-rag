@@ -95,8 +95,9 @@ class MCPToolsRegistry:
         self._shell_command_tool = create_shell_command_tool(
             shell_commander=self.shell_commander
         )
-        self._document_analyzer_tool = create_document_analyzer_tool(
-            self.document_analyzer
+        self._document_analyzer_tools = create_document_analyzer_tool(
+            self.document_analyzer,
+            enable_graph_queries=False,  # MCP server doesn't have doc_graph at init time
         )
 
         self._rag_agent: Agent | None = None
@@ -532,7 +533,7 @@ class MCPToolsRegistry:
                 self._file_editor_tool,
                 self._shell_command_tool,
                 self._directory_lister_tool,
-                self._document_analyzer_tool,
+                *self._document_analyzer_tools,
                 create_get_function_source_tool(),
             ]
             if self._semantic_search_tool is not None:

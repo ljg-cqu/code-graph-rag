@@ -219,8 +219,10 @@ class TestCreateDocumentAnalyzerTool:
                 return_value=mock_genai_client,
             ):
                 analyzer = DocumentAnalyzer(str(temp_project_root))
-                tool = create_document_analyzer_tool(analyzer)
-                assert isinstance(tool, Tool)
+                tools = create_document_analyzer_tool(analyzer)
+                assert isinstance(tools, list)
+                assert len(tools) >= 1
+                assert isinstance(tools[0], Tool)
 
     def test_tool_has_description(
         self,
@@ -234,7 +236,8 @@ class TestCreateDocumentAnalyzerTool:
                 return_value=mock_genai_client,
             ):
                 analyzer = DocumentAnalyzer(str(temp_project_root))
-                tool = create_document_analyzer_tool(analyzer)
+                tools = create_document_analyzer_tool(analyzer)
+                tool = tools[0]
                 assert tool.description is not None
                 assert (
                     "document" in tool.description.lower()
@@ -255,5 +258,5 @@ class TestCreateDocumentAnalyzerTool:
                 from codebase_rag.tools.tool_descriptions import AgenticToolName
 
                 analyzer = DocumentAnalyzer(str(temp_project_root))
-                tool = create_document_analyzer_tool(analyzer)
-                assert tool.name == AgenticToolName.ANALYZE_DOCUMENT
+                tools = create_document_analyzer_tool(analyzer)
+                assert tools[0].name == AgenticToolName.ANALYZE_DOCUMENT
