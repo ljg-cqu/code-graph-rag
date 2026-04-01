@@ -40,6 +40,8 @@
 
 An accurate Retrieval-Augmented Generation (RAG) system that analyzes multi-language codebases using Tree-sitter, builds comprehensive knowledge graphs, and enables natural language querying of codebase structure and relationships as well as editing capabilities.
 
+**🔥 New: Document GraphRAG Support** — Index and query documentation (Markdown, PDF, DOCX) alongside your code. Validate code against specifications, detect outdated documentation, and get comprehensive answers spanning both code and docs.
+
 
 <p align="center">
   <img src="./assets/demo.gif" alt="demo">
@@ -47,17 +49,22 @@ An accurate Retrieval-Augmented Generation (RAG) system that analyzes multi-lang
 
 ## Latest News 🔥
 
+- **📚 Document GraphRAG Support**: Full document indexing and querying now available! Index Markdown, PDF, DOCX files and query them alongside your code. Features include bidirectional validation (code vs docs), merged queries across both graphs, and specification compliance checking.
+- **💎 Solidity Support**: Full Solidity smart contract support added — contracts, interfaces, libraries, events, modifiers, state variables, fallback/receive functions, and call graph analysis for blockchain development.
+- **🤖 AutoHotkey Support**: AutoHotkey (AHK) scripting language support added — functions, labels, hotkeys, hotstrings, and include directive parsing. Perfect for Windows automation script analysis.
 - **PHP Language Support**: Full PHP language support added — classes, interfaces, traits, enums, namespaces, PHP 8 attributes, and call graph analysis. Contributed by [@rs-ipps](https://github.com/rs-ipps).
 - **C Language Support**: Full C language support added — functions, structs, unions, enums, preprocessor includes, and call graph analysis. Contributed by [@dj0nes](https://github.com/dj0nes).
 - **Visualise any GitHub repo instantly!** Just change `github.com` to `gitcgr.com` in any repo URL — that's it, only 3 letters! Get an interactive graph of the entire codebase structure. Try it now: [gitcgr.com](https://gitcgr.com)
 
 ## 🚀 Features
 
+- **📚 Document GraphRAG**: Index and query documentation (Markdown, PDF, DOCX) alongside code. Supports bidirectional validation between code and specs, merged queries across both graphs, and automated documentation audits.
 - **Multi-Language Support**:
 
 <!-- SECTION:supported_languages -->
 | Language | Status | Extensions | Functions | Classes/Structs | Modules | Package Detection | Additional Features |
 |--------|------|----------|---------|---------------|-------|-----------------|-------------------|
+| AutoHotkey | Fully Supported | .ahk | ✓ | ✓ | ✓ | - | Hotkeys, hotstrings, labels, GUI controls, commands, v1/v2 detection |
 | C | Fully Supported | .c | ✓ | ✓ | ✓ | ✓ | Functions, structs, unions, enums, preprocessor includes |
 | C++ | Fully Supported | .cpp, .h, .hpp, .cc, .cxx, .hxx, .hh, .ixx, .cppm, .ccm | ✓ | ✓ | ✓ | ✓ | Constructors, destructors, operator overloading, templates, lambdas, C++20 modules, namespaces |
 | Java | Fully Supported | .java | ✓ | ✓ | ✓ | - | Generics, annotations, modern features (records/sealed classes), concurrency, reflection |
@@ -66,7 +73,7 @@ An accurate Retrieval-Augmented Generation (RAG) system that analyzes multi-lang
 | PHP | Fully Supported | .php | ✓ | ✓ | ✓ | - | Classes, interfaces, traits, enums, namespaces, PHP 8 attributes |
 | Python | Fully Supported | .py | ✓ | ✓ | ✓ | ✓ | Type inference, decorators, nested functions |
 | Rust | Fully Supported | .rs | ✓ | ✓ | ✓ | ✓ | impl blocks, associated functions |
-| Solidity | Fully Supported | .sol | ✓ | ✓ | ✓ | ✓ | Contracts, interfaces, libraries, events, modifiers, state variables |
+| Solidity | Fully Supported | .sol | ✓ | ✓ | ✓ | ✓ | Contracts, interfaces, libraries, events, modifiers, state variables, fallback/receive functions |
 | TypeScript | Fully Supported | .ts, .tsx | ✓ | ✓ | ✓ | - | Interfaces, type aliases, enums, namespaces, ES6/CommonJS modules |
 | C# | In Development | .cs | ✓ | ✓ | ✓ | - | Classes, interfaces, generics (planned) |
 | Go | In Development | .go | ✓ | ✓ | ✓ | - | Methods, type declarations |
@@ -85,6 +92,8 @@ An accurate Retrieval-Augmented Generation (RAG) system that analyzes multi-lang
 - **🔗 Dependency Analysis**: Parses `pyproject.toml` to understand external dependencies
 - **🎯 Nested Function Support**: Handles complex nested functions and class hierarchies
 - **🔄 Language-Agnostic Design**: Unified graph schema across all supported languages
+- **📱 Smart Contract Analysis**: Full Solidity support for blockchain development — contracts, events, modifiers, state variables
+- **🤖 Automation Script Analysis**: AutoHotkey support for Windows automation — hotkeys, hotstrings, labels, GUI controls
 
 ## 🏗️ Architecture
 
@@ -277,12 +286,13 @@ Use the Makefile for common development tasks:
 
 ## 🎯 Usage
 
-The Code-Graph-RAG system offers four main modes of operation:
+The Code-Graph-RAG system offers five main modes of operation:
 1. **Parse & Ingest**: Build knowledge graph from your codebase
 2. **Interactive Query**: Ask questions about your code in natural language
 3. **Export & Analyze**: Export graph data for programmatic analysis
 4. **AI Optimization**: Get AI-powered optimization suggestions for your code.
 5. **Editing**: Perform surgical code replacements and modifications with precise targeting.
+6. **📚 Document GraphRAG**: Index and query documentation alongside code, with validation capabilities.
 
 ### Step 1: Parse a Repository
 
@@ -394,6 +404,12 @@ Example queries (works across all supported languages):
 - "Show me C++ template functions with their specializations"
 - "List all C++ namespaces and their contained classes"
 - "Find C++ lambda expressions used in algorithms"
+- "Show me all Solidity smart contracts and their events"
+- "Find all modifier functions in the contract"
+- "What state variables does this contract use?"
+- "List all AutoHotkey hotkeys and their modifiers"
+- "Find hotstring definitions and their replacements"
+- "Show me all labels in the AHK script"
 - "Add logging to all database connection functions"
 - "Refactor the User class to use dependency injection"
 - "Convert these Python functions to async/await pattern"
@@ -452,7 +468,64 @@ This provides a reliable, programmatic way to access your codebase structure wit
 - Building documentation generators
 - Creating code metrics dashboards
 
-### Step 4: Code Optimization
+### Step 4: Document GraphRAG (New!)
+
+Index and query documentation alongside your codebase. This feature enables comprehensive RAG across both code and documentation, with powerful validation capabilities.
+
+**Index documents into the document graph:**
+```bash
+cgr index-docs --repo-path /path/to/your/repo
+```
+
+This indexes Markdown, PDF, DOCX, and text files, creating Document, Section, and Chunk nodes with embeddings.
+
+**Query the document graph only:**
+```bash
+cgr query-docs "How do I use the authentication API?" --repo-path /path/to/your/repo
+```
+
+**Query both code and document graphs (merged results):**
+```bash
+cgr query-all "Tell me everything about authentication" --repo-path /path/to/your/repo
+```
+
+**Validate code against specification documents:**
+```bash
+# Check if code implements all endpoints in OpenAPI spec
+cgr validate-spec \
+  --repo-path /path/to/your/repo \
+  --spec-path docs/api-spec.md \
+  --scope all
+```
+
+**Validate documentation against actual code:**
+```bash
+# Check if documentation is still accurate
+cgr validate-doc \
+  --repo-path /path/to/your/repo \
+  --doc-path docs/api.md \
+  --scope sections
+```
+
+**Validation options:**
+- `--scope`: Validation scope (`all`, `sections`, or `claims`)
+- `--max-cost`: Maximum cost budget in USD (default: 0.50)
+- `--dry-run`: Estimate cost without running validation
+
+**Query Modes:**
+- `code_only`: Query code graph only (for function lookups, call graphs)
+- `document_only`: Query document graph only (for tutorials, guides, API docs)
+- `both_merged`: Query both graphs, merge results with clear attribution
+- `code_vs_doc`: Validate code against document specifications (doc is truth)
+- `doc_vs_code`: Validate docs against actual code (code is truth)
+
+**Use Cases:**
+- **API Documentation Compliance**: Ensure code implements all specified endpoints
+- **Documentation Audits**: Find outdated or incorrect documentation
+- **Comprehensive Search**: Get answers spanning both code and documentation
+- **Regulatory Compliance**: Validate implementation against requirements documents
+
+### Step 5: Code Optimization
 
 For AI-powered codebase optimization with best practices guidance:
 
@@ -570,6 +643,11 @@ claude mcp add --transport stdio code-graph-rag \
 | `ask_agent` | Ask the Code Graph RAG agent a question about the codebase. Uses the full RAG pipeline to analyze the code graph and provide a detailed answer. Use this for general questions about architecture, functionality, and code relationships. |
 | `get_embedding_status` | Get the current embedding provider configuration and status. Returns the current provider, model, dimension, and available providers. |
 | `set_embedding_provider` | Switch to a different embedding provider. Supported providers: local, openai, google, ollama. Optionally re-embed all vectors after switching. |
+| `query_document_graph` | **📚 NEW**: Query the DOCUMENT graph/vector ONLY. Use for questions about documentation, specifications, and textual content. Returns relevant document sections and chunks. |
+| `query_both_graphs` | **📚 NEW**: Query BOTH code and document graphs, merge results. Use for comprehensive searches spanning code and documentation. Results are labeled with their source (code_graph or document_graph). |
+| `validate_code_against_spec` | **📚 NEW**: Validate CODE against DOCUMENT specifications. Checks if the implementation matches the specification document. Returns validation report with discrepancies. |
+| `validate_doc_against_code` | **📚 NEW**: Validate DOCUMENT against actual CODE. Checks if documentation accurately reflects the current code. Identifies outdated or incorrect documentation. |
+| `index_documents` | **📚 NEW**: Index documents into the document graph. Parses and ingests markdown, PDF, DOCX, and text files. Creates Document, Section, and Chunk nodes with embeddings. |
 <!-- /SECTION:mcp_tools -->
 
 ### Example Usage
@@ -612,11 +690,15 @@ The knowledge graph uses the following node types and relationships:
 | Modifier | `{qualified_name: string, name: string, parameters: list[string], path: string, absolute_path: string, start_line: int, end_line: int}` |
 | StateVariable | `{qualified_name: string, name: string, type: string, visibility: string, is_constant: bool, is_immutable: bool, is_mapped: bool, path: string, absolute_path: string, start_line: int, end_line: int}` |
 | CustomError | `{qualified_name: string, name: string, parameters: list[string], path: string, absolute_path: string, start_line: int, end_line: int}` |
+| **Document** 📚 | `{qualified_name: string, path: string, file_type: string, word_count: int, total_section_count: int, modified_date: string, workspace: string}` |
+| **Section** 📚 | `{qualified_name: string, title: string, level: int, start_line: int, end_line: int, content_snippet: string, workspace: string}` |
+| **Chunk** 📚 | `{qualified_name: string, content: string, start_line: int, end_line: int, embedding: vector, workspace: string}` |
 <!-- /SECTION:node_schemas -->
 
 ### Language-Specific Mappings
 
 <!-- SECTION:language_mappings -->
+- **AutoHotkey**: `class_definition`, `function_definition`, `hotkey`, `hotstring_definition`, `label`
 - **C**: `enum_specifier`, `function_definition`, `struct_specifier`, `union_specifier`
 - **C++**: `class_specifier`, `declaration`, `enum_specifier`, `field_declaration`, `function_definition`, `lambda_expression`, `struct_specifier`, `template_declaration`, `union_specifier`
 - **Java**: `annotation_type_declaration`, `class_declaration`, `constructor_declaration`, `enum_declaration`, `interface_declaration`, `method_declaration`, `record_declaration`
@@ -665,6 +747,16 @@ The knowledge graph uses the following node types and relationships:
 | Function, Method | READS_STATE | StateVariable |
 | Function, Method | WRITES_STATE | StateVariable |
 | Function, Method | REVERTS_WITH | CustomError |
+| **📚 Document** | CONTAINS_SECTION | **Section** |
+| **📚 Section** | HAS_SUBSECTION | **Section** |
+| **📚 Section** | HAS_CHUNK | **Chunk** |
+| **📚 Chunk** | BELONGS_TO_SECTION | **Section** |
+| **💎 Solidity Contract** | USES_LIBRARY | **Library** |
+| **💎 Solidity Function** | EMITS | **Event** |
+| **💎 Solidity Function** | MODIFIED_BY | **Modifier** |
+| **💎 Solidity Function** | READS_STATE | **StateVariable** |
+| **💎 Solidity Function** | WRITES_STATE | **StateVariable** |
+| **💎 Solidity Function** | REVERTS_WITH | **CustomError** |
 <!-- /SECTION:relationship_schemas -->
 
 ## 🔧 Configuration
@@ -776,7 +868,8 @@ my_build_output
 - **tiktoken**: tiktoken is a fast BPE tokeniser for use with OpenAI's models
 - **toml**: Python Library for Tom's Obvious, Minimal Language
 - **tree-sitter-python**: Python grammar for tree-sitter
-- **tree-sitter-solidity**: Solidity grammar for tree-sitter
+- **tree-sitter-solidity**: Solidity grammar for tree-sitter (smart contract support)
+- **tree-sitter-autohotkey**: AutoHotkey grammar for tree-sitter (AHK v1 scripting)
 - **tree-sitter**: Python bindings to the Tree-sitter parsing library
 - **watchdog**: Filesystem events monitoring
 - **typer**: Typer, build great CLIs. Easy to code. Based on Python type hints.
@@ -805,12 +898,28 @@ The agent has access to a suite of tools to understand and interact with the cod
 | `create_file` | Creates a new file with content. IMPORTANT: Check file existence first! Overwrites completely WITHOUT showing diff. Use only for new files, not existing file modifications. |
 | `replace_code` | Surgically replaces specific code blocks in files. Requires exact target code and replacement. Only modifies the specified block, leaving rest of file unchanged. True surgical patching. |
 | `list_directory` | Lists the contents of a directory to explore the codebase. |
-| `analyze_document` | Analyzes documents (PDFs, images) to answer questions about their content. |
+| `analyze_document` | **📚 Analyzes documents (PDFs, images)** to answer questions about their content using Google's multimodal AI. |
 | `execute_shell` | Executes shell commands from allowlist. Read-only commands run without approval; write operations require user confirmation. IMPORTANT: Shell redirect operators (> >> < << 2>/dev/null 2>&1 etc.) are NOT supported because direct process execution cannot interpret shell syntax. |
 | `semantic_search` | Performs a semantic search for functions based on a natural language query describing their purpose, returning a list of potential matches with similarity scores. |
 | `get_function_source` | Retrieves the source code for a specific function or method using its internal node ID, typically obtained from a semantic search result. |
 | `get_code_snippet` | Retrieves the source code for a specific function, class, or method using its full qualified name. |
 <!-- /SECTION:agentic_tools -->
+
+### 📚 Document GraphRAG Tools
+
+**Document Analysis**: The `analyze_document` tool uses Google's multimodal AI to analyze PDFs, images, and other documents, answering questions about their content directly.
+
+**Document Graph Indexing**: Index structured documents (Markdown, PDF, DOCX) into the document graph with:
+- **Document nodes**: Metadata including file type, word count, section count
+- **Section nodes**: Hierarchical document structure with titles, levels, line numbers
+- **Chunk nodes**: Text chunks with embeddings for semantic search
+
+**Query Modes**:
+- **code_only**: Query code graph only
+- **document_only**: Query document graph only
+- **both_merged**: Query both graphs with merged results
+- **code_vs_doc**: Validate code against specifications
+- **doc_vs_code**: Validate documentation against code
 
 ### Intelligent and Safe File Editing
 
@@ -863,15 +972,15 @@ For languages not in the standard tree-sitter organization, use these verified g
 
 | Language | Grammar URL | Notes |
 |----------|-------------|-------|
-| **AutoHotkey** | `https://github.com/alfredomtx/tree-sitter-autohotkey` | AHK v1, includes LSP/debugger |
-| **Solidity** | `https://github.com/JoranHonig/tree-sitter-solidity` | Most popular Solidity grammar (185+ stars) |
+| **AutoHotkey** | `https://github.com/alfredomtx/tree-sitter-autohotkey` | AHK v1 scripting, includes LSP/debugger, hotkeys, hotstrings |
+| **Solidity** | `https://github.com/JoranHonig/tree-sitter-solidity` | Most popular Solidity grammar (185+ stars), smart contracts |
 
 **Example:**
 ```bash
-# Add AutoHotkey support
+# Add AutoHotkey support (Windows automation scripting)
 cgr language add-grammar --grammar-url https://github.com/alfredomtx/tree-sitter-autohotkey
 
-# Add Solidity support
+# Add Solidity support (Ethereum smart contracts)
 cgr language add-grammar --grammar-url https://github.com/JoranHonig/tree-sitter-solidity
 ```
 
@@ -886,6 +995,7 @@ When you add a language, the tool automatically:
    - Classes/structs (`class_declaration`, `struct_declaration`, etc.)
    - Modules/files (`compilation_unit`, `source_file`, etc.)
    - Function calls (`call_expression`, `method_invocation`, etc.)
+   - **Language-specific features**: Hotkeys (AutoHotkey), events/modifiers (Solidity), etc.
 4. **Compiles Bindings**: Builds Python bindings from the grammar source
 5. **Updates Configuration**: Adds the language to `codebase_rag/language_config.py`
 6. **Enables Parsing**: Makes the language immediately available for codebase analysis
