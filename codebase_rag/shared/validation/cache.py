@@ -129,10 +129,35 @@ class ValidationCache:
         return len(keys_to_remove)
 
     def invalidate_code_graph(self) -> int:
-        """Invalidate all CODE_VS_DOC results when code graph changes."""
+        """Invalidate all CODE_VS_DOC results when code graph changes.
+
+        Note: CODE_VS_DOC compares code against docs, so code changes affect it.
+        """
         keys_to_remove = []
         for key, cached in self._cache.items():
             if cached.mode == "CODE_VS_DOC":
+                keys_to_remove.append(key)
+
+        for key in keys_to_remove:
+            self._cache.pop(key, None)
+            # Clean up document index
+            for doc_path, keys in self._document_index.items():
+                keys.discard(key)
+
+        return len(keys_to_remove)
+
+    def invalidate_all_code_dependent(self) -> int:
+        """Invalidate both CODE_VS_DOC and DOC_VS_CODE when code graph changes.
+
+        Both validation directions depend on code state:
+        - CODE_VS_DOC: Code is being validated against docs
+        - DOC_VS_CODE: Docs are being validated against code
+
+        Call this when code graph is updated.
+        """
+        keys_to_remove = []
+        for key, cached in self._cache.items():
+            if cached.mode in ("CODE_VS_DOC", "DOC_VS_CODE"):
                 keys_to_remove.append(key)
 
         for key in keys_to_remove:

@@ -20,6 +20,7 @@ from .main import (
     main_async,
     main_optimize_async,
     main_single_query,
+    main_unified_async,
     prompt_for_unignored_directories,
     style,
     update_model_settings,
@@ -181,8 +182,87 @@ def start(
         "--ask-agent",
         help=ch.HELP_ASK_AGENT,
     ),
+    # === NEW: Document Graph Support ===
+    with_docs: bool = typer.Option(
+        False,
+        "--with-docs",
+        help=ch.HELP_WITH_DOCS,
+    ),
+    index_docs: bool = typer.Option(
+        False,
+        "--index-docs",
+        help=ch.HELP_INDEX_DOCS,
+    ),
+    index_all: bool = typer.Option(
+        False,
+        "--index-all",
+        help=ch.HELP_INDEX_ALL,
+    ),
+    doc_workspace: str = typer.Option(
+        "default",
+        "--doc-workspace",
+        help=ch.HELP_DOC_WORKSPACE,
+    ),
+    check_freshness: bool = typer.Option(
+        True,
+        "--check-freshness/--no-check-freshness",
+        help=ch.HELP_CHECK_FRESHNESS,
+    ),
+    mode: str = typer.Option(
+        "code_only",
+        "--mode",
+        help=ch.HELP_MODE,
+    ),
+    index_timeout: int = typer.Option(
+        300,
+        "--index-timeout",
+        help=ch.HELP_INDEX_TIMEOUT,
+    ),
 ) -> None:
+    import re
+
+    from codebase_rag.shared.query_router import QueryMode
+
     app_context.session.confirm_edits = not no_confirm
+
+    # === CLI Flag Validation ===
+    # Calculate effective_with_docs
+    effective_with_docs = with_docs or index_docs or index_all
+
+    # Mode validation: non-code_only modes require --with-docs
+    if mode != "code_only" and not effective_with_docs:
+        app_context.console.print(
+            style(
+                f"ERROR: Mode '{mode}' requires document graph. "
+                f"Add --with-docs, --index-docs, or --index-all flag.",
+                cs.Color.RED,
+            )
+        )
+        raise typer.Exit(1)
+
+    # Parse and validate mode
+    try:
+        query_mode = QueryMode(mode.lower())
+    except ValueError:
+        app_context.console.print(
+            style(
+                f"ERROR: Invalid mode '{mode}'. "
+                f"Valid modes: code_only, document_only, both_merged, code_vs_doc, doc_vs_code",
+                cs.Color.RED,
+            )
+        )
+        raise typer.Exit(1)
+
+    # Workspace validation: valid identifier pattern
+    if not re.match(r"^[a-zA-Z0-9_-]{1,64}$", doc_workspace):
+        app_context.console.print(
+            style(
+                f"ERROR: Invalid workspace '{doc_workspace}'. "
+                f"Must be 1-64 chars: letters, numbers, underscore, hyphen only.",
+                cs.Color.RED,
+            )
+        )
+        raise typer.Exit(1)
 
     target_repo_path = repo_path or settings.TARGET_REPO_PATH
 
@@ -206,7 +286,16 @@ def start(
 
     _update_and_validate_models(orchestrator, cypher)
 
-    if update_graph:
+    # === Handle indexing with new flags ===
+    effective_update_graph = update_graph or index_all
+    effective_index_docs = index_docs or index_all
+
+    # Implied --with-docs if indexing docs
+    if effective_index_docs:
+        effective_with_docs = True
+
+    # === Code Indexing ===
+    if effective_update_graph:
         repo_to_update = Path(target_repo_path)
         _info(
             style(cs.CLI_MSG_UPDATING_GRAPH.format(path=repo_to_update), cs.Color.GREEN)
@@ -249,11 +338,77 @@ def start(
                     raise typer.Exit(1)
 
         _info(style(cs.CLI_MSG_GRAPH_UPDATED, cs.Color.GREEN))
-        return
 
+        # If only updating graph (no chat), return
+        if not effective_with_docs and not ask_agent:
+            return
+
+    # === Document Indexing ===
+    if effective_index_docs:
+        repo_to_index = Path(target_repo_path)
+        _info(
+            style(
+                f"Indexing documents in: {repo_to_index} (workspace: {doc_workspace})",
+                cs.Color.CYAN,
+            )
+        )
+
+        try:
+            from codebase_rag.document.document_updater import DocumentGraphUpdater
+            from codebase_rag.services.graph_service import MemgraphIngestor as DocIngestor
+
+            # Clean document database if requested
+            if clean:
+                with DocIngestor(
+                    host=settings.DOC_MEMGRAPH_HOST,
+                    port=settings.DOC_MEMGRAPH_PORT,
+                ) as doc_ingestor:
+                    _info(style("Cleaning document database...", cs.Color.YELLOW))
+                    doc_ingestor.clean_database()
+                    _info(style("Document database cleaned.", cs.Color.GREEN))
+
+            updater = DocumentGraphUpdater(
+                host=settings.DOC_MEMGRAPH_HOST,
+                port=settings.DOC_MEMGRAPH_PORT,
+                repo_path=repo_to_index,
+                workspace=doc_workspace,
+            )
+            stats = updater.run(force=clean)
+
+            # Display indexing stats
+            doc_table = Table(
+                title=style("Document Indexing Results", cs.Color.GREEN),
+                show_header=True,
+            )
+            doc_table.add_column("Metric", style=cs.Color.CYAN)
+            doc_table.add_column("Count", style=cs.Color.YELLOW, justify="right")
+
+            for key, value in stats.items():
+                doc_table.add_row(key.replace("_", " ").title(), str(value))
+
+            app_context.console.print(doc_table)
+
+        except Exception as e:
+            _info(style(f"Document indexing failed: {e}", cs.Color.RED))
+            logger.exception("Document indexing failed")
+            # Don't block chat - continue with code only
+            effective_with_docs = False
+
+    # === Start chat session ===
     try:
         if ask_agent:
             main_single_query(target_repo_path, effective_batch_size, ask_agent)
+        elif effective_with_docs:
+            # Use unified async with document graph support
+            asyncio.run(
+                main_unified_async(
+                    target_repo_path,
+                    effective_batch_size,
+                    with_docs=True,
+                    query_mode=query_mode,
+                    doc_workspace=doc_workspace,
+                )
+            )
         else:
             asyncio.run(main_async(target_repo_path, effective_batch_size))
     except KeyboardInterrupt:
@@ -629,29 +784,46 @@ def query_docs(
 ) -> None:
     """Query the document graph using natural language."""
     from .shared.query_router import QueryRequest, QueryMode, QueryRouter
+    from .services.graph_service import MemgraphIngestor
     from dataclasses import asdict
 
     _info(style(f"Querying document graph: {query}", cs.Color.CYAN))
 
     try:
-        request = QueryRequest(
-            question=query,
-            mode=QueryMode.DOCUMENT_ONLY,
-            top_k=top_k,
-        )
-        # TODO: Integrate with actual QueryRouter
-        app_context.console.print(
-            Panel(
-                f"Query: {query}\nMode: DOCUMENT_ONLY\nTop K: {top_k}\n\n"
-                "Document graph query - integration pending",
-                title="Document Query",
-                border_style="cyan",
+        with MemgraphIngestor(
+            host=settings.DOC_MEMGRAPH_HOST,
+            port=settings.DOC_MEMGRAPH_PORT,
+        ) as doc_graph:
+            query_router = QueryRouter(doc_graph=doc_graph)
+
+            request = QueryRequest(
+                question=query,
+                mode=QueryMode.DOCUMENT_ONLY,
+                top_k=top_k,
             )
-        )
+            response = query_router.query(request)
+
+            result = asdict(response)
+            app_context.console.print(
+                Panel(
+                    result.get("answer", "No results found"),
+                    title=f"Document Query (Mode: {response.mode.value})",
+                    border_style="cyan",
+                )
+            )
+
+            if result.get("sources"):
+                app_context.console.print(
+                    f"\n[bold]Sources:[/bold] {len(result['sources'])} document(s)"
+                )
+
+            if result.get("warnings"):
+                app_context.console.print(
+                    f"[yellow]Warnings:[/yellow] {', '.join(result['warnings'])}"
+                )
+
     except Exception as e:
-        app_context.console.print(
-            style(f"Query failed: {e}", cs.Color.RED)
-        )
+        app_context.console.print(style(f"Query failed: {e}", cs.Color.RED))
         raise typer.Exit(1) from e
 
 
@@ -661,29 +833,59 @@ def query_all(
     top_k: int = typer.Option(5, "--top-k", "-k", help=ch.HELP_TOP_K),
 ) -> None:
     """Query both code and document graphs, merge results."""
-    from .shared.query_router import QueryRequest, QueryMode
+    from .shared.query_router import QueryRequest, QueryMode, QueryRouter
+    from .services.graph_service import MemgraphIngestor
+    from dataclasses import asdict
 
     _info(style(f"Querying both graphs: {query}", cs.Color.CYAN))
 
     try:
-        request = QueryRequest(
-            question=query,
-            mode=QueryMode.BOTH_MERGED,
-            top_k=top_k,
-        )
-        # TODO: Integrate with actual QueryRouter
-        app_context.console.print(
-            Panel(
-                f"Query: {query}\nMode: BOTH_MERGED\nTop K: {top_k}\n\n"
-                "Both graphs query - integration pending",
-                title="Merged Query",
-                border_style="cyan",
+        # Connect to both graphs
+        with MemgraphIngestor(
+            host=settings.MEMGRAPH_HOST,
+            port=settings.MEMGRAPH_PORT,
+        ) as code_graph, MemgraphIngestor(
+            host=settings.DOC_MEMGRAPH_HOST,
+            port=settings.DOC_MEMGRAPH_PORT,
+        ) as doc_graph:
+            query_router = QueryRouter(code_graph=code_graph, doc_graph=doc_graph)
+
+            request = QueryRequest(
+                question=query,
+                mode=QueryMode.BOTH_MERGED,
+                top_k=top_k,
             )
-        )
+            response = query_router.query(request)
+
+            result = asdict(response)
+            app_context.console.print(
+                Panel(
+                    result.get("answer", "No results found"),
+                    title=f"Merged Query (Mode: {response.mode.value})",
+                    border_style="green",
+                )
+            )
+
+            # Show source breakdown
+            code_sources = [s for s in response.sources if s.type == "code"]
+            doc_sources = [s for s in response.sources if s.type == "document"]
+
+            if code_sources:
+                app_context.console.print(
+                    f"\n[bold cyan]Code Sources:[/bold cyan] {len(code_sources)}"
+                )
+            if doc_sources:
+                app_context.console.print(
+                    f"[bold magenta]Document Sources:[/bold magenta] {len(doc_sources)}"
+                )
+
+            if result.get("warnings"):
+                app_context.console.print(
+                    f"[yellow]Warnings:[/yellow] {', '.join(result['warnings'])}"
+                )
+
     except Exception as e:
-        app_context.console.print(
-            style(f"Query failed: {e}", cs.Color.RED)
-        )
+        app_context.console.print(style(f"Query failed: {e}", cs.Color.RED))
         raise typer.Exit(1) from e
 
 
@@ -695,30 +897,96 @@ def validate_spec(
     dry_run: bool = typer.Option(False, "--dry-run", help=ch.HELP_DRY_RUN),
 ) -> None:
     """Validate code against a specification document."""
-    from .shared.query_router import QueryRequest, QueryMode
+    from .shared.query_router import QueryRequest, QueryMode, QueryRouter
+    from .shared.validation.api import ValidationTriggerAPI, ValidationRequest
+    from .services.graph_service import MemgraphIngestor
+    from dataclasses import asdict
 
     _info(style(f"Validating code against spec: {spec_path}", cs.Color.CYAN))
 
     try:
-        request = QueryRequest(
-            question=f"Validate code against {spec_path}",
-            mode=QueryMode.CODE_VS_DOC,
-            scope=scope,
-        )
-        # TODO: Integrate with ValidationTriggerAPI
-        app_context.console.print(
-            Panel(
-                f"Spec: {spec_path}\nMode: CODE_VS_DOC\nScope: {scope}\n"
-                f"Max Cost: ${max_cost}\nDry Run: {dry_run}\n\n"
-                "Validation - integration pending",
-                title="Code Validation",
-                border_style="yellow",
+        # Connect to both graphs
+        with MemgraphIngestor(
+            host=settings.MEMGRAPH_HOST,
+            port=settings.MEMGRAPH_PORT,
+        ) as code_graph, MemgraphIngestor(
+            host=settings.DOC_MEMGRAPH_HOST,
+            port=settings.DOC_MEMGRAPH_PORT,
+        ) as doc_graph:
+            query_router = QueryRouter(code_graph=code_graph, doc_graph=doc_graph)
+            validation_api = ValidationTriggerAPI(llm_provider="google")
+
+            # Step 1: Cost estimation
+            validation_request = ValidationRequest(
+                document_path=spec_path,
+                mode="CODE_VS_DOC",
+                scope=scope,
+                max_cost_usd=max_cost,
+                dry_run=dry_run,
             )
-        )
+
+            trigger_result = asyncio.run(validation_api.request_validation(validation_request))
+
+            if not trigger_result.accepted:
+                app_context.console.print(
+                    Panel(
+                        trigger_result.message,
+                        title="Validation Not Executed",
+                        border_style="yellow",
+                    )
+                )
+                if trigger_result.cost_estimate:
+                    app_context.console.print(
+                        f"\n[yellow]Estimated cost:[/yellow] ${trigger_result.cost_estimate.estimated_cost_usd:.2f}"
+                    )
+                return
+
+            # Show cost estimate
+            if trigger_result.cost_estimate:
+                app_context.console.print(
+                    f"[green]Estimated cost:[/green] ${trigger_result.cost_estimate.estimated_cost_usd:.2f} "
+                    f"({trigger_result.cost_estimate.estimated_llm_calls} LLM calls)"
+                )
+
+            # Step 2: Execute validation
+            request = QueryRequest(
+                question=f"Validate code against {spec_path}",
+                mode=QueryMode.CODE_VS_DOC,
+                scope=scope,
+            )
+            response = query_router.query(request)
+
+            result = asdict(response)
+            report = result.get("validation_report")
+
+            if report:
+                border_style = "green" if report.get("accuracy_score", 0) > 0.8 else "yellow"
+                app_context.console.print(
+                    Panel(
+                        result.get("answer", "Validation complete"),
+                        title=(
+                            f"Validation Report: {report.get('passed', 0)}/{report.get('total', 0)} "
+                            f"({report.get('accuracy_score', 0):.1%} accurate)"
+                        ),
+                        border_style=border_style,
+                    )
+                )
+            else:
+                app_context.console.print(
+                    Panel(
+                        result.get("answer", "Validation complete"),
+                        title="Validation Report",
+                        border_style="cyan",
+                    )
+                )
+
+            if result.get("warnings"):
+                app_context.console.print(
+                    f"[yellow]Warnings:[/yellow] {', '.join(result['warnings'])}"
+                )
+
     except Exception as e:
-        app_context.console.print(
-            style(f"Validation failed: {e}", cs.Color.RED)
-        )
+        app_context.console.print(style(f"Validation failed: {e}", cs.Color.RED))
         raise typer.Exit(1) from e
 
 
@@ -730,30 +998,96 @@ def validate_doc(
     dry_run: bool = typer.Option(False, "--dry-run", help=ch.HELP_DRY_RUN),
 ) -> None:
     """Validate documentation against actual code."""
-    from .shared.query_router import QueryRequest, QueryMode
+    from .shared.query_router import QueryRequest, QueryMode, QueryRouter
+    from .shared.validation.api import ValidationTriggerAPI, ValidationRequest
+    from .services.graph_service import MemgraphIngestor
+    from dataclasses import asdict
 
     _info(style(f"Validating doc against code: {doc_path}", cs.Color.CYAN))
 
     try:
-        request = QueryRequest(
-            question=f"Validate {doc_path} against code",
-            mode=QueryMode.DOC_VS_CODE,
-            scope=scope,
-        )
-        # TODO: Integrate with ValidationTriggerAPI
-        app_context.console.print(
-            Panel(
-                f"Document: {doc_path}\nMode: DOC_VS_CODE\nScope: {scope}\n"
-                f"Max Cost: ${max_cost}\nDry Run: {dry_run}\n\n"
-                "Validation - integration pending",
-                title="Doc Validation",
-                border_style="yellow",
+        # Connect to both graphs
+        with MemgraphIngestor(
+            host=settings.MEMGRAPH_HOST,
+            port=settings.MEMGRAPH_PORT,
+        ) as code_graph, MemgraphIngestor(
+            host=settings.DOC_MEMGRAPH_HOST,
+            port=settings.DOC_MEMGRAPH_PORT,
+        ) as doc_graph:
+            query_router = QueryRouter(code_graph=code_graph, doc_graph=doc_graph)
+            validation_api = ValidationTriggerAPI(llm_provider="google")
+
+            # Step 1: Cost estimation
+            validation_request = ValidationRequest(
+                document_path=doc_path,
+                mode="DOC_VS_CODE",
+                scope=scope,
+                max_cost_usd=max_cost,
+                dry_run=dry_run,
             )
-        )
+
+            trigger_result = asyncio.run(validation_api.request_validation(validation_request))
+
+            if not trigger_result.accepted:
+                app_context.console.print(
+                    Panel(
+                        trigger_result.message,
+                        title="Validation Not Executed",
+                        border_style="yellow",
+                    )
+                )
+                if trigger_result.cost_estimate:
+                    app_context.console.print(
+                        f"\n[yellow]Estimated cost:[/yellow] ${trigger_result.cost_estimate.estimated_cost_usd:.2f}"
+                    )
+                return
+
+            # Show cost estimate
+            if trigger_result.cost_estimate:
+                app_context.console.print(
+                    f"[green]Estimated cost:[/green] ${trigger_result.cost_estimate.estimated_cost_usd:.2f} "
+                    f"({trigger_result.cost_estimate.estimated_llm_calls} LLM calls)"
+                )
+
+            # Step 2: Execute validation
+            request = QueryRequest(
+                question=f"Validate {doc_path} against code",
+                mode=QueryMode.DOC_VS_CODE,
+                scope=scope,
+            )
+            response = query_router.query(request)
+
+            result = asdict(response)
+            report = result.get("validation_report")
+
+            if report:
+                border_style = "green" if report.get("accuracy_score", 0) > 0.8 else "yellow"
+                app_context.console.print(
+                    Panel(
+                        result.get("answer", "Validation complete"),
+                        title=(
+                            f"Validation Report: {report.get('passed', 0)}/{report.get('total', 0)} "
+                            f"({report.get('accuracy_score', 0):.1%} accurate)"
+                        ),
+                        border_style=border_style,
+                    )
+                )
+            else:
+                app_context.console.print(
+                    Panel(
+                        result.get("answer", "Validation complete"),
+                        title="Validation Report",
+                        border_style="cyan",
+                    )
+                )
+
+            if result.get("warnings"):
+                app_context.console.print(
+                    f"[yellow]Warnings:[/yellow] {', '.join(result['warnings'])}"
+                )
+
     except Exception as e:
-        app_context.console.print(
-            style(f"Validation failed: {e}", cs.Color.RED)
-        )
+        app_context.console.print(style(f"Validation failed: {e}", cs.Color.RED))
         raise typer.Exit(1) from e
 
 

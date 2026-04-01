@@ -10,9 +10,10 @@ import sys
 import uuid
 from collections import deque
 from collections.abc import Coroutine
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Generator
 
 from loguru import logger
 from prompt_toolkit import prompt
@@ -40,6 +41,15 @@ from .tools.code_retrieval import CodeRetriever, create_code_retrieval_tool
 from .tools.codebase_query import create_query_tool
 from .tools.directory_lister import DirectoryLister, create_directory_lister_tool
 from .tools.document_analyzer import DocumentAnalyzer, create_document_analyzer_tool
+from .tools.document_index import create_index_documents_tool
+from .tools.document_query import (
+    create_query_both_graphs_tool,
+    create_query_document_graph_tool,
+)
+from .tools.document_validation import (
+    create_validate_code_against_spec_tool,
+    create_validate_doc_against_code_tool,
+)
 from .tools.file_editor import FileEditor, create_file_editor_tool
 from .tools.file_reader import FileReader, create_file_reader_tool
 from .tools.file_writer import FileWriter, create_file_writer_tool
@@ -48,6 +58,7 @@ from .tools.semantic_search import (
     create_semantic_search_tool,
 )
 from .tools.shell_command import ShellCommander, create_shell_command_tool
+from .shared.query_router import QueryRouter
 from .types_defs import (
     CHAT_LOOP_UI,
     OPTIMIZATION_LOOP_UI,
@@ -73,13 +84,18 @@ if TYPE_CHECKING:
 def style(
     text: str, color: cs.Color, modifier: cs.StyleModifier = cs.StyleModifier.BOLD
 ) -> str:
+    # Escape Rich markup patterns in the text to prevent MarkupError
+    # when content contains [/? or [word] patterns that Rich would interpret as markup
+    escaped_text = text.replace("[", "\\[")
     if modifier == cs.StyleModifier.NONE:
-        return f"[{color}]{text}[/{color}]"
-    return f"[{modifier} {color}]{text}[/{modifier} {color}]"
+        return f"[{color}]{escaped_text}[/{color}]"
+    return f"[{modifier} {color}]{escaped_text}[/{modifier} {color}]"
 
 
 def dim(text: str) -> str:
-    return f"[{cs.StyleModifier.DIM}]{text}[/{cs.StyleModifier.DIM}]"
+    # Escape Rich markup patterns to prevent MarkupError
+    escaped_text = text.replace("[", "\\[")
+    return f"[{cs.StyleModifier.DIM}]{escaped_text}[/{cs.StyleModifier.DIM}]"
 
 
 app_context = AppContext()
@@ -274,7 +290,16 @@ def _create_configuration_table(
     repo_path: str,
     title: str = cs.DEFAULT_TABLE_TITLE,
     language: str | None = None,
+    doc_graph_connected: bool = False,
+    query_mode: QueryMode | None = None,
+    doc_workspace: str = "default",
 ) -> Table:
+    from .shared.query_router import QueryMode
+
+    # Default to CODE_ONLY if not specified
+    if query_mode is None:
+        query_mode = QueryMode.CODE_ONLY
+
     table = Table(title=style(title, cs.Color.GREEN))
     table.add_column(cs.TABLE_COL_CONFIGURATION, style=cs.Color.CYAN)
     table.add_column(cs.TABLE_COL_VALUE, style=cs.Color.MAGENTA)
@@ -310,6 +335,27 @@ def _create_configuration_table(
             table.add_row(cs.TABLE_ROW_OLLAMA_ORCHESTRATOR, orch_endpoint)
         if cypher_endpoint:
             table.add_row(cs.TABLE_ROW_OLLAMA_CYPHER, cypher_endpoint)
+
+    # Code Graph connection
+    table.add_row(
+        cs.TABLE_ROW_CODE_GRAPH,
+        f"{settings.MEMGRAPH_HOST}:{settings.MEMGRAPH_PORT}",
+    )
+
+    # Document Graph connection
+    if doc_graph_connected:
+        table.add_row(
+            cs.TABLE_ROW_DOCUMENT_GRAPH,
+            f"{settings.DOC_MEMGRAPH_HOST}:{settings.DOC_MEMGRAPH_PORT} (workspace: {doc_workspace})",
+        )
+    else:
+        table.add_row(
+            cs.TABLE_ROW_DOCUMENT_GRAPH,
+            cs.TABLE_ROW_DOC_GRAPH_NOT_CONNECTED,
+        )
+
+    # Query mode
+    table.add_row(cs.TABLE_ROW_QUERY_MODE, query_mode)
 
     confirmation_status = (
         cs.CONFIRM_ENABLED if app_context.session.confirm_edits else cs.CONFIRM_DISABLED
@@ -619,6 +665,61 @@ def _handle_model_command(
         return current_model, current_model_string, current_config
 
 
+def _handle_mode_command(
+    command: str,
+    query_router: QueryRouter | None,
+    current_mode: QueryMode,
+) -> tuple[QueryMode, str]:
+    """Handle /mode command in chat session.
+
+    Args:
+        command: Full command string (e.g., "/mode both_merged")
+        query_router: Active QueryRouter instance (None if code-only)
+        current_mode: Current query mode
+
+    Returns:
+        Tuple of (new_mode, status_message)
+    """
+    from .shared.query_router import QueryMode
+
+    parts = command.strip().split(maxsplit=1)
+    arg = parts[1].strip().lower() if len(parts) > 1 else None
+
+    if not arg:
+        return current_mode, f"Current mode: {current_mode.value}"
+
+    if arg == cs.HELP_ARG:
+        return current_mode, """
+Available modes:
+  /mode code_only       - Query code graph only
+  /mode document_only   - Query document graph only
+  /mode both_merged     - Query both, merge results
+  /mode code_vs_doc     - Validate code against docs
+  /mode doc_vs_code     - Validate docs against code
+  /mode                 - Show current mode
+"""
+
+    try:
+        new_mode = QueryMode(arg)
+
+        # Validate mode is available
+        if new_mode != QueryMode.CODE_ONLY and query_router is None:
+            return current_mode, (
+                f"Mode '{new_mode.value}' requires document graph. "
+                "Restart with --with-docs flag."
+            )
+
+        # Update mode in router if available
+        if query_router:
+            query_router.current_mode = new_mode
+
+        logger.info(f"Mode switched to: {new_mode.value}")
+        return new_mode, f"Mode switched to: {new_mode.value}"
+
+    except ValueError:
+        return current_mode, f"Invalid mode: {arg}. Use /mode help for options."
+
+
 async def _run_interactive_loop(
     rag_agent: Agent[None, str | DeferredToolRequests],
     message_history: list[ModelMessage],
@@ -627,7 +728,15 @@ async def _run_interactive_loop(
     input_prompt: str,
     tool_names: ConfirmationToolNames,
     initial_question: str | None = None,
+    query_router: QueryRouter | None = None,
+    current_mode: QueryMode | None = None,
 ) -> None:
+    from .shared.query_router import QueryMode
+
+    # Default to CODE_ONLY if not specified
+    if current_mode is None:
+        current_mode = QueryMode.CODE_ONLY
+
     init_session_log(project_root)
     question = initial_question or ""
     model_override: Model | None = None
@@ -659,6 +768,15 @@ async def _run_interactive_loop(
                         model_override_config,
                     )
                 )
+                initial_question = None
+                continue
+            if command_parts[0] == cs.MODE_COMMAND_PREFIX:
+                current_mode, status_message = _handle_mode_command(
+                    stripped_question,
+                    query_router,
+                    current_mode,
+                )
+                app_context.console.print(status_message)
                 initial_question = None
                 continue
             if command_parts[0] == cs.HELP_COMMAND:
@@ -701,6 +819,8 @@ async def run_chat_loop(
     message_history: list[ModelMessage],
     project_root: Path,
     tool_names: ConfirmationToolNames,
+    query_router: QueryRouter | None = None,
+    current_mode: QueryMode | None = None,
 ) -> None:
     await _run_interactive_loop(
         rag_agent,
@@ -709,6 +829,8 @@ async def run_chat_loop(
         CHAT_LOOP_UI,
         style(cs.PROMPT_ASK_QUESTION, cs.Color.CYAN),
         tool_names,
+        query_router=query_router,
+        current_mode=current_mode,
     )
 
 
@@ -760,6 +882,87 @@ def connect_memgraph(batch_size: int) -> MemgraphIngestor:
         username=settings.MEMGRAPH_USERNAME,
         password=settings.MEMGRAPH_PASSWORD,
     )
+
+
+def connect_doc_memgraph(batch_size: int = 1000) -> MemgraphIngestor:
+    """Connect to DOCUMENT graph backend (DOC_MEMGRAPH_HOST:DOC_MEMGRAPH_PORT).
+
+    Args:
+        batch_size: Batch size for bulk operations
+
+    Returns:
+        MemgraphIngestor instance for document graph
+    """
+    return MemgraphIngestor(
+        host=settings.DOC_MEMGRAPH_HOST,
+        port=settings.DOC_MEMGRAPH_PORT,
+        batch_size=batch_size,
+        username=settings.DOC_MEMGRAPH_USERNAME,
+        password=settings.DOC_MEMGRAPH_PASSWORD,
+    )
+
+
+@contextmanager
+def connect_both_graphs(
+    batch_size: int,
+    doc_workspace: str = "default",
+) -> Generator[tuple[MemgraphIngestor, MemgraphIngestor], None, None]:
+    """Connect to both code and document graphs with proper context management.
+
+    Args:
+        batch_size: Batch size for bulk operations
+        doc_workspace: Workspace identifier for document graph (used for logging)
+
+    Yields:
+        Tuple of (code_graph, doc_graph) ingestors
+
+    Raises:
+        Exception: If connection fails, properly cleans up partial connections
+
+    Note:
+        Uses manual __enter__/__exit__ calls to manage both connections within
+        a single context manager. This is necessary because we need to yield
+        both connections together and ensure both are cleaned up on error.
+        Safety guarantees: both connections open before yield, both closed on
+        any exception, partial cleanup on mid-connection failure, no connection leaks.
+    """
+    logger.info(f"Connecting to dual graphs with doc_workspace={doc_workspace}")
+
+    code_graph = MemgraphIngestor(
+        host=settings.MEMGRAPH_HOST,
+        port=settings.MEMGRAPH_PORT,
+        batch_size=batch_size,
+        username=settings.MEMGRAPH_USERNAME,
+        password=settings.MEMGRAPH_PASSWORD,
+    )
+    doc_graph = MemgraphIngestor(
+        host=settings.DOC_MEMGRAPH_HOST,
+        port=settings.DOC_MEMGRAPH_PORT,
+        batch_size=batch_size,
+        username=settings.DOC_MEMGRAPH_USERNAME,
+        password=settings.DOC_MEMGRAPH_PASSWORD,
+    )
+
+    # Enter code_graph first, with proper cleanup on failure
+    code_graph.__enter__()
+    try:
+        doc_graph.__enter__()
+    except Exception:
+        # doc_graph failed, cleanup code_graph before raising
+        code_graph.__exit__(*sys.exc_info())
+        raise
+
+    try:
+        yield (code_graph, doc_graph)
+    except Exception:
+        # Exit both on error with proper exception info
+        doc_graph.__exit__(*sys.exc_info())
+        code_graph.__exit__(*sys.exc_info())
+        raise
+    else:
+        # Exit both on success
+        doc_graph.__exit__(None, None, None)
+        code_graph.__exit__(None, None, None)
 
 
 def export_graph_to_file(ingestor: MemgraphIngestor, output: str) -> bool:
@@ -976,8 +1179,32 @@ def _validate_provider_config(role: cs.ModelRole, config: ModelConfig) -> None:
 
 
 def _initialize_services_and_agent(
-    repo_path: str, ingestor: QueryProtocol
-) -> tuple[Agent[None, str | DeferredToolRequests], ConfirmationToolNames]:
+    repo_path: str,
+    ingestor: QueryProtocol,
+    doc_ingestor: MemgraphIngestor | None = None,
+    query_mode: QueryMode | None = None,
+    doc_workspace: str = "default",
+) -> tuple[
+    Agent[None, str | DeferredToolRequests],
+    ConfirmationToolNames,
+    QueryRouter | None,
+]:
+    """Initialize services and agent with optional document graph support.
+
+    Args:
+        repo_path: Repository path
+        ingestor: Code graph ingestor
+        doc_ingestor: Document graph ingestor (optional)
+        query_mode: Initial query mode (defaults to CODE_ONLY)
+        doc_workspace: Document workspace identifier
+
+    Returns:
+        Tuple of (rag_agent, confirmation_tool_names, query_router)
+    """
+    # Default to CODE_ONLY if not specified
+    if query_mode is None:
+        query_mode = QueryMode.CODE_ONLY
+
     _validate_provider_config(
         cs.ModelRole.ORCHESTRATOR, settings.active_orchestrator_config
     )
@@ -1005,6 +1232,21 @@ def _initialize_services_and_agent(
     semantic_search_tool = create_semantic_search_tool()
     function_source_tool = create_get_function_source_tool()
 
+    # Document GraphRAG tools
+    # Create QueryRouter for document queries with optional doc graph
+    query_router = QueryRouter(
+        code_graph=ingestor,
+        doc_graph=doc_ingestor,
+    )
+    # Set current mode from parameter
+    query_router.current_mode = query_mode
+
+    query_document_graph_tool = create_query_document_graph_tool(query_router)
+    query_both_graphs_tool = create_query_both_graphs_tool(query_router)
+    validate_code_tool = create_validate_code_against_spec_tool(query_router)
+    validate_doc_tool = create_validate_doc_against_code_tool(query_router)
+    index_docs_tool = create_index_documents_tool()
+
     confirmation_tool_names = ConfirmationToolNames(
         replace_code=file_editor_tool.name,
         create_file=file_writer_tool.name,
@@ -1023,9 +1265,15 @@ def _initialize_services_and_agent(
             document_analyzer_tool,
             semantic_search_tool,
             function_source_tool,
+            # Document GraphRAG tools (5 tools)
+            query_document_graph_tool,
+            query_both_graphs_tool,
+            validate_code_tool,
+            validate_doc_tool,
+            index_docs_tool,
         ]
     )
-    return rag_agent, confirmation_tool_names
+    return rag_agent, confirmation_tool_names, query_router
 
 
 def main_single_query(repo_path: str, batch_size: int, question: str) -> None:
@@ -1035,28 +1283,134 @@ def main_single_query(repo_path: str, batch_size: int, question: str) -> None:
     logger.add(sys.stderr, level=cs.LOG_LEVEL_ERROR, format=cs.LOG_FORMAT)
 
     with connect_memgraph(batch_size) as ingestor:
-        rag_agent, _ = _initialize_services_and_agent(repo_path, ingestor)
+        rag_agent, _, _ = _initialize_services_and_agent(repo_path, ingestor)
         response = asyncio.run(rag_agent.run(question, message_history=[]))
         print(response.output)  # noqa: T201
 
 
 async def main_async(repo_path: str, batch_size: int) -> None:
+    """Original main_async - unchanged for backward compatibility.
+
+    Calls main_unified_async with default parameters.
+    """
+    await main_unified_async(
+        repo_path=repo_path,
+        batch_size=batch_size,
+        with_docs=False,
+        query_mode=QueryMode.CODE_ONLY,
+    )
+
+
+async def main_unified_async(
+    repo_path: str,
+    batch_size: int,
+    with_docs: bool = False,
+    query_mode: QueryMode | None = None,
+    doc_workspace: str = "default",
+    _fallback_attempted: bool = False,
+) -> None:
+    """Main async entry point with dual-graph support.
+
+    Args:
+        repo_path: Repository path
+        batch_size: Batch size for graph operations
+        with_docs: Enable document graph
+        query_mode: Initial query mode (defaults to CODE_ONLY)
+        doc_workspace: Document workspace identifier
+        _fallback_attempted: Internal flag to prevent infinite recursion on fallback
+    """
+    # Default to CODE_ONLY if not specified
+    if query_mode is None:
+        query_mode = QueryMode.CODE_ONLY
+
     project_root = _setup_common_initialization(repo_path)
 
-    table = _create_configuration_table(repo_path)
+    # Display configuration table
+    table = _create_configuration_table(
+        repo_path,
+        doc_graph_connected=with_docs,
+        query_mode=query_mode,
+        doc_workspace=doc_workspace,
+    )
     app_context.console.print(table)
 
-    async with connect_memgraph(batch_size) as ingestor:
-        app_context.console.print(style(cs.MSG_CONNECTED_MEMGRAPH, cs.Color.GREEN))
-        app_context.console.print(
-            Panel(
-                style(cs.MSG_CHAT_INSTRUCTIONS, cs.Color.YELLOW),
-                border_style=cs.Color.YELLOW,
-            )
-        )
+    if with_docs:
+        # Connect to both graphs
+        try:
+            with connect_both_graphs(batch_size, doc_workspace) as (code_graph, doc_graph):
+                app_context.console.print(
+                    style("✅ Connected to code graph", cs.Color.GREEN)
+                )
+                app_context.console.print(
+                    style(
+                        f"✅ Connected to document graph (workspace: {doc_workspace})",
+                        cs.Color.GREEN,
+                    )
+                )
 
-        rag_agent, tool_names = _initialize_services_and_agent(repo_path, ingestor)
-        await run_chat_loop(rag_agent, [], project_root, tool_names)
+                app_context.console.print(
+                    Panel(
+                        style(cs.MSG_CHAT_INSTRUCTIONS, cs.Color.YELLOW),
+                        border_style=cs.Color.YELLOW,
+                    )
+                )
+
+                # Initialize agent with both graphs
+                rag_agent, tool_names, query_router = _initialize_services_and_agent(
+                    repo_path,
+                    code_graph,
+                    doc_ingestor=doc_graph,
+                    query_mode=query_mode,
+                    doc_workspace=doc_workspace,
+                )
+
+                await run_chat_loop(
+                    rag_agent,
+                    [],
+                    project_root,
+                    tool_names,
+                    query_router=query_router,
+                    current_mode=query_mode,
+                )
+
+        except Exception as e:
+            # Fallback to code-only if document graph fails
+            app_context.console.print(
+                style(f"⚠️  Document graph unavailable: {e}", cs.Color.YELLOW)
+            )
+            app_context.console.print(
+                style("Continuing with code graph only...", cs.Color.YELLOW)
+            )
+            # Retry with code-only (with recursion guard to prevent infinite loop)
+            if not _fallback_attempted:
+                await main_unified_async(
+                    repo_path,
+                    batch_size,
+                    with_docs=False,
+                    _fallback_attempted=True,
+                )
+            else:
+                # Already tried fallback, re-raise to avoid infinite recursion
+                raise
+    else:
+        # Code graph only (existing behavior)
+        async with connect_memgraph(batch_size) as ingestor:
+            app_context.console.print(
+                style(cs.MSG_CONNECTED_MEMGRAPH, cs.Color.GREEN)
+            )
+            app_context.console.print(
+                Panel(
+                    style(cs.MSG_CHAT_INSTRUCTIONS, cs.Color.YELLOW),
+                    border_style=cs.Color.YELLOW,
+                )
+            )
+
+            rag_agent, tool_names, query_router = _initialize_services_and_agent(
+                repo_path, ingestor
+            )
+            await run_chat_loop(
+                rag_agent, [], project_root, tool_names, query_router=query_router
+            )
 
 
 async def main_optimize_async(
@@ -1085,7 +1439,7 @@ async def main_optimize_async(
     async with connect_memgraph(effective_batch_size) as ingestor:
         app_context.console.print(style(cs.MSG_CONNECTED_MEMGRAPH, cs.Color.GREEN))
 
-        rag_agent, tool_names = _initialize_services_and_agent(
+        rag_agent, tool_names, _ = _initialize_services_and_agent(
             target_repo_path, ingestor
         )
         await run_optimization_loop(

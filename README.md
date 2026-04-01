@@ -472,6 +472,43 @@ This provides a reliable, programmatic way to access your codebase structure wit
 
 Index and query documentation alongside your codebase. This feature enables comprehensive RAG across both code and documentation, with powerful validation capabilities.
 
+#### Unified Dual-Graph Session
+
+The `cgr start` command now supports unified dual-graph querying from a single session:
+
+```bash
+# Index both code and documents, then query both graphs
+cgr start --repo-path /path/to/your/repo --index-all --with-docs --mode both_merged
+
+# Connect to document graph for specification validation
+cgr start --repo-path /path/to/your/repo --with-docs --mode code_vs_doc
+
+# Index documents only, then query document graph
+cgr start --repo-path /path/to/your/repo --index-docs --with-docs --mode document_only
+```
+
+**Unified start flags:**
+
+| Flag | Description |
+|------|-------------|
+| `--with-docs` | Connect to document graph for dual-graph querying |
+| `--index-docs` | Index documents before starting chat |
+| `--index-all` | Index both code and documents before starting chat |
+| `--mode` | Query routing mode (see below) |
+| `--doc-workspace` | Document workspace identifier (default: `default`) |
+
+**In-chat mode switching:**
+
+Use `/mode <mode>` to switch query modes during the session:
+
+```
+/mode both_merged     # Query both code and documents
+/mode code_vs_doc     # Validate code against specs
+/mode document_only   # Query documents only
+```
+
+#### Separate Document Commands
+
 **Index documents into the document graph:**
 ```bash
 cgr index-docs --repo-path /path/to/your/repo
@@ -910,6 +947,11 @@ The agent has access to a suite of tools to understand and interact with the cod
 | `semantic_search` | Performs a semantic search for functions based on a natural language query describing their purpose, returning a list of potential matches with similarity scores. |
 | `get_function_source` | Retrieves the source code for a specific function or method using its internal node ID, typically obtained from a semantic search result. |
 | `get_code_snippet` | Retrieves the source code for a specific function, class, or method using its full qualified name. |
+| `query_document_graph` | **📚 Query the DOCUMENT graph only.** Use for questions about documentation, tutorials, guides, or API docs. Returns relevant document sections and chunks. |
+| `query_both_graphs` | **📚 Query BOTH code and document graphs.** Merged results with source attribution. Use for comprehensive searches spanning code and documentation. |
+| `validate_code_against_spec` | **📚 Validate CODE against DOCUMENT specifications.** Checks if implementation matches spec documents. Returns validation report with discrepancies. |
+| `validate_doc_against_code` | **📚 Validate DOCUMENT against actual CODE.** Identifies outdated or incorrect documentation. Returns validation report with suggestions. |
+| `index_documents` | **📚 Index documents into the document graph.** Parses and ingests Markdown, PDF, DOCX files. Creates Document, Section, and Chunk nodes with embeddings. |
 <!-- /SECTION:agentic_tools -->
 
 ### 📚 Document GraphRAG Tools

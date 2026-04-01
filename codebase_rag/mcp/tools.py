@@ -49,8 +49,9 @@ from codebase_rag.types_defs import (
 )
 from codebase_rag.utils.dependencies import has_semantic_dependencies
 from codebase_rag.vector_store import delete_project_embeddings
-from codebase_rag.shared.query_router import QueryMode, QueryRequest, QueryResponse
+from codebase_rag.shared.query_router import QueryMode, QueryRequest, QueryResponse, QueryRouter
 from codebase_rag.document.document_updater import DocumentGraphUpdater
+from codebase_rag.config import settings
 
 
 class MCPToolsRegistry:
@@ -59,11 +60,16 @@ class MCPToolsRegistry:
         project_root: str,
         ingestor: MemgraphIngestor,
         cypher_gen: CypherGenerator,
+        doc_ingestor: MemgraphIngestor | None = None,
     ) -> None:
         self.project_root = project_root
         self.ingestor = ingestor
         self.cypher_gen = cypher_gen
         self._ingestor_lock = asyncio.Lock()
+
+        # Document graph connection (optional)
+        self.doc_ingestor = doc_ingestor
+        self._query_router: QueryRouter | None = None
 
         self.parsers, self.queries = load_parsers()
 
@@ -539,6 +545,25 @@ class MCPToolsRegistry:
     def rag_agent(self, value: Agent) -> None:
         self._rag_agent = value
 
+    @property
+    def query_router(self) -> QueryRouter:
+        """Get or create QueryRouter with both graph connections."""
+        if self._query_router is None:
+            # Initialize document graph connection if not provided
+            if self.doc_ingestor is None:
+                try:
+                    self.doc_ingestor = MemgraphIngestor(
+                        host=settings.DOC_MEMGRAPH_HOST,
+                        port=settings.DOC_MEMGRAPH_PORT,
+                    )
+                except Exception as e:
+                    logger.warning(f"Could not connect to document graph: {e}")
+            self._query_router = QueryRouter(
+                code_graph=self.ingestor,
+                doc_graph=self.doc_ingestor,
+            )
+        return self._query_router
+
     async def list_projects(self) -> ListProjectsResult:
         logger.info(lg.MCP_LISTING_PROJECTS)
         try:
@@ -851,18 +876,18 @@ class MCPToolsRegistry:
                 mode=QueryMode.DOCUMENT_ONLY,
                 top_k=top_k,
             )
-            # TODO: Integrate with QueryRouter when available
-            # response = self._query_router.query(request)
-            # return asdict(response)
+            response = self.query_router.query(request)
+            result = asdict(response)
             return {
                 "query": natural_language_query,
                 "mode": "DOCUMENT_ONLY",
-                "results": [],
-                "message": "Document graph query - integration pending",
+                "answer": result.get("answer", ""),
+                "sources": result.get("sources", []),
+                "warnings": result.get("warnings", []),
             }
         except Exception as e:
             logger.error(f"Document graph query failed: {e}")
-            return {"error": str(e), "results": []}
+            return {"error": str(e), "results": [], "sources": []}
 
     async def query_both_graphs(
         self, natural_language_query: str, top_k: int = 5
@@ -877,18 +902,18 @@ class MCPToolsRegistry:
                 mode=QueryMode.BOTH_MERGED,
                 top_k=top_k,
             )
-            # TODO: Integrate with QueryRouter when available
-            # response = self._query_router.query(request)
-            # return asdict(response)
+            response = self.query_router.query(request)
+            result = asdict(response)
             return {
                 "query": natural_language_query,
                 "mode": "BOTH_MERGED",
-                "results": [],
-                "message": "Both graphs query - integration pending",
+                "answer": result.get("answer", ""),
+                "sources": result.get("sources", []),
+                "warnings": result.get("warnings", []),
             }
         except Exception as e:
             logger.error(f"Both graphs query failed: {e}")
-            return {"error": str(e), "results": []}
+            return {"error": str(e), "results": [], "sources": []}
 
     async def validate_code_against_spec(
         self,
@@ -899,23 +924,48 @@ class MCPToolsRegistry:
     ) -> dict:
         """Validate CODE against DOCUMENT specifications."""
         from dataclasses import asdict
+        from ..shared.validation.api import ValidationTriggerAPI, ValidationRequest
 
         logger.info(f"Validating code against spec: {spec_document_path}")
         try:
+            # Step 1: Cost estimation
+            validation_api = ValidationTriggerAPI(llm_provider="google")
+            validation_request = ValidationRequest(
+                document_path=spec_document_path,
+                mode="CODE_VS_DOC",
+                scope=scope,
+                max_cost_usd=max_cost_usd,
+                dry_run=dry_run,
+            )
+            trigger_result = await validation_api.request_validation(validation_request)
+
+            if not trigger_result.accepted:
+                return {
+                    "spec_document": spec_document_path,
+                    "mode": "CODE_VS_DOC",
+                    "accepted": False,
+                    "cost_estimate": trigger_result.cost_estimate.to_dict() if trigger_result.cost_estimate else None,
+                    "message": trigger_result.message,
+                }
+
+            # Step 2: Execute validation via QueryRouter
             request = QueryRequest(
                 question=f"Validate code against {spec_document_path}",
                 mode=QueryMode.CODE_VS_DOC,
                 scope=scope,
             )
-            # TODO: Integrate with ValidationTriggerAPI when available
+            response = self.query_router.query(request)
+            result = asdict(response)
+
             return {
                 "spec_document": spec_document_path,
                 "mode": "CODE_VS_DOC",
                 "scope": scope,
                 "max_cost_usd": max_cost_usd,
                 "dry_run": dry_run,
-                "validation_report": None,
-                "message": "Validation - integration pending",
+                "validation_report": result.get("validation_report"),
+                "answer": result.get("answer", ""),
+                "cost_estimate": trigger_result.cost_estimate.to_dict() if trigger_result.cost_estimate else None,
             }
         except Exception as e:
             logger.error(f"Validation failed: {e}")
@@ -930,23 +980,48 @@ class MCPToolsRegistry:
     ) -> dict:
         """Validate DOCUMENT against actual CODE."""
         from dataclasses import asdict
+        from ..shared.validation.api import ValidationTriggerAPI, ValidationRequest
 
         logger.info(f"Validating doc against code: {document_path}")
         try:
+            # Step 1: Cost estimation
+            validation_api = ValidationTriggerAPI(llm_provider="google")
+            validation_request = ValidationRequest(
+                document_path=document_path,
+                mode="DOC_VS_CODE",
+                scope=scope,
+                max_cost_usd=max_cost_usd,
+                dry_run=dry_run,
+            )
+            trigger_result = await validation_api.request_validation(validation_request)
+
+            if not trigger_result.accepted:
+                return {
+                    "document": document_path,
+                    "mode": "DOC_VS_CODE",
+                    "accepted": False,
+                    "cost_estimate": trigger_result.cost_estimate.to_dict() if trigger_result.cost_estimate else None,
+                    "message": trigger_result.message,
+                }
+
+            # Step 2: Execute validation via QueryRouter
             request = QueryRequest(
                 question=f"Validate {document_path} against code",
                 mode=QueryMode.DOC_VS_CODE,
                 scope=scope,
             )
-            # TODO: Integrate with ValidationTriggerAPI when available
+            response = self.query_router.query(request)
+            result = asdict(response)
+
             return {
                 "document": document_path,
                 "mode": "DOC_VS_CODE",
                 "scope": scope,
                 "max_cost_usd": max_cost_usd,
                 "dry_run": dry_run,
-                "validation_report": None,
-                "message": "Validation - integration pending",
+                "validation_report": result.get("validation_report"),
+                "answer": result.get("answer", ""),
+                "cost_estimate": trigger_result.cost_estimate.to_dict() if trigger_result.cost_estimate else None,
             }
         except Exception as e:
             logger.error(f"Validation failed: {e}")
@@ -957,8 +1032,8 @@ class MCPToolsRegistry:
         logger.info("Indexing documents")
         try:
             updater = DocumentGraphUpdater(
-                host="localhost",  # TODO: Use config
-                port=7688,  # Document graph port
+                host=settings.DOC_MEMGRAPH_HOST,
+                port=settings.DOC_MEMGRAPH_PORT,
                 repo_path=Path(self.project_root),
             )
             stats = await asyncio.to_thread(updater.run)
@@ -989,9 +1064,11 @@ def create_mcp_tools_registry(
     project_root: str,
     ingestor: MemgraphIngestor,
     cypher_gen: CypherGenerator,
+    doc_ingestor: MemgraphIngestor | None = None,
 ) -> MCPToolsRegistry:
     return MCPToolsRegistry(
         project_root=project_root,
         ingestor=ingestor,
         cypher_gen=cypher_gen,
+        doc_ingestor=doc_ingestor,
     )

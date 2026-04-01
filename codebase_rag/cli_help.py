@@ -25,7 +25,13 @@ APP_DESCRIPTION = (
     "graphs, and enables natural language querying of codebase structure and relationships."
 )
 
-CMD_START = "Start interactive chat session with your codebase"
+CMD_START = (
+    "Start interactive chat session with your codebase. "
+    "Supports both code and document GraphRAG. "
+    "Use --with-docs to enable document queries. "
+    "Use --index-docs or --index-all to index before chatting. "
+    "Use --mode to specify query mode (default: code_only)."
+)
 CMD_INDEX = "Index codebase to protobuf files for offline use"
 CMD_EXPORT = "Export knowledge graph from Memgraph to JSON file"
 CMD_OPTIMIZE = "AI-guided codebase optimization session"
@@ -127,6 +133,34 @@ HELP_SCOPE = "Scope of validation: 'all', 'sections', or 'claims'"
 HELP_MAX_COST = "Maximum cost budget for validation in USD"
 HELP_DRY_RUN = "Estimate cost without running validation"
 HELP_CLEAN_DOC_DB = "Clean the document database before indexing (use when adding first documents)"
+
+# Unified start command help text
+HELP_WITH_DOCS = (
+    "Connect to document graph (DOC_MEMGRAPH_HOST:DOC_MEMGRAPH_PORT) "
+    "in addition to code graph. Required for document queries."
+)
+HELP_INDEX_DOCS = (
+    "Index documents from --repo-path into document graph before starting chat. "
+    "Implies --with-docs. Uses DocumentGraphUpdater with version caching."
+)
+HELP_INDEX_ALL = (
+    "Index both code (--update-graph) and documents (--index-docs) before starting. "
+    "Convenience flag for first-time setup or major updates."
+)
+HELP_DOC_WORKSPACE = (
+    "Workspace identifier for multi-tenant document graphs. "
+    "Isolates document data between projects. Must match workspace used during indexing."
+)
+HELP_MODE = (
+    "Query routing mode. Options: "
+    "code_only (default), document_only, both_merged, code_vs_doc, doc_vs_code. "
+    "Note: Document modes require --with-docs flag."
+)
+HELP_CHECK_FRESHNESS = (
+    "Check if indexed graphs are up-to-date with repository. "
+    "If stale, prompts to re-index. Disable with --no-check-freshness for faster startup."
+)
+HELP_INDEX_TIMEOUT = "Maximum seconds for indexing operations (default: 300s)"
 
 CLI_COMMANDS: dict[CLICommandName, str] = {
     CLICommandName.START: CMD_START,

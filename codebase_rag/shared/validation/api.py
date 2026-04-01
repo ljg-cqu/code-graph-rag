@@ -190,10 +190,49 @@ class ValidationTriggerAPI:
 
     async def _get_document_stats(self, document_path: str) -> dict:
         """Get document statistics from graph (no LLM)."""
-        # Query graph for: total_section_count, code_reference_count, word_count
-        # Note: total_section_count includes all nested sections (root + subsections)
-        # These are stored at index time, not computed here
-        # TODO: Implement actual graph query
+        from ...services.graph_service import MemgraphIngestor
+        from ...config import settings
+
+        try:
+            with MemgraphIngestor(
+                host=settings.DOC_MEMGRAPH_HOST,
+                port=settings.DOC_MEMGRAPH_PORT,
+            ) as doc_graph:
+                # Query for document statistics
+                stats_query = """
+                MATCH (d:Document)
+                WHERE d.path = $path OR d.path CONTAINS $path
+                OPTIONAL MATCH (d)-[:CONTAINS_SECTION]->(s:Section)
+                OPTIONAL MATCH (d)-[:CONTAINS_CHUNK]->(c:Chunk)
+                RETURN d.path as path,
+                       count(DISTINCT s) as total_section_count,
+                       count(DISTINCT c) as total_chunk_count,
+                       sum(c.word_count) as word_count
+                """
+                results = doc_graph.fetch_all(stats_query, {"path": document_path})
+
+                if results and results[0]:
+                    result = results[0]
+                    section_count = result.get("total_section_count", 0) or 0
+                    chunk_count = result.get("total_chunk_count", 0) or 0
+                    word_count = result.get("word_count", 0) or 0
+
+                    # Estimate claims based on content size
+                    estimated_claims = max(10, chunk_count // 3)
+
+                    return {
+                        "total_section_count": section_count,
+                        "total_chunk_count": chunk_count,
+                        "word_count": word_count,
+                        "estimated_claims": estimated_claims,
+                        "document_path": result.get("path", document_path),
+                    }
+
+        except Exception as e:
+            from loguru import logger
+            logger.warning(f"Could not get document stats: {e}")
+
+        # Fallback to default estimates
         return {
             "total_section_count": 5,
             "estimated_claims": 10,

@@ -25,6 +25,47 @@ cgr start --repo-path /path/to/repo [OPTIONS]
 | `--orchestrator` | Specify provider:model for main operations (e.g., `google:gemini-2.5-pro`, `ollama:llama3.2`) |
 | `--cypher` | Specify provider:model for graph queries (e.g., `google:gemini-2.5-flash`, `ollama:codellama`) |
 | `-o` | Export graph to JSON file during update |
+| `--with-docs` | Connect to document graph for dual-graph querying |
+| `--index-docs` | Index documents before starting chat |
+| `--index-all` | Index both code and documents before starting chat |
+| `--doc-workspace` | Document graph workspace identifier (default: `default`) |
+| `--check-freshness` | Check if graphs are up-to-date before starting (default: enabled) |
+| `--mode` | Query routing mode: `code_only`, `document_only`, `both_merged`, `code_vs_doc`, `doc_vs_code` |
+| `--index-timeout` | Maximum seconds for indexing operations (default: 300s) |
+
+#### Unified Dual-Graph Usage
+
+Query both code and documents from a single session:
+
+```bash
+# Index and query both code and documents
+cgr start --repo-path /path/to/repo --index-all --with-docs --mode both_merged
+
+# Start with document graph for spec validation
+cgr start --repo-path /path/to/repo --with-docs --mode code_vs_doc
+
+# Index documents only, then query
+cgr start --repo-path /path/to/repo --index-docs --with-docs --mode document_only
+```
+
+#### In-Chat Commands
+
+| Command | Description |
+|---------|-------------|
+| `/mode <mode>` | Switch query mode during chat (e.g., `/mode both_merged`) |
+| `/model <provider:model>` | Switch LLM model during chat |
+| `/help` | Show available commands |
+| `/exit` | Exit the session |
+
+#### Query Modes
+
+| Mode | Description |
+|------|-------------|
+| `code_only` | Query code graph only (default) |
+| `document_only` | Query document graph only |
+| `both_merged` | Query both graphs, merge results with attribution |
+| `code_vs_doc` | Validate code against documentation (docs = truth) |
+| `doc_vs_code` | Validate documentation against code (code = truth) |
 
 ### `cgr export`
 
@@ -85,6 +126,74 @@ cgr language add-grammar --grammar-url <url>
 cgr language list-languages
 cgr language remove-language <language-name>
 ```
+
+## Document GraphRAG Commands
+
+### `cgr index-docs`
+
+Index documents (Markdown, PDF, DOCX) into the document graph.
+
+```bash
+cgr index-docs --repo-path /path/to/repo [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--repo-path` | Path to repository (defaults to current directory) |
+| `--clean` | Clear document database before indexing |
+| `--force` | Force re-indexing (ignore version cache) |
+
+### `cgr query-docs`
+
+Query the document graph using natural language.
+
+```bash
+cgr query-docs "How do I use the API?" [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--top-k` | Number of results to return (default: 5) |
+
+### `cgr query-all`
+
+Query both code and document graphs with merged results.
+
+```bash
+cgr query-all "Tell me about authentication" [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--top-k` | Number of results per graph (default: 5) |
+
+### `cgr validate-spec`
+
+Validate code against a specification document.
+
+```bash
+cgr validate-spec <spec-path> [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--scope` | Validation scope: `all`, `sections`, or `claims` (default: `all`) |
+| `--max-cost` | Maximum cost budget in USD (default: 0.50) |
+| `--dry-run` | Estimate cost without running validation |
+
+### `cgr validate-doc`
+
+Validate documentation against actual code.
+
+```bash
+cgr validate-doc <doc-path> [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--scope` | Validation scope: `all`, `sections`, or `claims` (default: `all`) |
+| `--max-cost` | Maximum cost budget in USD (default: 0.50) |
+| `--dry-run` | Estimate cost without running validation |
 
 ## Makefile Commands
 

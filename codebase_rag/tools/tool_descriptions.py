@@ -16,6 +16,9 @@ class AgenticToolName(StrEnum):
     SEMANTIC_SEARCH = "semantic_search"
     GET_FUNCTION_SOURCE = "get_function_source"
     GET_CODE_SNIPPET = "get_code_snippet"
+    # Document GraphRAG tools
+    QUERY_DOCUMENT_GRAPH = "query_document_graph"
+    QUERY_BOTH_GRAPHS = "query_both_graphs"
 
 
 ANALYZE_DOCUMENT = (
@@ -70,6 +73,21 @@ FILE_EDITOR = (
     "Requires exact target code and replacement. "
     "Only modifies the specified block, leaving rest of file unchanged. "
     "True surgical patching."
+)
+
+# Document GraphRAG agentic tool descriptions
+QUERY_DOCUMENT_GRAPH = (
+    "Query the DOCUMENT graph/vector ONLY. "
+    "Use for questions about documentation, tutorials, guides, or API docs. "
+    "Returns relevant document sections and chunks with source attribution. "
+    "Examples: 'How do I use the authentication API?', 'What does the docs say about configuration?'"
+)
+
+QUERY_BOTH_GRAPHS = (
+    "Query BOTH code and document graphs, merge results. "
+    "Use for comprehensive searches spanning code and documentation. "
+    "Results are labeled with their source (code_graph or document_graph). "
+    "Examples: 'Tell me everything about authentication', 'Find all information about the API'"
 )
 
 # (H) MCP tool descriptions
@@ -247,4 +265,7 @@ AGENTIC_TOOLS: dict[AgenticToolName, str] = {
     AgenticToolName.SEMANTIC_SEARCH: SEMANTIC_SEARCH,
     AgenticToolName.GET_FUNCTION_SOURCE: GET_FUNCTION_SOURCE,
     AgenticToolName.GET_CODE_SNIPPET: CODE_RETRIEVAL,
+    # Document GraphRAG tools
+    AgenticToolName.QUERY_DOCUMENT_GRAPH: QUERY_DOCUMENT_GRAPH,
+    AgenticToolName.QUERY_BOTH_GRAPHS: QUERY_BOTH_GRAPHS,
 }

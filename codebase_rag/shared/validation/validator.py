@@ -61,13 +61,25 @@ class BaseValidator(ABC):
 
     def _execute_code_query(self, cypher: str, params: dict | None = None) -> list[dict]:
         """Execute a query on the code graph."""
-        # Placeholder - actual implementation would use MemgraphIngestor
-        return []
+        if self.code_graph is None:
+            return []
+        try:
+            return self.code_graph.fetch_all(cypher, params or {})
+        except Exception as e:
+            from loguru import logger
+            logger.error(f"Code graph query failed: {e}")
+            return []
 
     def _execute_doc_query(self, cypher: str, params: dict | None = None) -> list[dict]:
         """Execute a query on the document graph."""
-        # Placeholder - actual implementation would use MemgraphIngestor
-        return []
+        if self.doc_graph is None:
+            return []
+        try:
+            return self.doc_graph.fetch_all(cypher, params or {})
+        except Exception as e:
+            from loguru import logger
+            logger.error(f"Document graph query failed: {e}")
+            return []
 
 
 __all__ = ["BaseValidator"]

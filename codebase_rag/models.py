@@ -17,6 +17,10 @@ class SessionState:
     confirm_edits: bool = True
     log_file: Path | None = None
     cancelled: bool = False
+    # Document GraphRAG state (cached, not queried every input)
+    doc_graph_available: bool = False
+    doc_count: int = 0
+    doc_graph_checked: bool = False
 
     def reset_cancelled(self) -> None:
         self.cancelled = False

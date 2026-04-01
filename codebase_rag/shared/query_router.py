@@ -201,6 +201,7 @@ class QueryRouter:
         self.doc_graph = doc_graph
         self.code_vector = code_vector
         self.doc_vector = doc_vector
+        self.current_mode: QueryMode = QueryMode.CODE_ONLY  # For in-chat mode switching
 
     def query(self, request: QueryRequest) -> QueryResponse:
         """Route query based on EXPLICIT mode."""
@@ -236,16 +237,101 @@ class QueryRouter:
                 warnings=["Code graph connection not configured"],
             )
 
-        # Implementation follows existing query patterns from mcp/tools.py
         logger.info(f"Querying code graph: {request.question}")
 
-        # TODO: Implement actual code graph querying
-        # This would use existing code_query functionality
+        # Query code graph using semantic search if vector backend available
+        sources: list[Source] = []
+        answer_parts: list[str] = []
+
+        if self.code_vector:
+            # Use vector similarity search for semantic queries
+            try:
+                from ..embeddings import get_embedding_provider
+                from ..config import settings
+
+                config = settings.active_embedding_config
+                provider = get_embedding_provider(
+                    provider=config.provider,
+                    model_id=config.model_id,
+                )
+                query_embedding = provider.embed(request.question)
+
+                results = self.code_vector.search(
+                    embedding=query_embedding,
+                    limit=request.top_k,
+                    node_label="Function",
+                    filters={},
+                )
+
+                for result in results:
+                    sources.append(Source(
+                        type="code",
+                        path=result.get("file_path", "unknown"),
+                        node_type=result.get("node_type", "Function"),
+                        qualified_name=result.get("qualified_name"),
+                        line_range=(result.get("start_line", 0), result.get("end_line", 0)),
+                    ))
+                    answer_parts.append(
+                        f"- **{result.get('qualified_name', 'unknown')}** "
+                        f"({result.get('node_type', 'Function')}) in {result.get('file_path', 'unknown')}"
+                    )
+
+            except Exception as e:
+                logger.warning(f"Vector search failed, falling back to text search: {e}")
+
+        if not sources and self.code_graph:
+            # Fallback: Query code graph using keyword-based search
+            # Simple text search in function/class names
+            keyword_query = """
+            MATCH (n)
+            WHERE n:Function OR n:Class OR n:Method
+            WHERE n.name CONTAINS $keyword OR n.qualified_name CONTAINS $keyword
+            RETURN n.name as name, n.qualified_name as qualified_name,
+                   n.file_path as file_path, n.start_line as start_line,
+                   n.end_line as end_line, labels(n) as labels
+            LIMIT $limit
+            """
+            # Extract keyword from question (simple approach)
+            keyword = request.question.split()[0] if request.question else ""
+            try:
+                results = self.code_graph.fetch_all(keyword_query, {
+                    "keyword": keyword,
+                    "limit": request.top_k,
+                })
+
+                # Ensure results is iterable
+                if results is None:
+                    results = []
+                elif not hasattr(results, '__iter__'):
+                    results = []
+
+                for result in results:
+                    node_type = result.get("labels", ["Unknown"])[0]
+                    sources.append(Source(
+                        type="code",
+                        path=result.get("file_path", "unknown"),
+                        node_type=node_type,
+                        qualified_name=result.get("qualified_name"),
+                        line_range=(result.get("start_line", 0), result.get("end_line", 0)),
+                    ))
+                    answer_parts.append(
+                        f"- **{result.get('qualified_name', result.get('name', 'unknown'))}** "
+                        f"({node_type}) in {result.get('file_path', 'unknown')}"
+                    )
+            except Exception as e:
+                logger.warning(f"Code graph query failed: {e}")
+
+        if not sources:
+            return QueryResponse(
+                answer=f"No relevant code found for: {request.question}",
+                sources=[],
+                mode=request.mode,
+            )
+
         return QueryResponse(
-            answer=f"Code query results for: {request.question}",
-            sources=[],
+            answer=f"**Code Results:**\n\n" + "\n".join(answer_parts),
+            sources=sources,
             mode=request.mode,
-            warnings=["CODE_ONLY mode implementation pending"],
         )
 
     def _query_document_only(self, request: QueryRequest) -> QueryResponse:
@@ -264,12 +350,66 @@ class QueryRouter:
 
         logger.info(f"Querying document graph: {request.question}")
 
-        # TODO: Implement document graph querying
+        from pathlib import Path
+        from ..document.tools.document_search import document_semantic_search
+        from ..config import settings
+
+        sources: list[Source] = []
+        answer_parts: list[str] = ["**Relevant Documentation:**\n"]
+
+        try:
+            # Use semantic search for document queries
+            results = document_semantic_search(
+                query=request.question,
+                ingestor=self.doc_graph,
+                vector_backend=self.doc_vector,
+                workspace="default",
+                limit=request.top_k,
+                min_similarity=0.5,
+            )
+
+            if not results:
+                return QueryResponse(
+                    answer=f"No relevant documents found for: {request.question}",
+                    sources=[],
+                    mode=request.mode,
+                )
+
+            for i, result in enumerate(results, 1):
+                doc_path = result.get("document_path", "unknown")
+                section_title = result.get("section_title", "Unknown Section")
+                content = result.get("content", "")
+                score = result.get("score", 0.0)
+
+                # Truncate content for display
+                content_preview = content[:200] + "..." if len(content) > 200 else content
+
+                answer_parts.append(
+                    f"\n{i}. **{section_title}** ({Path(doc_path).name}) [Score: {score:.2f}]"
+                )
+                answer_parts.append(f"   {content_preview}")
+
+                sources.append(Source(
+                    type="document",
+                    path=doc_path,
+                    node_type="Chunk",
+                    qualified_name=result.get("section_qn") or result.get("chunk_qn"),
+                    line_range=(result.get("chunk_start_line", 0), result.get("chunk_start_line", 0)),
+                ))
+
+        except Exception as e:
+            logger.error(f"Document semantic search failed: {e}")
+            return QueryResponse(
+                answer=f"Document search failed: {e}",
+                sources=[],
+                mode=request.mode,
+                warnings=[f"Search error: {e}"],
+            )
+
         return QueryResponse(
-            answer=f"Document query results for: {request.question}",
-            sources=[],
+            answer="\n".join(answer_parts),
+            sources=sources,
             mode=request.mode,
-            warnings=["DOCUMENT_ONLY mode implementation pending"],
         )
 
     def _query_both_merged(self, request: QueryRequest) -> QueryResponse:

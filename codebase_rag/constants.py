@@ -339,9 +339,22 @@ UI_MODEL_SWITCHED = "[bold green]Model switched to: {model}[/bold green]"
 UI_MODEL_CURRENT = "[bold cyan]Current model: {model}[/bold cyan]"
 UI_MODEL_SWITCH_ERROR = "[bold red]Failed to switch model: {error}[/bold red]"
 UI_MODEL_USAGE = "[bold yellow]Usage: /model <provider:model> (e.g., /model google:gemini-3.1-pro-preview)[/bold yellow]"
+UI_MODE_SWITCHED = "[bold green]Mode switched to: {mode}[/bold green]"
+UI_MODE_CURRENT = "[bold cyan]Current mode: {mode}[/bold cyan]"
+UI_MODE_SWITCH_ERROR = "[bold red]Failed to switch mode: {error}[/bold red]"
+UI_MODE_REQUIRES_DOCS = "[bold yellow]Mode '{mode}' requires document graph. Restart with --with-docs flag.[/bold yellow]"
+UI_MODE_USAGE = """[bold yellow]Available modes:[/bold yellow]
+  /mode code_only       - Query code graph only
+  /mode document_only   - Query document graph only
+  /mode both_merged     - Query both, merge results
+  /mode code_vs_doc     - Validate code against docs
+  /mode doc_vs_code     - Validate docs against code
+  /mode                 - Show current mode"""
 UI_HELP_COMMANDS = """[bold cyan]Available commands:[/bold cyan]
   /model <provider:model> - Switch to a different model
   /model                  - Show current model
+  /mode <mode>            - Switch query mode (code_only, document_only, both_merged, etc.)
+  /mode                   - Show current mode
   /help                   - Show this help
   exit, quit              - Exit the session"""
 UI_TOOL_ARGS_FORMAT = "    Arguments: {args}"
@@ -841,6 +854,7 @@ EXIT_COMMANDS = frozenset({"exit", "quit"})
 
 # (H) CLI commands
 MODEL_COMMAND_PREFIX = "/model"
+MODE_COMMAND_PREFIX = "/mode"
 HELP_COMMAND = "/help"
 
 # (H) UI separators and formatting
@@ -898,6 +912,10 @@ TABLE_ROW_OLLAMA_ORCHESTRATOR = "Ollama Endpoint (Orchestrator)"
 TABLE_ROW_OLLAMA_CYPHER = "Ollama Endpoint (Cypher)"
 TABLE_ROW_EDIT_CONFIRMATION = "Edit Confirmation"
 TABLE_ROW_TARGET_REPOSITORY = "Target Repository"
+TABLE_ROW_CODE_GRAPH = "Code Graph"
+TABLE_ROW_DOCUMENT_GRAPH = "Document Graph"
+TABLE_ROW_DOC_GRAPH_NOT_CONNECTED = "NOT CONNECTED (use --with-docs)"
+TABLE_ROW_QUERY_MODE = "Query Mode"
 
 # (H) UI status messages
 MSG_CONNECTED_MEMGRAPH = "Successfully connected to Memgraph."
@@ -2873,6 +2891,7 @@ class MCPSchemaType(StrEnum):
     STRING = "string"
     INTEGER = "integer"
     BOOLEAN = "boolean"
+    NUMBER = "number"
 
 
 # (H) MCP schema fields

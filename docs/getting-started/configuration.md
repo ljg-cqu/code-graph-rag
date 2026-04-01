@@ -98,6 +98,20 @@ CYPHER_ENDPOINT=http://localhost:11434/v1
 | `TARGET_REPO_PATH` | `.` | Default repository path |
 | `LOCAL_MODEL_ENDPOINT` | `http://localhost:11434/v1` | Fallback endpoint for Ollama |
 
+## Document GraphRAG Settings
+
+Configure the separate document graph for indexing and querying documentation:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DOC_MEMGRAPH_HOST` | `localhost` | Document Memgraph hostname |
+| `DOC_MEMGRAPH_PORT` | `7688` | Document Memgraph port |
+| `DOC_MEMGRAPH_VECTOR_INDEX_NAME` | `doc_embeddings` | Vector index name for document embeddings |
+| `DOC_MEMGRAPH_VECTOR_CAPACITY` | `100000` | Vector index capacity |
+| `DOC_SUPPORTED_EXTENSIONS` | `.md,.rst,.txt,.pdf,.docx` | Supported document extensions |
+| `DOC_MAX_FILE_SIZE_MB` | `50` | Maximum document file size |
+| `DOC_ENABLED` | `True` | Enable/disable document indexing |
+
 ## Setting Up Ollama
 
 ```bash

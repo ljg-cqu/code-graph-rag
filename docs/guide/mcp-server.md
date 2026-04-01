@@ -67,6 +67,20 @@ docker run -p 7687:7687 -p 7444:7444 memgraph/memgraph:latest
 | `read_file` | Read file contents with pagination support |
 | `write_file` | Write content to a file |
 | `list_directory` | List directory contents |
+| `semantic_search` | Perform semantic search for functions by natural language description |
+| `ask_agent` | Ask the Code Graph RAG agent a question about the codebase |
+| `get_embedding_status` | Get current embedding provider configuration and status |
+| `set_embedding_provider` | Switch to a different embedding provider |
+
+### Document GraphRAG Tools
+
+| Tool | Description |
+|------|-------------|
+| `query_document_graph` | Query the DOCUMENT graph/vector only. Use for questions about documentation, tutorials, and API docs. |
+| `query_both_graphs` | Query BOTH code and document graphs with merged results. Use for comprehensive searches spanning code and documentation. |
+| `validate_code_against_spec` | Validate CODE against DOCUMENT specifications. Checks if implementation matches spec documents. |
+| `validate_doc_against_code` | Validate DOCUMENT against actual CODE. Identifies outdated or incorrect documentation. |
+| `index_documents` | Index documents (Markdown, PDF, DOCX) into the document graph. Creates Document, Section, and Chunk nodes with embeddings. |
 
 ## Example Usage
 
