@@ -152,9 +152,13 @@ HELP_DOC_WORKSPACE = (
     "Isolates document data between projects. Must match workspace used during indexing."
 )
 HELP_MODE = (
-    "Query routing mode. Options: "
-    "code_only (default), document_only, both_merged, code_vs_doc, doc_vs_code. "
-    "Note: Document modes require --with-docs flag."
+    "Query routing mode. Options:\n"
+    "  - code_only: Query code graph only (default)\n"
+    "  - document_only: Query document graph only\n"
+    "  - both_merged: Query both graphs, merge results with attribution\n"
+    "  - code_vs_doc: Validate code against documentation (doc is truth)\n"
+    "  - doc_vs_code: Validate documentation against code (code is truth)\n"
+    "\nNote: Document graph requires --with-docs flag."
 )
 HELP_CHECK_FRESHNESS = (
     "Check if indexed graphs are up-to-date with repository. "

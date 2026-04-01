@@ -53,6 +53,7 @@ from .tools.document_validation import (
 from .tools.file_editor import FileEditor, create_file_editor_tool
 from .tools.file_reader import FileReader, create_file_reader_tool
 from .tools.file_writer import FileWriter, create_file_writer_tool
+from .tools.graph_query import create_graph_query_tool
 from .tools.semantic_search import (
     create_get_function_source_tool,
     create_semantic_search_tool,
@@ -1246,6 +1247,7 @@ def _initialize_services_and_agent(
     validate_code_tool = create_validate_code_against_spec_tool(query_router)
     validate_doc_tool = create_validate_doc_against_code_tool(query_router)
     index_docs_tool = create_index_documents_tool()
+    graph_query_tool = create_graph_query_tool(query_router)
 
     confirmation_tool_names = ConfirmationToolNames(
         replace_code=file_editor_tool.name,
@@ -1265,12 +1267,13 @@ def _initialize_services_and_agent(
             document_analyzer_tool,
             semantic_search_tool,
             function_source_tool,
-            # Document GraphRAG tools (5 tools)
+            # Document GraphRAG tools (6 tools)
             query_document_graph_tool,
             query_both_graphs_tool,
             validate_code_tool,
             validate_doc_tool,
             index_docs_tool,
+            graph_query_tool,
         ]
     )
     return rag_agent, confirmation_tool_names, query_router
