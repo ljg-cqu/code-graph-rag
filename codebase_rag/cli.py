@@ -152,7 +152,7 @@ def _handle_indexing(
 
             updater = GraphUpdater(
                 ingestor=ingestor,
-                repo_path=str(repo_path),
+                repo_path=repo_path,
                 parsers=parsers,
                 queries=queries,
                 unignore_paths=unignore_paths,
@@ -219,8 +219,8 @@ def _handle_indexing(
             logger.exception("Document indexing failed")
             # Don't block chat - continue with code only
             docs_indexed = False
-            # Preserve user's explicit --with-docs flag; only disable if indexing was the only reason
-            effective_with_docs = with_docs
+            # Per spec: disable --with-docs when document indexing fails
+            effective_with_docs = False
 
     return (code_indexed, docs_indexed, effective_with_docs)
 
@@ -308,6 +308,12 @@ def start(
         "--no-confirm",
         help=ch.HELP_NO_CONFIRM,
     ),
+    yolo: bool = typer.Option(
+        False,
+        "--yolo",
+        "-y",
+        help=ch.HELP_YOLO,
+    ),
     batch_size: int | None = typer.Option(
         None,
         "--batch-size",
@@ -376,7 +382,17 @@ def start(
 
     from codebase_rag.shared.query_router import QueryMode
 
-    app_context.session.confirm_edits = not no_confirm
+    # Yolo mode: --yolo or --no-confirm both enable it (CLI flags take precedence)
+    if yolo or no_confirm:
+        app_context.session.yolo_mode = True
+        app_context.session.confirm_edits = False
+    elif settings.CGR_YOLO_MODE:
+        # Environment variable (lower precedence than CLI flags)
+        app_context.session.yolo_mode = True
+        app_context.session.confirm_edits = False
+    else:
+        app_context.session.yolo_mode = False
+        app_context.session.confirm_edits = True
 
     # === CLI Flag Validation ===
     # Calculate effective_with_docs
@@ -420,13 +436,17 @@ def start(
         )
         raise typer.Exit(1)
 
-    # --clean requires --update-graph, --index-docs, or --index-all
+    # === Handle --clean alone (no indexing) ===
+    # Preserves backward compatibility: clean database and return immediately
+    # without model validation, freshness check, or chat session
     if clean and not (update_graph or index_docs or index_all):
-        typer.echo(
-            "ERROR: --clean requires --update-graph, --index-docs, or --index-all.",
-            err=True,
-        )
-        raise typer.Exit(1)
+        effective_batch_size = settings.resolve_batch_size(batch_size)
+        _info(style(cs.CLI_MSG_CLEANING_DB, cs.Color.YELLOW))
+        with connect_memgraph(effective_batch_size) as ingestor:
+            ingestor.clean_database()
+        _delete_hash_cache(Path(target_repo_path))
+        _info(style(cs.CLI_MSG_CLEAN_DONE, cs.Color.GREEN))
+        return
 
     effective_batch_size = settings.resolve_batch_size(batch_size)
 
@@ -667,6 +687,12 @@ def optimize(
         "--no-confirm",
         help=ch.HELP_NO_CONFIRM,
     ),
+    yolo: bool = typer.Option(
+        False,
+        "--yolo",
+        "-y",
+        help=ch.HELP_YOLO,
+    ),
     batch_size: int | None = typer.Option(
         None,
         "--batch-size",
@@ -674,7 +700,17 @@ def optimize(
         help=ch.HELP_BATCH_SIZE,
     ),
 ) -> None:
-    app_context.session.confirm_edits = not no_confirm
+    # Yolo mode: --yolo or --no-confirm both enable it (CLI flags take precedence)
+    if yolo or no_confirm:
+        app_context.session.yolo_mode = True
+        app_context.session.confirm_edits = False
+    elif settings.CGR_YOLO_MODE:
+        # Environment variable (lower precedence than CLI flags)
+        app_context.session.yolo_mode = True
+        app_context.session.confirm_edits = False
+    else:
+        app_context.session.yolo_mode = False
+        app_context.session.confirm_edits = True
 
     target_repo_path = repo_path or settings.TARGET_REPO_PATH
 

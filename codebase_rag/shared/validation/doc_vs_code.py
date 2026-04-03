@@ -115,7 +115,7 @@ class DocVsCodeValidator(BaseValidator):
 
             # Combine content for analysis
             all_content = [section_content] + [c for c in chunks if c]
-            text = " ".join(all_content)
+            text = " ".join(c for c in all_content if c)
 
             # Basic claim extraction: look for sentences with code references
             import re
@@ -193,11 +193,11 @@ class DocVsCodeValidator(BaseValidator):
         # Check for functions, classes, methods
         query = """
         MATCH (n)
-        WHERE n:Function OR n:Class OR n:Method OR n:Variable
-        WHERE n.name = $ref
+        WHERE (n:Function OR n:Class OR n:Method OR n:Variable)
+          AND (n.name = $ref
            OR n.qualified_name = $ref
            OR n.qualified_name CONTAINS $ref
-           OR n.name CONTAINS $ref
+           OR n.name CONTAINS $ref)
         RETURN count(n) as count
         """
         results = self._execute_code_query(query, {"ref": code_reference})

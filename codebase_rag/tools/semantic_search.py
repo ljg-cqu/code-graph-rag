@@ -65,7 +65,7 @@ def semantic_code_search(query: str, top_k: int = 5) -> list[SemanticSearchResul
                             qualified_name=str(result["qualified_name"]),
                             name=str(result["name"]),
                             type=type_str,
-                            score=round(score, 3),
+                            similarity=round(score, 3),
                         )
                     )
 
@@ -132,7 +132,7 @@ def create_semantic_search_tool() -> Tool:
         formatted_results = []
         for i, result in enumerate(results, 1):
             formatted_results.append(
-                f"{i}. {result['qualified_name']} (type: {result['type']}, score: {result['score']})"
+                f"{i}. {result['qualified_name']} (type: {result['type']}, similarity: {result['similarity']})"
             )
 
         response = cs.MSG_SEMANTIC_RESULT_HEADER.format(count=len(results), query=query)

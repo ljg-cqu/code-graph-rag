@@ -83,7 +83,7 @@ def test_semantic_code_search_returns_formatted_results(
     assert results[0]["node_id"] == 1
     assert results[0]["qualified_name"] == "project.module.func1"
     assert results[0]["type"] == "Function"
-    assert results[0]["score"] == 0.95
+    assert results[0]["similarity"] == 0.95
 
 
 @pytest.mark.skipif(
@@ -187,7 +187,7 @@ def test_semantic_code_search_preserves_score_order(
         results = semantic_code_search("test query")
 
     assert results[0]["node_id"] == 3
-    assert results[0]["score"] == 0.99
+    assert results[0]["similarity"] == 0.99
     assert results[1]["node_id"] == 1
     assert results[2]["node_id"] == 2
 

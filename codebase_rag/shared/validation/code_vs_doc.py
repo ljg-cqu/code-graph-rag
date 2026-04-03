@@ -208,9 +208,9 @@ class CodeVsDocValidator(BaseValidator):
         for name in names[:5]:  # Limit to first 5 names
             query = """
             MATCH (n)
-            WHERE n:Function OR n:Class OR n:Method
-            WHERE toLower(n.name) CONTAINS toLower($name)
-               OR toLower(n.qualified_name) CONTAINS toLower($name)
+            WHERE (n:Function OR n:Class OR n:Method)
+              AND (toLower(n.name) CONTAINS toLower($name)
+               OR toLower(n.qualified_name) CONTAINS toLower($name))
             RETURN count(n) as count
             """
             results = self._execute_code_query(query, {"name": name})

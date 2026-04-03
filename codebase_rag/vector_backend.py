@@ -52,7 +52,7 @@ class VectorBackend(Protocol):
             filters: Optional filters (e.g., {"project_prefix": "myproject."})
 
         Returns:
-            List of (node_id, score) tuples sorted by relevance
+            List of (node_id, similarity) tuples sorted by relevance
         """
         ...
 

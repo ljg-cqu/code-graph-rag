@@ -198,8 +198,9 @@ class MemgraphBackend(VectorBackend):
         Searches across all label-specific indexes (function_embedding_index,
         method_embedding_index, etc.) and combines results.
 
-        Note: Parameter order is (index_name, limit, query_vector)
-        Returns nodes sorted by distance (ascending).
+        Note: Parameter order for vector_search.search is (index_name, limit, query_vector)
+        Returns:
+            List of (node_id, similarity) tuples sorted by similarity descending.
         """
         # Use per-label index search directly (avoids fallback overhead)
         effective_top_k = top_k if top_k > 0 else settings.VECTOR_SEARCH_TOP_K
@@ -225,16 +226,17 @@ class MemgraphBackend(VectorBackend):
                 cypher = """
                 CALL vector_search.search($index_name, $fetch_count, $embedding)
                 YIELD node, distance, similarity
+                WITH node, distance, similarity
                 WHERE node.qualified_name STARTS WITH $project_prefix
                 RETURN id(node) AS node_id, similarity
-                ORDER BY distance ASC;
+                ORDER BY similarity DESC;
                 """
             else:
                 cypher = """
                 CALL vector_search.search($index_name, $top_k, $embedding)
                 YIELD node, distance, similarity
                 RETURN id(node) AS node_id, similarity
-                ORDER BY distance ASC;
+                ORDER BY similarity DESC;
                 """
 
             params = {

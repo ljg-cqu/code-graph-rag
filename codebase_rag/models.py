@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 @dataclass
 class SessionState:
     confirm_edits: bool = True
+    yolo_mode: bool = False  # Explicit yolo mode flag (auto-approve all tool calls)
     log_file: Path | None = None
     cancelled: bool = False
     # Document GraphRAG state (cached, not queried every input)

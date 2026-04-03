@@ -171,7 +171,7 @@ def search_embeddings(
         top_k: Number of results (default: from settings).
 
     Returns:
-        List of (node_id, score) tuples.
+        List of (node_id, similarity) tuples.
     """
     backend = _get_backend()
     effective_top_k = top_k if top_k is not None else settings.VECTOR_SEARCH_TOP_K

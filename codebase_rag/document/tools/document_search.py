@@ -64,14 +64,47 @@ def document_semantic_search(
         )
 
     # Use vector backend for similarity search
-    if vector_backend:
-        results = vector_backend.search(
-            embedding=query_embedding,
-            limit=limit,
-            min_similarity=min_similarity,
-            node_label="Chunk",
+    if vector_backend and ingestor:
+        # Use vector backend for similarity, then fetch chunk details from graph
+        backend_results = vector_backend.search(
+            query_embedding=query_embedding,
+            top_k=limit * 2,  # Fetch more to account for min_similarity filtering
             filters={"workspace": workspace},
         )
+        # Filter by min_similarity and get node IDs
+        filtered_results = [
+            (nid, sim) for nid, sim in backend_results
+            if sim >= min_similarity
+        ][:limit]
+
+        if filtered_results:
+            # Fetch chunk details from graph
+            node_ids = [nid for nid, _ in filtered_results]
+            similarity_map = {nid: sim for nid, sim in filtered_results}
+
+            # Query to get chunk details by node IDs
+            chunk_query = """
+            MATCH (d:Document)-[:CONTAINS_CHUNK]->(c:Chunk)
+            WHERE id(c) IN $node_ids
+            OPTIONAL MATCH (c)-[:BELONGS_TO_SECTION]->(s:Section)
+            RETURN
+                c.content as content,
+                c.qualified_name as chunk_qn,
+                c.start_line as chunk_start_line,
+                s.title as section_title,
+                s.qualified_name as section_qn,
+                d.path as document_path,
+                id(c) as node_id
+            """
+            chunks = ingestor.fetch_all(chunk_query, {"node_ids": node_ids})
+
+            # Combine similarity scores with chunk data
+            results = []
+            for chunk in chunks:
+                chunk["similarity"] = similarity_map.get(chunk.get("node_id", 0), 0.0)
+                results.append(chunk)
+        else:
+            results = []
     elif ingestor:
         # Fallback to Memgraph native vector search
         results = _search_memgraph_native(
@@ -97,6 +130,8 @@ def _search_memgraph_native(
 ) -> list[dict]:
     """Use Memgraph's native vector search.
 
+    Output fields per Memgraph spec: node, distance, similarity
+
     Graph structure:
     - Document-[:CONTAINS_CHUNK]->Chunk
     - Chunk-[:BELONGS_TO_SECTION]->Section (optional)
@@ -104,10 +139,11 @@ def _search_memgraph_native(
     query = """
     CALL vector_search.search(
         'doc_embeddings',
-        $embedding,
-        $limit
-    ) YIELD node, score
-    WHERE node.workspace = $workspace AND score >= $min_similarity
+        $limit,
+        $embedding
+    ) YIELD node, distance, similarity
+    WITH node, distance, similarity
+    WHERE node.workspace = $workspace AND similarity >= $min_similarity
     MATCH (d:Document)-[:CONTAINS_CHUNK]->(node)
     OPTIONAL MATCH (node)-[:BELONGS_TO_SECTION]->(s:Section)
     RETURN
@@ -117,8 +153,8 @@ def _search_memgraph_native(
         s.title as section_title,
         s.qualified_name as section_qn,
         d.path as document_path,
-        score
-    ORDER BY score DESC
+        similarity
+    ORDER BY similarity DESC
     """
 
     return ingestor.fetch_all(

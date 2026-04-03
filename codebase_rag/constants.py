@@ -883,7 +883,11 @@ SESSION_CONTEXT_END = "\n[END SESSION CONTEXT]\n\n"
 
 # (H) Confirmation status display
 CONFIRM_ENABLED = "Enabled"
-CONFIRM_DISABLED = "Disabled (YOLO Mode)"
+CONFIRM_DISABLED = "Disabled"
+
+# (H) Yolo mode status display
+YOLO_ENABLED = "[bold red]ENABLED (auto-approve)[/bold red]"
+YOLO_DISABLED = "Disabled"
 
 # (H) Diff labels
 DIFF_LABEL_BEFORE = "before"
@@ -911,6 +915,7 @@ TABLE_ROW_OLLAMA_ENDPOINT = "Ollama Endpoint"
 TABLE_ROW_OLLAMA_ORCHESTRATOR = "Ollama Endpoint (Orchestrator)"
 TABLE_ROW_OLLAMA_CYPHER = "Ollama Endpoint (Cypher)"
 TABLE_ROW_EDIT_CONFIRMATION = "Edit Confirmation"
+TABLE_ROW_YOLO_MODE = "Yolo Mode"
 TABLE_ROW_TARGET_REPOSITORY = "Target Repository"
 TABLE_ROW_CODE_GRAPH = "Code Graph"
 TABLE_ROW_DOCUMENT_GRAPH = "Document Graph"
@@ -920,6 +925,7 @@ TABLE_ROW_QUERY_MODE = "Query Mode"
 # (H) UI status messages
 MSG_CONNECTED_MEMGRAPH = "Successfully connected to Memgraph."
 MSG_THINKING_CANCELLED = "Thinking cancelled."
+MSG_FORCE_EXIT = "Forcing exit..."
 MSG_TIMEOUT_FORMAT = "Operation timed out after {timeout} seconds."
 MSG_CHAT_INSTRUCTIONS = (
     "Ask questions about your codebase graph. Type 'exit' or 'quit' to end."

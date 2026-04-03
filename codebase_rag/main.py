@@ -6,6 +6,7 @@ import json
 import os
 import shlex
 import shutil
+import signal
 import sys
 import uuid
 from collections import deque
@@ -97,6 +98,20 @@ def dim(text: str) -> str:
     # Escape Rich markup patterns to prevent MarkupError
     escaped_text = text.replace("[", "\\[")
     return f"[{cs.StyleModifier.DIM}]{escaped_text}[/{cs.StyleModifier.DIM}]"
+
+
+# Yolo mode warning banner
+YOLO_WARNING = """
+[bold red]YOLO MODE ENABLED[/bold red]
+All tool operations will be auto-approved without confirmation.
+Use with caution on production codebases.
+"""
+
+
+def _display_yolo_warning() -> None:
+    """Display yolo mode warning banner if yolo mode is enabled."""
+    if app_context.session.yolo_mode:
+        app_context.console.print(Panel(YOLO_WARNING, border_style=cs.Color.RED))
 
 
 app_context = AppContext()
@@ -248,6 +263,14 @@ def _process_tool_approvals(
         tool_args = _to_tool_args(
             call.tool_name, RawToolArgs(**call.args_as_dict()), tool_names
         )
+
+        # YOLO MODE: Skip UI, auto-approve
+        if app_context.session.yolo_mode:
+            logger.info(f"YOLO: Auto-approving {call.tool_name}")
+            deferred_results.approvals[call.tool_call_id] = True
+            continue
+
+        # Normal confirmation flow
         app_context.console.print(
             f"\n{cs.UI_TOOL_APPROVAL.format(tool_name=call.tool_name)}"
         )
@@ -358,6 +381,12 @@ def _create_configuration_table(
     # Query mode
     table.add_row(cs.TABLE_ROW_QUERY_MODE, query_mode)
 
+    # Yolo mode indicator
+    yolo_status = (
+        cs.YOLO_ENABLED if app_context.session.yolo_mode else cs.YOLO_DISABLED
+    )
+    table.add_row(cs.TABLE_ROW_YOLO_MODE, yolo_status)
+
     confirmation_status = (
         cs.CONFIRM_ENABLED if app_context.session.confirm_edits else cs.CONFIRM_DISABLED
     )
@@ -424,7 +453,18 @@ async def run_with_cancellation[T](
             f"\n{style(cs.MSG_TIMEOUT_FORMAT.format(timeout=timeout), cs.Color.YELLOW)}"
         )
         return CancelledResult(cancelled=True)
-    except (asyncio.CancelledError, KeyboardInterrupt):
+    except asyncio.CancelledError:
+        # Cancelled from outside (e.g., signal handler) - don't print,
+        # the signal handler already printed the message
+        if not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        return CancelledResult(cancelled=True)
+    except KeyboardInterrupt:
+        # Fallback for Windows or when signal handlers not installed
         if not task.done():
             task.cancel()
             try:
@@ -738,81 +778,148 @@ async def _run_interactive_loop(
     if current_mode is None:
         current_mode = QueryMode.CODE_ONLY
 
-    init_session_log(project_root)
-    question = initial_question or ""
-    model_override: Model | None = None
-    model_override_string: str | None = None
-    model_override_config: ModelConfig | None = None
+    # Set up signal handlers for graceful Ctrl+C handling
+    # Note: We use a local flag and nested function because the processing task
+    # changes dynamically per user input iteration.
+    loop = asyncio.get_running_loop()
+    _shutdown_requested = False
+    _current_processing_task: asyncio.Task | None = None
 
-    while True:
-        try:
-            if not initial_question or question != initial_question:
-                question = await asyncio.to_thread(get_multiline_input, input_prompt)
+    def _handle_interrupt() -> None:
+        """Handle SIGINT by cancelling current processing or exiting."""
+        nonlocal _shutdown_requested
 
-            stripped_question = question.strip()
-            stripped_lower = stripped_question.lower()
+        if _shutdown_requested:
+            # Second interrupt - force exit regardless of state
+            app_context.console.print(
+                f"\n{style(cs.MSG_FORCE_EXIT, cs.Color.RED)}"
+            )
+            try:
+                loop.remove_signal_handler(signal.SIGINT)
+                loop.remove_signal_handler(signal.SIGTERM)
+            except (NotImplementedError, RuntimeError):
+                pass
+            sys.exit(1)
 
-            if stripped_lower in cs.EXIT_COMMANDS:
-                break
+        _shutdown_requested = True
 
-            if not stripped_question:
-                initial_question = None
-                continue
+        # Cancel processing task if active
+        if _current_processing_task and not _current_processing_task.done():
+            app_context.console.print(
+                f"\n{style(cs.MSG_THINKING_CANCELLED, cs.Color.YELLOW)}"
+            )
+            _current_processing_task.cancel()
+        # During input (no processing task), let prompt_toolkit's Ctrl+C
+        # binding handle the first interrupt, but track that shutdown was
+        # requested so second Ctrl+C forces exit
 
-            command_parts = stripped_lower.split(maxsplit=1)
-            if command_parts[0] == cs.MODEL_COMMAND_PREFIX:
-                model_override, model_override_string, model_override_config = (
-                    _handle_model_command(
+    # Install signal handlers
+    try:
+        loop.add_signal_handler(signal.SIGINT, _handle_interrupt)
+        loop.add_signal_handler(signal.SIGTERM, _handle_interrupt)
+    except (NotImplementedError, RuntimeError):
+        # Windows or loop already closed
+        pass
+
+    try:
+        init_session_log(project_root)
+        question = initial_question or ""
+        model_override: Model | None = None
+        model_override_string: str | None = None
+        model_override_config: ModelConfig | None = None
+
+        while True:
+            try:
+                _shutdown_requested = False  # Reset for each iteration
+
+                if not initial_question or question != initial_question:
+                    question = await asyncio.to_thread(get_multiline_input, input_prompt)
+
+                stripped_question = question.strip()
+                stripped_lower = stripped_question.lower()
+
+                if stripped_lower in cs.EXIT_COMMANDS:
+                    break
+
+                if not stripped_question:
+                    initial_question = None
+                    continue
+
+                command_parts = stripped_lower.split(maxsplit=1)
+                if command_parts[0] == cs.MODEL_COMMAND_PREFIX:
+                    model_override, model_override_string, model_override_config = (
+                        _handle_model_command(
+                            stripped_question,
+                            model_override,
+                            model_override_string,
+                            model_override_config,
+                        )
+                    )
+                    initial_question = None
+                    continue
+                if command_parts[0] == cs.MODE_COMMAND_PREFIX:
+                    current_mode, status_message = _handle_mode_command(
                         stripped_question,
+                        query_router,
+                        current_mode,
+                    )
+                    app_context.console.print(status_message)
+                    initial_question = None
+                    continue
+                if command_parts[0] == cs.HELP_COMMAND:
+                    app_context.console.print(cs.UI_HELP_COMMANDS)
+                    initial_question = None
+                    continue
+
+                log_session_event(f"{cs.SESSION_PREFIX_USER}{question}")
+
+                if app_context.session.cancelled:
+                    question_with_context = question + get_session_context()
+                    app_context.session.reset_cancelled()
+                else:
+                    question_with_context = question
+
+                question_with_context = _handle_chat_images(
+                    question_with_context, project_root
+                )
+
+                # Create a task for the agent response loop so it can be cancelled
+                _current_processing_task = asyncio.create_task(
+                    _run_agent_response_loop(
+                        rag_agent,
+                        message_history,
+                        question_with_context,
+                        config,
+                        tool_names,
                         model_override,
-                        model_override_string,
-                        model_override_config,
                     )
                 )
+                try:
+                    await _current_processing_task
+                except asyncio.CancelledError:
+                    # Defensive: CancelledError propagates if run_with_cancellation
+                    # doesn't catch it (shouldn't happen in current design)
+                    break
+                finally:
+                    _current_processing_task = None
+
                 initial_question = None
-                continue
-            if command_parts[0] == cs.MODE_COMMAND_PREFIX:
-                current_mode, status_message = _handle_mode_command(
-                    stripped_question,
-                    query_router,
-                    current_mode,
-                )
-                app_context.console.print(status_message)
-                initial_question = None
-                continue
-            if command_parts[0] == cs.HELP_COMMAND:
-                app_context.console.print(cs.UI_HELP_COMMANDS)
-                initial_question = None
-                continue
 
-            log_session_event(f"{cs.SESSION_PREFIX_USER}{question}")
+            except KeyboardInterrupt:
+                break
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.exception(ls.UNEXPECTED.format(error=e))
+                app_context.console.print(cs.UI_ERR_UNEXPECTED.format(error=e))
 
-            if app_context.session.cancelled:
-                question_with_context = question + get_session_context()
-                app_context.session.reset_cancelled()
-            else:
-                question_with_context = question
-
-            question_with_context = _handle_chat_images(
-                question_with_context, project_root
-            )
-
-            await _run_agent_response_loop(
-                rag_agent,
-                message_history,
-                question_with_context,
-                config,
-                tool_names,
-                model_override,
-            )
-
-            initial_question = None
-
-        except KeyboardInterrupt:
-            break
-        except Exception as e:
-            logger.exception(ls.UNEXPECTED.format(error=e))
-            app_context.console.print(cs.UI_ERR_UNEXPECTED.format(error=e))
+    finally:
+        # Clean up signal handlers
+        try:
+            loop.remove_signal_handler(signal.SIGINT)
+            loop.remove_signal_handler(signal.SIGTERM)
+        except (NotImplementedError, RuntimeError):
+            pass
 
 
 async def run_chat_loop(
@@ -1461,6 +1568,9 @@ async def main_unified_async(
     )
     app_context.console.print(table)
 
+    # Display yolo mode warning if enabled
+    _display_yolo_warning()
+
     if with_docs:
         # Connect to both graphs
         try:
@@ -1560,6 +1670,9 @@ async def main_optimize_async(
         str(project_root), cs.OPTIMIZATION_TABLE_TITLE, language
     )
     app_context.console.print(table)
+
+    # Display yolo mode warning if enabled
+    _display_yolo_warning()
 
     effective_batch_size = settings.resolve_batch_size(batch_size)
 

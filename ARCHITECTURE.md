@@ -217,6 +217,25 @@
 │  │                              ▼                                │  │
 │  │                    Generate Response                          │  │
 │  └──────────────────────────────────────────────────────────────┘  │
+│                                                                      │
+│  Session State (models.py:SessionState):                            │
+│  ┌──────────────────────────────────────────────────────────────┐  │
+│  │ confirm_edits: bool = True   # Require approval for edits    │  │
+│  │ yolo_mode: bool = False      # Auto-approve all tool calls   │  │
+│  │ log_file: Path | None        # Session log for audit trail   │  │
+│  │ cancelled: bool              # Session cancellation flag      │  │
+│  │ doc_graph_available: bool    # Document graph connection     │  │
+│  └──────────────────────────────────────────────────────────────┘  │
+│                                                                      │
+│  YOLO Mode Flow:                                                    │
+│  ┌──────────────────────────────────────────────────────────────┐  │
+│  │ if yolo_mode:                                                │  │
+│  │     → Skip UI, auto-approve                                  │  │
+│  │     → Log with "YOLO:" prefix                                │  │
+│  │     → Display warning banner at session start                │  │
+│  │ else:                                                        │  │
+│  │     → Normal confirmation flow                               │  │
+│  └──────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -390,6 +409,10 @@
 │  │ - VECTOR_STORE_BACKEND (memgraph/qdrant)                     │  │
 │  │ - QDRANT_URI, QDRANT_COLLECTION_NAME                         │  │
 │  │ - MEMGRAPH_VECTOR_* settings                                 │  │
+│  │                                                               │  │
+│  │ Session Behavior:                                             │  │
+│  │ - CGR_YOLO_MODE (true/false) - Auto-approve all tool calls   │  │
+│  │ - CGR_QUIET (true/false) - Suppress non-essential output     │  │
 │  └──────────────────────────────────────────────────────────────┘  │
 │                                                                      │
 │  Settings Class (AppConfig):                                        │

@@ -243,7 +243,7 @@ class QueryRouter:
         sources: list[Source] = []
         answer_parts: list[str] = []
 
-        if self.code_vector:
+        if self.code_vector and self.code_graph:
             # Use vector similarity search for semantic queries
             try:
                 from ..embeddings import get_embedding_provider
@@ -256,12 +256,37 @@ class QueryRouter:
                 )
                 query_embedding = provider.embed(request.question)
 
-                results = self.code_vector.search(
-                    embedding=query_embedding,
-                    limit=request.top_k,
-                    node_label="Function",
-                    filters={},
+                # VectorBackend.search() returns (node_id, similarity) tuples
+                backend_results = self.code_vector.search(
+                    query_embedding=query_embedding,
+                    top_k=request.top_k,
                 )
+
+                # Fetch node details from graph using node_ids
+                if backend_results:
+                    node_ids = [nid for nid, _ in backend_results]
+                    similarity_map = {nid: sim for nid, sim in backend_results}
+
+                    # Query to get function/method details by node IDs
+                    node_query = """
+                    MATCH (n)
+                    WHERE id(n) IN $node_ids AND (n:Function OR n:Method OR n:Class)
+                    OPTIONAL MATCH (m:Module)-[:DEFINES]->(n)
+                    RETURN
+                        id(n) as node_id,
+                        n.qualified_name as qualified_name,
+                        n.name as name,
+                        labels(n)[0] as node_type,
+                        coalesce(n.file_path, m.path) as file_path,
+                        n.start_line as start_line,
+                        n.end_line as end_line
+                    """
+                    results = self.code_graph.fetch_all(node_query, {"node_ids": node_ids})
+
+                    for result in results:
+                        result["similarity"] = similarity_map.get(result.get("node_id", 0), 0.0)
+                else:
+                    results = []
 
                 for result in results:
                     sources.append(Source(
@@ -273,7 +298,8 @@ class QueryRouter:
                     ))
                     answer_parts.append(
                         f"- **{result.get('qualified_name', 'unknown')}** "
-                        f"({result.get('node_type', 'Function')}) in {result.get('file_path', 'unknown')}"
+                        f"({result.get('node_type', 'Function')}) in {result.get('file_path', 'unknown')} "
+                        f"[Similarity: {result.get('similarity', 0.0):.2f}]"
                     )
 
             except Exception as e:
@@ -284,8 +310,8 @@ class QueryRouter:
             # Simple text search in function/class names
             keyword_query = """
             MATCH (n)
-            WHERE n:Function OR n:Class OR n:Method
-            WHERE n.name CONTAINS $keyword OR n.qualified_name CONTAINS $keyword
+            WHERE (n:Function OR n:Class OR n:Method)
+              AND (n.name CONTAINS $keyword OR n.qualified_name CONTAINS $keyword)
             RETURN n.name as name, n.qualified_name as qualified_name,
                    n.file_path as file_path, n.start_line as start_line,
                    n.end_line as end_line, labels(n) as labels
@@ -379,13 +405,13 @@ class QueryRouter:
                 doc_path = result.get("document_path", "unknown")
                 section_title = result.get("section_title", "Unknown Section")
                 content = result.get("content", "")
-                score = result.get("score", 0.0)
+                similarity = result.get("similarity", 0.0)
 
                 # Truncate content for display
                 content_preview = content[:200] + "..." if len(content) > 200 else content
 
                 answer_parts.append(
-                    f"\n{i}. **{section_title}** ({Path(doc_path).name}) [Score: {score:.2f}]"
+                    f"\n{i}. **{section_title}** ({Path(doc_path).name}) [Similarity: {similarity:.2f}]"
                 )
                 answer_parts.append(f"   {content_preview}")
 

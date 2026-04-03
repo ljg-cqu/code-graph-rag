@@ -64,7 +64,8 @@ HELP_CYPHER_MODEL = (
     "Specify cypher model as provider:model "
     "(e.g., ollama:codellama, google:gemini-3-flash-preview)"
 )
-HELP_NO_CONFIRM = "Disable confirmation prompts for edit operations (YOLO mode)"
+HELP_NO_CONFIRM = "Disable confirmation prompts for edit operations"
+HELP_YOLO = "Disable all interactive confirmations (auto-approve all tool calls)"
 
 HELP_REPO_PATH_RETRIEVAL = "Path to the target repository for code retrieval"
 HELP_REPO_PATH_INDEX = "Path to the target repository to index."

@@ -651,6 +651,47 @@ The agent will incorporate the guidance from your reference documents when sugge
 - `--repo-path`: Path to repository (defaults to current directory)
 - `--batch-size`: Override Memgraph flush batch size (defaults to `MEMGRAPH_BATCH_SIZE` in settings)
 - `--reference-document`: Path to reference documentation (optimization only)
+- `--yolo`, `-y`: **YOLO Mode** - Disable all interactive confirmations (auto-approve all tool calls)
+- `--no-confirm`: Alias for `--yolo` (backward compatible)
+
+### YOLO Mode
+
+YOLO mode disables all interactive confirmations for tool operations, automatically approving file edits, shell commands, and other potentially destructive operations without prompting.
+
+**When to use:**
+- Automated/scripted workflows
+- CI/CD pipelines
+- Non-interactive sessions
+- When you trust the agent completely
+
+**Usage:**
+```bash
+# Start with yolo mode (no confirmations)
+cgr start --repo-path /path/to/repo --yolo
+
+# Short form
+cgr start -r /path/to/repo -y
+
+# Backward compatible alias
+cgr start --repo-path /path/to/repo --no-confirm
+
+# For optimization sessions
+cgr optimize python --repo-path /path/to/repo --yolo
+
+# MCP server with yolo mode (via environment variable)
+CGR_YOLO_MODE=true cgr mcp-server
+```
+
+**Environment Variable:**
+- `CGR_YOLO_MODE=true` - Enable yolo mode for MCP server or persistent settings
+
+**Precedence Rules:**
+1. CLI flags (`--yolo`, `--no-confirm`) take precedence over environment variable
+2. Environment variable (`CGR_YOLO_MODE=true`) takes precedence over default
+3. Default: yolo mode disabled, confirmations enabled
+
+**Security Warning:**
+When yolo mode is enabled, a prominent red warning banner is displayed at session start. All auto-approved actions are logged with `YOLO:` prefix for audit trail. Use with caution on production codebases.
 
 ## 🔌 MCP Server (Claude Code Integration)
 
@@ -882,6 +923,7 @@ EMBEDDING_PROJECT_ID=your-project-id
 - `MEMGRAPH_BATCH_SIZE`: Batch size for Memgraph operations (default: `1000`)
 - `TARGET_REPO_PATH`: Default repository path (default: `.`)
 - `LOCAL_MODEL_ENDPOINT`: Fallback endpoint for Ollama (default: `http://localhost:11434/v1`)
+- `CGR_YOLO_MODE`: Enable yolo mode globally (default: `false`)
 
 ### Custom Ignore Patterns
 

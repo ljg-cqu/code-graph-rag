@@ -215,7 +215,7 @@ class SemanticSearchResult(TypedDict):
     qualified_name: str
     name: str
     type: str
-    score: float
+    similarity: float
 
 
 class JavaClassInfo(TypedDict):
@@ -523,6 +523,19 @@ NODE_SCHEMAS: tuple[NodeSchema, ...] = (
         NodeLabel.CUSTOM_ERROR,
         "{qualified_name: string, name: string, parameters: list[string], path: string, absolute_path: string, start_line: int, end_line: int}",
     ),
+    # Document GraphRAG node schemas
+    NodeSchema(
+        NodeLabel.DOCUMENT,
+        "{qualified_name: string, path: string, file_type: string, word_count: int, total_section_count: int, modified_date: string, workspace: string}",
+    ),
+    NodeSchema(
+        NodeLabel.SECTION,
+        "{qualified_name: string, title: string, level: int, start_line: int, end_line: int, content_snippet: string, workspace: string}",
+    ),
+    NodeSchema(
+        NodeLabel.CHUNK,
+        "{qualified_name: string, content: string, start_line: int, end_line: int, workspace: string}",
+    ),
 )
 
 
@@ -667,5 +680,31 @@ RELATIONSHIP_SCHEMAS: tuple[RelationshipSchema, ...] = (
         (NodeLabel.FUNCTION, NodeLabel.METHOD),
         RelationshipType.REVERTS_WITH,
         (NodeLabel.CUSTOM_ERROR,),
+    ),
+    # Document GraphRAG relationship schemas
+    RelationshipSchema(
+        (NodeLabel.DOCUMENT,),
+        RelationshipType.CONTAINS_SECTION,
+        (NodeLabel.SECTION,),
+    ),
+    RelationshipSchema(
+        (NodeLabel.SECTION,),
+        RelationshipType.HAS_SUBSECTION,
+        (NodeLabel.SECTION,),
+    ),
+    RelationshipSchema(
+        (NodeLabel.DOCUMENT,),
+        RelationshipType.CONTAINS_CHUNK,
+        (NodeLabel.CHUNK,),
+    ),
+    RelationshipSchema(
+        (NodeLabel.SECTION,),
+        RelationshipType.BELONGS_TO_SECTION,
+        (NodeLabel.CHUNK,),
+    ),
+    RelationshipSchema(
+        (NodeLabel.DOCUMENT, NodeLabel.SECTION),
+        RelationshipType.REFERENCES_CODE,
+        (NodeLabel.FUNCTION, NodeLabel.CLASS, NodeLabel.METHOD),
     ),
 )

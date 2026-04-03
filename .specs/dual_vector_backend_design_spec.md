@@ -162,18 +162,21 @@ CALL vector_search.show_index_info() YIELD * RETURN *;
 CALL vector_search.search("index_name", $top_k, $query_vector)
 YIELD node, distance, similarity
 RETURN node.qualified_name, distance, similarity
-ORDER BY distance ASC;
+ORDER BY similarity DESC;
 
 -- Search with post-filtering
 CALL vector_search.search("code_embedding_index", 10, $embedding)
 YIELD node, distance, similarity
+WITH node, distance, similarity
 WHERE node.qualified_name STARTS WITH $project_prefix
-RETURN node, distance, similarity;
+RETURN node, distance, similarity
+ORDER BY similarity DESC;
 
 -- Search on edges (if indexed)
 CALL vector_search.search_edges("edge_index", $top_k, $query_vector)
 YIELD edges, distance, similarity
-RETURN edges, distance;
+RETURN edges, distance, similarity
+ORDER BY similarity DESC;
 ```
 
 **Output Fields:**
@@ -208,14 +211,15 @@ SHOW STORAGE INFO;
 
 ```cypher
 -- Vector search + graph traversal in single query
-CALL vector_search.search('embedding_index', $embedding, 10)
-YIELD node, score
+CALL vector_search.search('embedding_index', 10, $embedding)
+YIELD node, distance, similarity
+WITH node, distance, similarity
 MATCH (node)-[:CALLS*1..3]->(callee:Function)
 RETURN
     node.qualified_name as similar_function,
-    score,
+    similarity,
     collect(DISTINCT callee.qualified_name) as call_chain
-ORDER BY score DESC;
+ORDER BY similarity DESC;
 ```
 
 ### 2.2 MAGE (Memgraph Advanced Graph Extensions)
@@ -247,15 +251,15 @@ embs = model.encode(texts, normalize_embeddings=True)
 
 ```cypher
 -- Vector search + PageRank ranking
-CALL vector_search.search('embedding_index', $embedding, 50)
-YIELD node, score
-WITH node, score,
+CALL vector_search.search('embedding_index', 50, $embedding)
+YIELD node, distance, similarity
+WITH node, distance, similarity,
      size((node)-[:CALLS]->()) + size((:Function)-[:CALLS]->(node)) AS degree
 RETURN
     node.qualified_name,
-    score as vector_similarity,
+    similarity as vector_similarity,
     degree,
-    (score * 0.7 + degree * 0.01) AS hybrid_score
+    (similarity * 0.7 + degree * 0.01) AS hybrid_score
 ORDER BY hybrid_score DESC
 LIMIT 10;
 ```
@@ -491,7 +495,7 @@ class VectorBackend(Protocol):
             filters: Optional filters (e.g., {"labels": ["Function"]})
 
         Returns:
-            List of (node_id, score) tuples
+            List of (node_id, similarity) tuples
         """
         ...
 
@@ -633,16 +637,17 @@ class MemgraphBackend(VectorBackend):
                 cypher = """
                 CALL vector_search.search($index_name, $fetch_count, $embedding)
                 YIELD node, distance, similarity
+                WITH node, distance, similarity
                 WHERE node.qualified_name STARTS WITH $project_prefix
                 RETURN id(node) AS node_id, similarity
-                ORDER BY distance ASC;
+                ORDER BY similarity DESC;
                 """
             else:
                 cypher = """
                 CALL vector_search.search($index_name, $top_k, $embedding)
                 YIELD node, distance, similarity
                 RETURN id(node) AS node_id, similarity
-                ORDER BY distance ASC;
+                ORDER BY similarity DESC;
                 """
 
             params = {
@@ -758,9 +763,8 @@ RETURN
     node.qualified_name as qualified_name,
     node.name as name,
     labels(node) as type,
-    distance,
     similarity
-ORDER BY distance ASC;
+ORDER BY similarity DESC;
 ```
 
 ### 7.3 Hybrid: Vector + Graph Traversal
@@ -769,14 +773,15 @@ ORDER BY distance ASC;
 -- Find similar functions and their call targets
 CALL vector_search.search("function_embedding_index", $top_k, $query_vector)
 YIELD node, distance, similarity
+WITH node, distance, similarity
 MATCH (node)-[:CALLS*1..3]->(callee:Function|Method)
 RETURN
     id(node) as node_id,
     node.qualified_name as qualified_name,
-    distance,
+    similarity,
     collect(DISTINCT callee.qualified_name) as calls_to,
     length((node)-[:CALLS]->()) as call_count
-ORDER BY distance ASC;
+ORDER BY similarity DESC;
 ```
 
 ### 7.4 Hybrid: Vector + Graph Context
@@ -785,18 +790,18 @@ ORDER BY distance ASC;
 -- Similar functions with class and module context
 CALL vector_search.search("code_embedding_index", $top_k, $query_vector)
 YIELD node, distance, similarity
+WITH node, distance, similarity
 MATCH (m:Module)-[:DEFINES]->(node)
 OPTIONAL MATCH (c:Class)-[:DEFINES_METHOD]->(node)
 RETURN
     id(node) as node_id,
     node.qualified_name as qualified_name,
-    distance,
     similarity,
     m.path as file_path,
     c.name as parent_class,
     node.start_line as start_line,
     node.end_line as end_line
-ORDER BY distance ASC;
+ORDER BY similarity DESC;
 ```
 
 ### 7.5 Filtered Vector Search
@@ -805,13 +810,13 @@ ORDER BY distance ASC;
 -- Search with project filter (post-filter)
 CALL vector_search.search("code_embedding_index", $top_k * 2, $query_vector)
 YIELD node, distance, similarity
+WITH node, distance, similarity
 WHERE node.qualified_name STARTS WITH $project_prefix
 RETURN
     id(node) as node_id,
     node.qualified_name as qualified_name,
-    distance,
     similarity
-ORDER BY distance ASC
+ORDER BY similarity DESC
 LIMIT $top_k;
 ```
 
@@ -843,16 +848,17 @@ ORDER BY hybrid_score ASC;
 -- Find entry points leading to similar functions
 CALL vector_search.search("code_embedding_index", $top_k, $query_vector)
 YIELD node, distance, similarity
+WITH node, distance, similarity
 MATCH path = (entry:Function|Method)-[:CALLS*]->(node)
 WHERE NOT EXISTS((:Function|Method)-[:CALLS]->(entry))
   AND entry.qualified_name STARTS WITH $project_prefix
 RETURN
     entry.qualified_name as entry_point,
     node.qualified_name as similar_target,
-    distance,
+    similarity,
     length(path) as call_depth,
     [n IN nodes(path) | n.qualified_name] as call_chain
-ORDER BY distance ASC, call_depth ASC;
+ORDER BY similarity DESC, call_depth ASC;
 ```
 
 ---
