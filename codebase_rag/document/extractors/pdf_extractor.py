@@ -9,12 +9,12 @@ import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 
+from ..error_handling import ErrorType, ExtractionException
 from .base import (
     BaseDocumentExtractor,
     ExtractedDocument,
     ExtractedSection,
 )
-from ..error_handling import ErrorType, ExtractionException
 
 
 class PDFExtractor(BaseDocumentExtractor):
@@ -46,10 +46,10 @@ class PDFExtractor(BaseDocumentExtractor):
 
         # Try to import PDF library
         try:
-            import pdfplumber  # type: ignore
+            import pdfplumber  # type: ignore # noqa: F401
         except ImportError:
             try:
-                from PyPDF2 import PdfReader  # type: ignore
+                from PyPDF2 import PdfReader  # type: ignore # noqa: F401
             except ImportError:
                 raise ExtractionException(
                     path=str(file_path),

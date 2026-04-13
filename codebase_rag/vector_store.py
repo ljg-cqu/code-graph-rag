@@ -15,9 +15,8 @@ from loguru import logger
 
 from . import logs as ls
 from .config import settings
-from .constants import PAYLOAD_NODE_ID, PAYLOAD_QUALIFIED_NAME
 from .utils.dependencies import has_qdrant_client
-from .vector_backend import VectorBackend, get_shared_backend, close_shared_backend
+from .vector_backend import VectorBackend, close_shared_backend, get_shared_backend
 
 _RETRIEVE_BATCH_SIZE = 1000
 
@@ -43,7 +42,7 @@ def close_vector_backend() -> None:
 # Backward compatibility: expose Qdrant-specific functions when backend is qdrant
 if has_qdrant_client():
     from qdrant_client import QdrantClient
-    from qdrant_client.models import Distance, PointStruct, VectorParams
+    from qdrant_client.models import Distance, VectorParams
 
     _CLIENT: QdrantClient | None = None
 

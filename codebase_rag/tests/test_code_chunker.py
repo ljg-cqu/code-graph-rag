@@ -1,6 +1,5 @@
 """Tests for semantic code chunker."""
 
-import pytest
 
 from codebase_rag.models import CodeChunk
 from codebase_rag.utils.code_chunker import (

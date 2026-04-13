@@ -1,15 +1,13 @@
 """Tests for ValidationTriggerAPI."""
 
-import pytest
-from datetime import UTC, datetime
 import asyncio
 
 from codebase_rag.shared.validation.api import (
-    ValidationTriggerMode,
-    ValidationRequest,
     CostEstimate,
-    ValidationTriggerResult,
+    ValidationRequest,
     ValidationTriggerAPI,
+    ValidationTriggerMode,
+    ValidationTriggerResult,
 )
 
 

@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-import pytest
 from pathlib import Path
 
+from codebase_rag.document.extractors.base import ExtractedDocument, ExtractedSection
 from codebase_rag.document.versioning import (
-    DocumentVersion,
     ContentVersionTracker,
+    DocumentVersion,
     VersionCache,
 )
-from codebase_rag.document.extractors.base import ExtractedDocument, ExtractedSection
 
 
 class TestDocumentVersion:

@@ -124,7 +124,7 @@ class OllamaEmbeddingProvider(EmbeddingProvider):
                 embedding = data.get("embedding", [])
                 if not embedding:
                     raise EmbeddingGenerationError(
-                        f"Ollama returned empty embedding for text",
+                        "Ollama returned empty embedding for text",
                         provider="ollama",
                         model=self.model_id,
                     )

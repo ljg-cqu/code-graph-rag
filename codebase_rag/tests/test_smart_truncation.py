@@ -1,6 +1,5 @@
 """Tests for smart truncation functionality."""
 
-import pytest
 
 from codebase_rag.models import TruncationResult
 from codebase_rag.utils.token_utils import (

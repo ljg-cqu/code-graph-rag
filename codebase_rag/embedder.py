@@ -21,8 +21,11 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 from urllib.parse import quote
+
+if TYPE_CHECKING:
+    from .models import EmbeddingResult
 
 from loguru import logger
 
@@ -35,6 +38,7 @@ from .config import settings
 # These are imported at module level so tests can patch them
 try:
     import torch
+
     from .unixcoder import UniXcoder
 
     _HAS_SEMANTIC_DEPS = True
@@ -85,7 +89,10 @@ class EmbeddingCache:
     MIN_SUPPORTED_VERSION = 1
 
     def __init__(
-        self, path: Path | None = None, model_id: str | None = None, dimension: int | None = None
+        self,
+        path: Path | None = None,
+        model_id: str | None = None,
+        dimension: int | None = None,
     ) -> None:
         self._cache: dict[str, list[float]] = {}
         self._path = path
@@ -136,7 +143,9 @@ class EmbeddingCache:
         self._cache[cache_key] = embedding
         self._dirty = True
 
-    def get_many(self, snippets: list[str], model_id: str = "") -> dict[int, list[float]]:
+    def get_many(
+        self, snippets: list[str], model_id: str = ""
+    ) -> dict[int, list[float]]:
         """Get multiple cached embeddings."""
         results: dict[int, list[float]] = {}
         for i, snippet in enumerate(snippets):
@@ -191,9 +200,7 @@ class EmbeddingCache:
 
             # Write to temp file first (atomic write pattern)
             fd, temp_path = tempfile.mkstemp(
-                dir=str(self._path.parent),
-                prefix=".tmp_cache_",
-                suffix=".json"
+                dir=str(self._path.parent), prefix=".tmp_cache_", suffix=".json"
             )
             try:
                 self._acquire_lock(fd, exclusive=True)
@@ -443,7 +450,6 @@ def _embed_with_local_model(
         List of floats representing the embedding vector.
     """
     assert torch is not None  # for type checker
-    import numpy as np
 
     # Determine device from model parameters
     device = "cpu"
@@ -480,7 +486,6 @@ def _embed_batch_with_local_model(
         List of embedding vectors in the same order as input snippets.
     """
     assert torch is not None  # for type checker
-    import numpy as np
 
     # Determine device from model parameters
     device = "cpu"
@@ -671,7 +676,7 @@ def embed_code_smart(
     code: str,
     strategy: Literal["truncate", "chunk", "hierarchical", "error"] | None = None,
     max_length: int | None = None,
-) -> list["EmbeddingResult"]:
+) -> list[EmbeddingResult]:
     """Generate embeddings with semantic-aware chunking.
 
     This function handles code that exceeds the token limit by applying
@@ -693,9 +698,8 @@ def embed_code_smart(
         RuntimeError: If semantic dependencies are not installed.
         ValueError: If strategy is "error" and code exceeds limit.
     """
-    from typing import Literal
 
-    from .models import ChunkedEmbeddingMetadata, CodeChunk, EmbeddingResult
+    from .models import ChunkedEmbeddingMetadata, EmbeddingResult
     from .utils.code_chunker import SemanticCodeChunker, generate_code_summary
     from .utils.token_utils import count_tokens
 
@@ -774,7 +778,9 @@ def embed_code_smart(
                     chunk_type=chunk.chunk_type,
                     is_summary=False,
                 )
-                results.append(EmbeddingResult(embedding=embedding, chunk=chunk, metadata=metadata))
+                results.append(
+                    EmbeddingResult(embedding=embedding, chunk=chunk, metadata=metadata)
+                )
 
             return results
 

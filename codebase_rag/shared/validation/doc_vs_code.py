@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ..query_router import ValidationResult, ValidationReport
+from ..query_router import ValidationReport, ValidationResult
 from .validator import BaseValidator
 
 if TYPE_CHECKING:
@@ -184,7 +184,7 @@ class DocVsCodeValidator(BaseValidator):
         This is deterministic (no LLM needed).
         """
         code_reference = claim.get("code_reference", "")
-        description = claim.get("description", "")
+        claim.get("description", "")
 
         if not code_reference:
             return False

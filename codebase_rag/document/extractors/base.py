@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 from ..error_handling import ErrorType, ExtractionError, ExtractionException
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    pass
 
 
 @dataclass

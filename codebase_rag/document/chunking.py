@@ -10,15 +10,15 @@ Use token-aware chunking with section boundaries.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Iterator
+from typing import TYPE_CHECKING
 
 from loguru import logger
 
 from ..utils.token_utils import count_tokens
 
 if TYPE_CHECKING:
-    from tiktoken import Encoding
     from .extractors.base import ExtractedDocument, ExtractedSection
 
 

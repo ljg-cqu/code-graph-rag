@@ -1,7 +1,8 @@
 """Tests for QueryRouter and QueryMode."""
 
+from unittest.mock import Mock
+
 import pytest
-from unittest.mock import Mock, patch
 
 from codebase_rag.shared.query_router import (
     QueryMode,
@@ -9,8 +10,8 @@ from codebase_rag.shared.query_router import (
     QueryResponse,
     QueryRouter,
     Source,
-    ValidationResult,
     ValidationReport,
+    ValidationResult,
 )
 
 

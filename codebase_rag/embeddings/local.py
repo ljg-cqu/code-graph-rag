@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from .. import constants as cs
-from ..exceptions import EmbeddingError, EmbeddingGenerationError
+from ..exceptions import EmbeddingGenerationError
 from .base import EmbeddingProvider
 
 if TYPE_CHECKING:
@@ -82,6 +82,7 @@ class LocalEmbeddingProvider(EmbeddingProvider):
 
         try:
             import torch
+
             from ..unixcoder import UniXcoder
 
             self._torch = torch
@@ -134,7 +135,6 @@ class LocalEmbeddingProvider(EmbeddingProvider):
         """
         self._ensure_model_loaded()
 
-        import numpy as np
 
         assert self._model is not None
         assert self._torch is not None
@@ -167,7 +167,6 @@ class LocalEmbeddingProvider(EmbeddingProvider):
 
         self._ensure_model_loaded()
 
-        import numpy as np
 
         assert self._model is not None
         assert self._torch is not None

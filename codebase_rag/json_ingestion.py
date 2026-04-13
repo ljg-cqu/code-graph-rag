@@ -2,17 +2,17 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any
 
 from tqdm import tqdm
 
-from .schemas import JSONInputSchema, IngestionResult, UpdateResult
-from .embedder import get_embedding_provider_instance, EmbeddingCache
-from .vector_store import get_vector_store_instance
-from .services.graph_service import GraphService
-from .cypher_queries import build_merge_node_query, build_merge_relationship_query
 from .config import get_config
+from .cypher_queries import build_merge_node_query, build_merge_relationship_query
+from .embedder import EmbeddingCache, get_embedding_provider_instance
 from .logs import get_logger
+from .schemas import IngestionResult, JSONInputSchema, UpdateResult
+from .services.graph_service import GraphService
+from .vector_store import get_vector_store_instance
 
 __all__ = [
     "ingest_json_data",
@@ -52,11 +52,11 @@ def load_json_files(input_path: str) -> list[tuple[Path, dict[str, Any]]]:
     json_files = []
 
     if path.is_file() and path.suffix == ".json":
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             json_files.append((path, json.load(f)))
     elif path.is_dir():
         for file_path in path.rglob("*.json"):
-            with open(file_path, "r", encoding="utf-8") as f:
+            with open(file_path, encoding="utf-8") as f:
                 json_files.append((file_path, json.load(f)))
     else:
         raise ValueError(
@@ -289,7 +289,7 @@ def ingest_relationships(
             existing_rel = None
             if not dry_run and (skip_existing or incremental):
                 check_query = """
-                MATCH (s {unique_id: $source_id})-[r:{rel_type}]->(t {unique_id: $target_id})
+                MATCH (s {{unique_id: $source_id}})-[r:{rel_type}]->(t {{unique_id: $target_id}})
                 RETURN r.updated_at as updated_at
                 """.format(rel_type=rel.type)
                 check_result = graph_service.run_query(
@@ -428,13 +428,13 @@ def delete_dataset(
 
 def ingest_json_data(
     input_path: str = "",
-    dataset_id: Optional[str] = None,
+    dataset_id: str | None = None,
     skip_existing: bool = False,
     batch_size: int = 100,
     incremental: bool = False,
     dry_run: bool = False,
     conflict_resolution: str = "last-write-wins",
-    pre_loaded_data: Optional[list[tuple[Path, dict[str, Any]]]] = None,
+    pre_loaded_data: list[tuple[Path, dict[str, Any]]] | None = None,
 ) -> IngestionResult:
     """
     Ingest JSON data into graph and vector database.
@@ -536,6 +536,7 @@ def handle_json_update_event(
 ) -> UpdateResult:
     """Process single incremental JSON update event from streaming source (Kafka/RabbitMQ/webhook)."""
     from datetime import datetime
+
     from .schemas import UpdateResult
 
     event_id = event.get("id")

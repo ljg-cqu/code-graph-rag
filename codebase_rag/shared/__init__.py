@@ -12,16 +12,16 @@ from .query_router import (
     QueryResponse,
     QueryRouter,
     Source,
-    ValidationResult,
     ValidationReport,
-)
-from .validation import (
-    ValidationTriggerAPI,
-    ValidationCache,
-    CodeVsDocValidator,
-    DocVsCodeValidator,
+    ValidationResult,
 )
 from .utils import classify_file, get_source_label
+from .validation import (
+    CodeVsDocValidator,
+    DocVsCodeValidator,
+    ValidationCache,
+    ValidationTriggerAPI,
+)
 
 __all__ = [
     "QueryMode",

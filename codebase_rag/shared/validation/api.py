@@ -7,7 +7,6 @@ estimation before execution to prevent unexpected LLM costs.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Literal
 
@@ -190,8 +189,8 @@ class ValidationTriggerAPI:
 
     async def _get_document_stats(self, document_path: str) -> dict:
         """Get document statistics from graph (no LLM)."""
-        from ...services.graph_service import MemgraphIngestor
         from ...config import settings
+        from ...services.graph_service import MemgraphIngestor
 
         try:
             with MemgraphIngestor(

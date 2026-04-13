@@ -246,8 +246,8 @@ class QueryRouter:
         if self.code_vector and self.code_graph:
             # Use vector similarity search for semantic queries
             try:
-                from ..embeddings import get_embedding_provider
                 from ..config import settings
+                from ..embeddings import get_embedding_provider
 
                 config = settings.active_embedding_config
                 provider = get_embedding_provider(
@@ -355,7 +355,7 @@ class QueryRouter:
             )
 
         return QueryResponse(
-            answer=f"**Code Results:**\n\n" + "\n".join(answer_parts),
+            answer="**Code Results:**\n\n" + "\n".join(answer_parts),
             sources=sources,
             mode=request.mode,
         )
@@ -377,8 +377,8 @@ class QueryRouter:
         logger.info(f"Querying document graph: {request.question}")
 
         from pathlib import Path
+
         from ..document.tools.document_search import document_semantic_search
-        from ..config import settings
 
         sources: list[Source] = []
         answer_parts: list[str] = ["**Relevant Documentation:**\n"]

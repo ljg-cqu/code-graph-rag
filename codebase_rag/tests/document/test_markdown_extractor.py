@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import pytest
-from pathlib import Path
 
-from codebase_rag.document.extractors.markdown_extractor import MarkdownExtractor
-from codebase_rag.document.extractors.base import ExtractedDocument
 from codebase_rag.document.error_handling import ErrorType, ExtractionException
+from codebase_rag.document.extractors.base import ExtractedDocument
+from codebase_rag.document.extractors.markdown_extractor import MarkdownExtractor
 
 
 class TestMarkdownExtractor:

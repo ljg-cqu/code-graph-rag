@@ -5,9 +5,8 @@ Uses Memgraph's built-in vector index support (v3.0.0+) via vector_search module
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Generator, Sequence
 from contextlib import contextmanager
-from typing import Generator
 
 import mgclient
 from loguru import logger

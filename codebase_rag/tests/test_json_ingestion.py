@@ -3,13 +3,10 @@
 import json
 import tempfile
 from pathlib import Path
-from typing import Any
 
 import pytest
 
-from codebase_rag.schemas import JSONInputSchema
-from codebase_rag.json_ingestion import validate_json_input, load_json_files
-
+from codebase_rag.json_ingestion import load_json_files, validate_json_input
 
 SAMPLE_VALID_JSON = {
     "metadata": {"dataset_id": "test_dataset_1", "source": "test_source"},

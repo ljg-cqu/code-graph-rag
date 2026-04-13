@@ -114,7 +114,7 @@ class GoogleEmbeddingProvider(EmbeddingProvider):
 
             try:
                 with open(self._service_account_file) as f:
-                    creds = json.load(f)
+                    json.load(f)
                 # Would need google-auth library for proper token generation
                 # For simplicity, assume user has gcloud configured
                 import subprocess
@@ -124,6 +124,7 @@ class GoogleEmbeddingProvider(EmbeddingProvider):
                     capture_output=True,
                     text=True,
                     timeout=30,
+                    check=False,
                 )
                 self._token = result.stdout.strip()
                 return self._token
@@ -143,6 +144,7 @@ class GoogleEmbeddingProvider(EmbeddingProvider):
                 capture_output=True,
                 text=True,
                 timeout=30,
+                check=False,
             )
             self._token = result.stdout.strip()
             return self._token
@@ -249,7 +251,9 @@ class GoogleEmbeddingProvider(EmbeddingProvider):
 
         return all_embeddings
 
-    def _make_request_vertex(self, texts: list[str], batch_size: int) -> list[list[float]]:
+    def _make_request_vertex(
+        self, texts: list[str], batch_size: int
+    ) -> list[list[float]]:
         """Make embedding request using Vertex AI API.
 
         Args:

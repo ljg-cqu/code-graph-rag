@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ..query_router import ValidationResult, ValidationReport
+from ..query_router import ValidationReport, ValidationResult
 from .validator import BaseValidator
 
 if TYPE_CHECKING:

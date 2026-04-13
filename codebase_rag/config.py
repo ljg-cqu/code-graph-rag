@@ -411,6 +411,16 @@ class AppConfig(BaseSettings):
     MCP_HTTP_PORT: int = 8080
     MCP_HTTP_ENDPOINT_PATH: str = "/mcp"
 
+    # Parallel Sub-Agent Configuration
+    CGR_MAX_PARALLEL_WORKERS: int = 20
+    CGR_DEFAULT_PARALLEL_WORKERS: int = 5
+    CGR_ALLOW_DYNAMIC_MAX_OVERRIDE: bool = True
+    CGR_AUTO_SCALE_WORKERS: bool = True
+    CGR_SUBAGENT_TIMEOUT: int = 300
+    CGR_SUBAGENT_ALLOW_WRITE: bool = False
+    CGR_AUTO_SPLIT_ENABLED: bool = True
+    CGR_SUBAGENT_RETRY_ATTEMPTS: int = 2
+
     def _get_default_config(self, role: str) -> ModelConfig:
         role_upper = role.upper()
 

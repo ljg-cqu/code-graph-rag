@@ -8,11 +8,11 @@ This module provides on-demand validation capabilities:
 - cache: Result caching for validation
 """
 
-from .validator import BaseValidator
+from .api import CostEstimate, ValidationRequest, ValidationTriggerAPI
+from .cache import ValidationCache
 from .code_vs_doc import CodeVsDocValidator
 from .doc_vs_code import DocVsCodeValidator
-from .api import ValidationTriggerAPI, ValidationRequest, CostEstimate
-from .cache import ValidationCache
+from .validator import BaseValidator
 
 __all__ = [
     "BaseValidator",

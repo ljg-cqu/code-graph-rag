@@ -377,6 +377,34 @@ def start(
         "--index-timeout",
         help=ch.HELP_INDEX_TIMEOUT,
     ),
+    # === NEW: Parallel Sub-Agent Flags ===
+    parallel_workers: int | None = typer.Option(
+        None,
+        "--parallel-workers",
+        "-p",
+        help="Number of parallel sub-agents to use for parallel tasks",
+        min=1,
+    ),
+    auto_split: bool = typer.Option(
+        False,
+        "--auto-split",
+        help="Automatically split parallelizable tasks into subtasks",
+    ),
+    no_parallel: bool = typer.Option(
+        False,
+        "--no-parallel",
+        help="Disable parallel sub-agent execution (default behavior)",
+    ),
+    parallel_dry_run: bool = typer.Option(
+        False,
+        "--parallel-dry-run",
+        help="Simulate parallel execution without making actual LLM calls (for cost estimation and testing)",
+    ),
+    scheduling_strategy: str = typer.Option(
+        "fifo",
+        "--scheduling-strategy",
+        help="Task scheduling strategy for parallel workers: 'fifo' (default) or 'round-robin'",
+    ),
 ) -> None:
     import re
 
@@ -965,9 +993,10 @@ def query_docs(
     top_k: int = typer.Option(5, "--top-k", "-k", help=ch.HELP_TOP_K),
 ) -> None:
     """Query the document graph using natural language."""
-    from .shared.query_router import QueryRequest, QueryMode, QueryRouter
-    from .services.graph_service import MemgraphIngestor
     from dataclasses import asdict
+
+    from .services.graph_service import MemgraphIngestor
+    from .shared.query_router import QueryMode, QueryRequest, QueryRouter
 
     _info(style(f"Querying document graph: {query}", cs.Color.CYAN))
 
@@ -1018,9 +1047,10 @@ def query_all(
     top_k: int = typer.Option(5, "--top-k", "-k", help=ch.HELP_TOP_K),
 ) -> None:
     """Query both code and document graphs, merge results."""
-    from .shared.query_router import QueryRequest, QueryMode, QueryRouter
-    from .services.graph_service import MemgraphIngestor
     from dataclasses import asdict
+
+    from .services.graph_service import MemgraphIngestor
+    from .shared.query_router import QueryMode, QueryRequest, QueryRouter
 
     _info(style(f"Querying both graphs: {query}", cs.Color.CYAN))
 
@@ -1088,10 +1118,11 @@ def validate_spec(
     dry_run: bool = typer.Option(False, "--dry-run", help=ch.HELP_DRY_RUN),
 ) -> None:
     """Validate code against a specification document."""
-    from .shared.query_router import QueryRequest, QueryMode, QueryRouter
-    from .shared.validation.api import ValidationTriggerAPI, ValidationRequest
-    from .services.graph_service import MemgraphIngestor
     from dataclasses import asdict
+
+    from .services.graph_service import MemgraphIngestor
+    from .shared.query_router import QueryMode, QueryRequest, QueryRouter
+    from .shared.validation.api import ValidationRequest, ValidationTriggerAPI
 
     _info(style(f"Validating code against spec: {spec_path}", cs.Color.CYAN))
 
@@ -1199,10 +1230,11 @@ def validate_doc(
     dry_run: bool = typer.Option(False, "--dry-run", help=ch.HELP_DRY_RUN),
 ) -> None:
     """Validate documentation against actual code."""
-    from .shared.query_router import QueryRequest, QueryMode, QueryRouter
-    from .shared.validation.api import ValidationTriggerAPI, ValidationRequest
-    from .services.graph_service import MemgraphIngestor
     from dataclasses import asdict
+
+    from .services.graph_service import MemgraphIngestor
+    from .shared.query_router import QueryMode, QueryRequest, QueryRouter
+    from .shared.validation.api import ValidationRequest, ValidationTriggerAPI
 
     _info(style(f"Validating doc against code: {doc_path}", cs.Color.CYAN))
 

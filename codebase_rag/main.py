@@ -10,11 +10,11 @@ import signal
 import sys
 import uuid
 from collections import deque
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Generator
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Generator
+from typing import TYPE_CHECKING
 
 from loguru import logger
 from prompt_toolkit import prompt
@@ -38,7 +38,7 @@ from .providers.base import get_provider_from_config
 from .services import QueryProtocol
 from .services.graph_service import MemgraphIngestor
 from .services.llm import CypherGenerator, create_rag_orchestrator
-from .shared.query_router import QueryMode
+from .shared.query_router import QueryMode, QueryRouter
 from .tools.code_retrieval import CodeRetriever, create_code_retrieval_tool
 from .tools.codebase_query import create_query_tool
 from .tools.directory_lister import DirectoryLister, create_directory_lister_tool
@@ -61,7 +61,6 @@ from .tools.semantic_search import (
     create_semantic_search_tool,
 )
 from .tools.shell_command import ShellCommander, create_shell_command_tool
-from .shared.query_router import QueryRouter
 from .types_defs import (
     CHAT_LOOP_UI,
     OPTIMIZATION_LOOP_UI,

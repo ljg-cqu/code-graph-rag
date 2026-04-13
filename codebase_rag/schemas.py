@@ -141,14 +141,14 @@ class JSONInputSchema(BaseModel):
     relationships: list[JSONRelationship] = []
 
     @model_validator(mode="after")
-    def _validate_duplicate_entity_ids(self) -> "JSONInputSchema":
+    def _validate_duplicate_entity_ids(self) -> JSONInputSchema:
         entity_ids = [e.id for e in self.entities]
         if len(entity_ids) != len(set(entity_ids)):
             raise ValueError("Duplicate entity IDs found in input")
         return self
 
     @model_validator(mode="after")
-    def _validate_relationship_references(self) -> "JSONInputSchema":
+    def _validate_relationship_references(self) -> JSONInputSchema:
         entity_ids = {e.id for e in self.entities}
         for rel in self.relationships:
             if rel.source_entity_id not in entity_ids:

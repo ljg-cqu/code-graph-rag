@@ -1,15 +1,18 @@
 """Unit and integration tests for yolo mode functionality."""
 
 import os
-import pytest
 from unittest.mock import MagicMock, patch
+
 from typer.testing import CliRunner
 
-from codebase_rag.main import _process_tool_approvals, _display_yolo_warning, app_context
-from codebase_rag.types_defs import ConfirmationToolNames
 from codebase_rag.cli import app
 from codebase_rag.config import AppConfig
-
+from codebase_rag.main import (
+    _display_yolo_warning,
+    _process_tool_approvals,
+    app_context,
+)
+from codebase_rag.types_defs import ConfirmationToolNames
 
 runner = CliRunner()
 

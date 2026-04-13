@@ -18,7 +18,12 @@ from ..config import settings
 from ..embeddings import get_embedding_provider
 from ..services.graph_service import MemgraphIngestor
 from .chunking import DocumentChunk, SemanticDocumentChunker
-from .error_handling import DeadLetterQueue, ErrorType, ExtractionError, ExtractionException
+from .error_handling import (
+    DeadLetterQueue,
+    ErrorType,
+    ExtractionError,
+    ExtractionException,
+)
 from .extractors import ExtractedDocument, ExtractedSection, get_extractor_for_file
 from .versioning import ContentVersionTracker, VersionCache
 
@@ -1173,7 +1178,7 @@ class DocumentGraphUpdater:
                 ExtractionError(
                     path=str(file_path),
                     error_type=ErrorType.PATH_TRAVERSAL,
-                    message=f"Path is outside repository boundaries",
+                    message="Path is outside repository boundaries",
                 )
             )
             return "failed"

@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 
 from codebase_rag.document.chunking import (
-    SemanticDocumentChunker,
     DocumentChunk,
+    SemanticDocumentChunker,
 )
 from codebase_rag.document.extractors.base import (
     ExtractedDocument,

@@ -7,11 +7,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from codebase_rag.embeddings import (
+    _EMBEDDING_PROVIDER_REGISTRY,
     get_embedding_provider,
     get_embedding_provider_class,
-    _EMBEDDING_PROVIDER_REGISTRY,
 )
-from codebase_rag.embeddings.base import EmbeddingProvider
 from codebase_rag.exceptions import (
     EmbeddingAuthenticationError,
     EmbeddingConnectionError,

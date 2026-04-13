@@ -9,13 +9,16 @@ Tests for:
 """
 
 from pathlib import Path
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from codebase_rag.mcp.tools import MCPToolsRegistry
-from codebase_rag.shared.query_router import QueryMode, QueryRequest, QueryResponse, Source
-from codebase_rag.shared.validation.api import CostEstimate, ValidationTriggerResult
+from codebase_rag.shared.query_router import (
+    QueryMode,
+    QueryResponse,
+    Source,
+)
 
 pytestmark = [pytest.mark.anyio]
 
@@ -148,7 +151,7 @@ class TestQueryDocumentGraph:
         )
         mcp_registry_with_doc_graph._query_router = mock_router
 
-        result = await mcp_registry_with_doc_graph.query_document_graph("test query")
+        await mcp_registry_with_doc_graph.query_document_graph("test query")
 
         # Verify QueryRouter was called with DOCUMENT_ONLY mode
         mock_router.query.assert_called_once()

@@ -46,8 +46,13 @@ def get_supported_extensions() -> list[str]:
 
 
 # Import and register extractors
-from .base import BaseDocumentExtractor, ExtractedDocument, ExtractedSection, ExtractionError
-from .markdown_extractor import MarkdownExtractor
+from .base import (
+    BaseDocumentExtractor,
+    ExtractedDocument,
+    ExtractedSection,
+    ExtractionError,
+)  # noqa: E402
+from .markdown_extractor import MarkdownExtractor  # noqa: E402
 
 _register_extractor(MarkdownExtractor)
 

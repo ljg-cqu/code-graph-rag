@@ -13,12 +13,12 @@ from pathlib import Path
 
 from loguru import logger
 
+from ..error_handling import ErrorType, ExtractionException
 from .base import (
     BaseDocumentExtractor,
     ExtractedDocument,
     ExtractedSection,
 )
-from ..error_handling import ErrorType, ExtractionException
 
 
 class MarkdownExtractor(BaseDocumentExtractor):

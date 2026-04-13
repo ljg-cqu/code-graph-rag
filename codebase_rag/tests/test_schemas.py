@@ -1,6 +1,5 @@
 """Tests for Pydantic schemas, especially QueryGraphData validator."""
 
-import pytest
 
 from codebase_rag.schemas import QueryGraphData, _normalize_value
 from codebase_rag.types_defs import RELATIONSHIP_SCHEMAS, NodeLabel, RelationshipType

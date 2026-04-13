@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from ...embeddings import get_embedding_provider
 from ...config import settings
+from ...embeddings import get_embedding_provider
 
 if TYPE_CHECKING:
     from ...services.graph_service import MemgraphIngestor

@@ -33,7 +33,7 @@ from codebase_rag.language_spec import get_language_spec
 from codebase_rag.parser_loader import load_parsers
 from codebase_rag.services import QueryProtocol
 from codebase_rag.services.graph_service import MemgraphIngestor
-from codebase_rag.shared.utils.file_classifier import classify_file, FileType
+from codebase_rag.shared.utils.file_classifier import FileType, classify_file
 
 
 class CodeChangeEventHandler(FileSystemEventHandler):

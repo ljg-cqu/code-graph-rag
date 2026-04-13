@@ -181,7 +181,7 @@ class DeadLetterQueue:
             try:
                 data = json.loads(error_file.read_text())
                 errors.append(ExtractionError.from_dict(data))
-            except (json.JSONDecodeError, KeyError) as e:
+            except (json.JSONDecodeError, KeyError):
                 # Skip corrupted error files
                 continue
         return errors

@@ -10,8 +10,8 @@ import pytest
 from codebase_rag import constants as cs
 from codebase_rag.language_spec import (
     SOLIDITY_FQN_SPEC,
-    _solidity_get_name,
     _solidity_file_to_module,
+    _solidity_get_name,
 )
 from codebase_rag.utils.fqn_resolver import resolve_fqn_from_ast
 
@@ -30,7 +30,7 @@ except ImportError:
 
 
 @pytest.fixture
-def solidity_parser() -> "Parser | None":
+def solidity_parser() -> Parser | None:
     if not SOLIDITY_PARSER_AVAILABLE:
         return None
     from tree_sitter import Language, Parser
@@ -527,7 +527,7 @@ class TestSolidityFQNWithRealParser:
     The scope_name is the contract/interface/library name containing the function.
     """
 
-    def test_contract_fqn_real_parsing(self, solidity_parser: "Parser") -> None:
+    def test_contract_fqn_real_parsing(self, solidity_parser: Parser) -> None:
         """Test FQN for contract with real parser."""
         code = b"""
 contract MyContract {
@@ -566,7 +566,7 @@ contract MyContract {
         )
         assert func_fqn == "myproject.MyContract.MyContract.getValue"
 
-    def test_constructor_fqn_real_parsing(self, solidity_parser: "Parser") -> None:
+    def test_constructor_fqn_real_parsing(self, solidity_parser: Parser) -> None:
         """Test FQN for constructor with real parser."""
         code = b"""
 contract Owned {
@@ -603,7 +603,7 @@ contract Owned {
         )
         assert fqn == "myproject.Owned.Owned.constructor"
 
-    def test_receive_fqn_real_parsing(self, solidity_parser: "Parser") -> None:
+    def test_receive_fqn_real_parsing(self, solidity_parser: Parser) -> None:
         """Test FQN for receive function with real parser."""
         code = b"""
 contract Receiver {
@@ -638,7 +638,7 @@ contract Receiver {
         )
         assert fqn == "myproject.Receiver.Receiver.receive"
 
-    def test_fallback_fqn_real_parsing(self, solidity_parser: "Parser") -> None:
+    def test_fallback_fqn_real_parsing(self, solidity_parser: Parser) -> None:
         """Test FQN for fallback function with real parser."""
         code = b"""
 contract FallbackHandler {
@@ -673,7 +673,7 @@ contract FallbackHandler {
         )
         assert fqn == "myproject.FallbackHandler.FallbackHandler.fallback"
 
-    def test_library_function_fqn_real_parsing(self, solidity_parser: "Parser") -> None:
+    def test_library_function_fqn_real_parsing(self, solidity_parser: Parser) -> None:
         """Test FQN for library function with real parser."""
         code = b"""
 library SafeMath {
@@ -708,7 +708,7 @@ library SafeMath {
         )
         assert fqn == "myproject.libraries.SafeMath.SafeMath.add"
 
-    def test_interface_function_fqn_real_parsing(self, solidity_parser: "Parser") -> None:
+    def test_interface_function_fqn_real_parsing(self, solidity_parser: Parser) -> None:
         """Test FQN for interface function with real parser."""
         code = b"""
 interface IERC20 {
@@ -741,7 +741,7 @@ interface IERC20 {
         )
         assert fqn == "myproject.interfaces.IERC20.IERC20.transfer"
 
-    def test_modifier_fqn_real_parsing(self, solidity_parser: "Parser") -> None:
+    def test_modifier_fqn_real_parsing(self, solidity_parser: Parser) -> None:
         """Test FQN for modifier with real parser."""
         code = b"""
 contract Ownable {
@@ -779,7 +779,7 @@ contract Ownable {
         )
         assert fqn == "myproject.Ownable.Ownable.onlyOwner"
 
-    def test_nested_path_fqn_real_parsing(self, solidity_parser: "Parser") -> None:
+    def test_nested_path_fqn_real_parsing(self, solidity_parser: Parser) -> None:
         """Test FQN with nested file path."""
         code = b"""
 contract MyToken {
@@ -815,7 +815,7 @@ contract MyToken {
         )
         assert fqn == "myproject.tokens.MyToken.MyToken.mint"
 
-    def test_multiple_functions_same_contract(self, solidity_parser: "Parser") -> None:
+    def test_multiple_functions_same_contract(self, solidity_parser: Parser) -> None:
         """Test FQN for multiple functions in same contract."""
         code = b"""
 contract MultiFunction {
@@ -862,7 +862,7 @@ contract MultiFunction {
 class TestSolidityFQNEdgeCases:
     """Tests for edge cases in Solidity FQN generation."""
 
-    def test_abstract_contract_fqn(self, solidity_parser: "Parser") -> None:
+    def test_abstract_contract_fqn(self, solidity_parser: Parser) -> None:
         """Test FQN for abstract contract function."""
         code = b"""
 abstract contract AbstractBase {
@@ -895,7 +895,7 @@ abstract contract AbstractBase {
         )
         assert fqn == "myproject.AbstractBase.AbstractBase.abstractMethod"
 
-    def test_contract_with_inheritance_fqn(self, solidity_parser: "Parser") -> None:
+    def test_contract_with_inheritance_fqn(self, solidity_parser: Parser) -> None:
         """Test FQN for contract with inheritance."""
         code = b"""
 contract Child is Parent {
@@ -931,7 +931,7 @@ contract Child is Parent {
         # FQN uses Child (the contract containing the function), not Parent
         assert fqn == "myproject.Child.Child.childMethod"
 
-    def test_contract_with_multiple_inheritance_fqn(self, solidity_parser: "Parser") -> None:
+    def test_contract_with_multiple_inheritance_fqn(self, solidity_parser: Parser) -> None:
         """Test FQN for contract with multiple inheritance."""
         code = b"""
 contract MultiInherit is A, B, C {

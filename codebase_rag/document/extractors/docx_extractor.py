@@ -9,12 +9,12 @@ import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 
+from ..error_handling import ErrorType, ExtractionException
 from .base import (
     BaseDocumentExtractor,
     ExtractedDocument,
     ExtractedSection,
 )
-from ..error_handling import ErrorType, ExtractionException
 
 
 class DocxExtractor(BaseDocumentExtractor):

@@ -7,18 +7,15 @@ and re-embedding vectors when the provider changes.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from .. import constants as cs
-from .. import logs as ls
 from ..config import settings
 from ..exceptions import DimensionMismatchError
 
 if TYPE_CHECKING:
-    from ..embeddings.base import EmbeddingProvider
+    pass
 
 
 @dataclass
@@ -123,7 +120,7 @@ def switch_embedding_provider(
     )
 
     # Clear cache to use new provider
-    from ..embedder import clear_embedding_cache, get_embedding_cache
+    from ..embedder import clear_embedding_cache
 
     clear_embedding_cache()
 

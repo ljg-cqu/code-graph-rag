@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-import pytest
-
 from codebase_rag.document.error_handling import (
+    FATAL_ERRORS,
+    RECOVERABLE_ERRORS,
+    DeadLetterQueue,
     ErrorType,
     ExtractionError,
     ExtractionException,
-    DeadLetterQueue,
-    RECOVERABLE_ERRORS,
-    FATAL_ERRORS,
 )
 
 

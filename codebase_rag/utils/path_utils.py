@@ -25,3 +25,17 @@ def should_skip_path(
     ):
         return False
     return not cs.IGNORE_PATTERNS.isdisjoint(dir_parts)
+
+
+def get_all_code_files(
+    repo_path: Path,
+    exclude_paths: frozenset[str] | None = None,
+    unignore_paths: frozenset[str] | None = None,
+) -> list[Path]:
+    code_files = []
+    for path in repo_path.rglob("*"):
+        if path.is_file() and not should_skip_path(
+            path, repo_path, exclude_paths, unignore_paths
+        ):
+            code_files.append(path)
+    return code_files

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from .. import constants as cs
 
 if TYPE_CHECKING:
-    from ..utils.token_utils import count_tokens
+    pass
 
 
 class EmbeddingProvider(ABC):

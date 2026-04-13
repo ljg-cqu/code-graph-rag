@@ -10,11 +10,18 @@ from rich.console import Console
 from codebase_rag import constants as cs
 from codebase_rag import logs as lg
 from codebase_rag import tool_errors as te
+from codebase_rag.config import settings
+from codebase_rag.document.document_updater import DocumentGraphUpdater
 from codebase_rag.graph_updater import GraphUpdater
 from codebase_rag.models import ToolMetadata
 from codebase_rag.parser_loader import load_parsers
 from codebase_rag.services.graph_service import MemgraphIngestor
 from codebase_rag.services.llm import CypherGenerator, create_rag_orchestrator
+from codebase_rag.shared.query_router import (
+    QueryMode,
+    QueryRequest,
+    QueryRouter,
+)
 from codebase_rag.tools import tool_descriptions as td
 from codebase_rag.tools.code_retrieval import (
     CodeRetriever,
@@ -49,9 +56,6 @@ from codebase_rag.types_defs import (
 )
 from codebase_rag.utils.dependencies import has_semantic_dependencies
 from codebase_rag.vector_store import delete_project_embeddings
-from codebase_rag.shared.query_router import QueryMode, QueryRequest, QueryResponse, QueryRouter
-from codebase_rag.document.document_updater import DocumentGraphUpdater
-from codebase_rag.config import settings
 
 
 class MCPToolsRegistry:
@@ -925,7 +929,8 @@ class MCPToolsRegistry:
     ) -> dict:
         """Validate CODE against DOCUMENT specifications."""
         from dataclasses import asdict
-        from ..shared.validation.api import ValidationTriggerAPI, ValidationRequest
+
+        from ..shared.validation.api import ValidationRequest, ValidationTriggerAPI
 
         logger.info(f"Validating code against spec: {spec_document_path}")
         try:
@@ -981,7 +986,8 @@ class MCPToolsRegistry:
     ) -> dict:
         """Validate DOCUMENT against actual CODE."""
         from dataclasses import asdict
-        from ..shared.validation.api import ValidationTriggerAPI, ValidationRequest
+
+        from ..shared.validation.api import ValidationRequest, ValidationTriggerAPI
 
         logger.info(f"Validating doc against code: {document_path}")
         try:

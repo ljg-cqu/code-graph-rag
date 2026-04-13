@@ -6,7 +6,6 @@ Helper functions for extracting text content from various sources.
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
 
 def extract_text_content(content: str, max_length: int | None = None) -> str:

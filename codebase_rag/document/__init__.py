@@ -9,10 +9,15 @@ Key components:
 - utils: Document utilities (text extraction, reference extraction)
 """
 
+from .chunking import DocumentChunk, SemanticDocumentChunker
 from .document_updater import DocumentGraphUpdater
-from .chunking import SemanticDocumentChunker, DocumentChunk
-from .error_handling import ErrorType, ExtractionError, ExtractionException, DeadLetterQueue
-from .versioning import ContentVersionTracker, VersionCache, DocumentVersion
+from .error_handling import (
+    DeadLetterQueue,
+    ErrorType,
+    ExtractionError,
+    ExtractionException,
+)
+from .versioning import ContentVersionTracker, DocumentVersion, VersionCache
 
 __all__ = [
     "DocumentGraphUpdater",

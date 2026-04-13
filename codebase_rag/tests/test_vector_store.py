@@ -25,8 +25,8 @@ def mock_qdrant_client() -> MagicMock:
 
 @pytest.fixture
 def reset_global_client() -> Generator[None, None, None]:
-    import codebase_rag.vector_store as vs
     import codebase_rag.vector_backend as vb
+    import codebase_rag.vector_store as vs
 
     if has_qdrant_client() and vs._CLIENT is not None:
         try:
@@ -98,9 +98,9 @@ def integration_client(
 
     from qdrant_client import QdrantClient as QC
     from qdrant_client.models import Distance, VectorParams
-    from codebase_rag.vector_store_qdrant import QdrantBackend
 
     import codebase_rag.vector_store as vs
+    from codebase_rag.vector_store_qdrant import QdrantBackend
 
     client = QC(path=str(temp_qdrant_path))
     client.create_collection(
@@ -279,8 +279,8 @@ def test_search_embeddings_handles_exception(
 def test_search_embeddings_default_top_k(
     mock_backend: MagicMock, mock_qdrant_client: MagicMock
 ) -> None:
-    from codebase_rag.vector_store import search_embeddings
     from codebase_rag.config import settings
+    from codebase_rag.vector_store import search_embeddings
 
     mock_result = MagicMock()
     mock_result.points = []

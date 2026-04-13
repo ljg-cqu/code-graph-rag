@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import importlib
 import re
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 from loguru import logger
 
@@ -23,7 +23,7 @@ from ..models import CodeChunk
 from .token_utils import count_tokens
 
 if TYPE_CHECKING:
-    from tree_sitter import Language, Node, Parser
+    from tree_sitter import Node, Parser
 
 
 # Tree-sitter language module mapping

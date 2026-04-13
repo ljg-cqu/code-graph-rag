@@ -59,7 +59,7 @@ def create_query_document_graph_tool(
                 return f"No relevant documents found for: {natural_language_query}"
 
             # Format response for agent
-            result_lines = [f"**Document Query Results:**\n"]
+            result_lines = ["**Document Query Results:**\n"]
             for i, source in enumerate(response.sources, 1):
                 result_lines.append(
                     f"{i}. **{source.qualified_name or source.path}** "

@@ -1,14 +1,12 @@
 """Tests for ValidationCache."""
 
-import pytest
 from datetime import UTC, datetime, timedelta
-from unittest.mock import Mock
 
+from codebase_rag.shared.query_router import ValidationReport
 from codebase_rag.shared.validation.cache import (
     CachedValidation,
     ValidationCache,
 )
-from codebase_rag.shared.query_router import ValidationReport
 
 
 class TestCachedValidation:

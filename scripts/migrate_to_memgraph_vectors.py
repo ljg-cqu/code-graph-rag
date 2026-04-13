@@ -35,9 +35,8 @@ def migrate_qdrant_to_memgraph(project_name: str | None = None) -> int:
     """
     try:
         from codebase_rag.config import settings
-        from codebase_rag.services.graph_service import MemgraphIngestor
-        from codebase_rag.vector_store_qdrant import QdrantBackend
         from codebase_rag.vector_store_memgraph import MemgraphBackend
+        from codebase_rag.vector_store_qdrant import QdrantBackend
     except ImportError as e:
         logger.error(f"Missing dependencies: {e}")
         logger.error("Install with: uv sync --extra semantic")
@@ -45,7 +44,9 @@ def migrate_qdrant_to_memgraph(project_name: str | None = None) -> int:
 
     logger.info("Starting migration from Qdrant to Memgraph native vectors...")
     logger.info(f"Source: Qdrant collection '{settings.QDRANT_COLLECTION_NAME}'")
-    logger.info(f"Target: Memgraph vector index '{settings.MEMGRAPH_VECTOR_INDEX_NAME}'")
+    logger.info(
+        f"Target: Memgraph vector index '{settings.MEMGRAPH_VECTOR_INDEX_NAME}'"
+    )
 
     # Initialize backends
     qdrant_backend = QdrantBackend()
@@ -92,11 +93,13 @@ def migrate_qdrant_to_memgraph(project_name: str | None = None) -> int:
                 qn = payload.get("qualified_name", "")
                 if not qn.startswith(project_name):
                     continue
-            points_to_migrate.append((
-                point.id,
-                point.vector,
-                point.payload.get("qualified_name", "") if point.payload else ""
-            ))
+            points_to_migrate.append(
+                (
+                    point.id,
+                    point.vector,
+                    point.payload.get("qualified_name", "") if point.payload else "",
+                )
+            )
 
         # Store in Memgraph
         if points_to_migrate:
