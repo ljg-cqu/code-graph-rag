@@ -6,6 +6,15 @@ description: "Complete CLI reference for Code-Graph-RAG commands and Makefile ta
 
 The `cgr` command is the main entry point for Code-Graph-RAG.
 
+## Global Options
+
+These options apply to all commands:
+
+| Option | Description |
+|--------|-------------|
+| `-v/--version` | Show version number and exit |
+| `-q/--quiet` | Suppress non-essential output (progress messages, banners, informational logs) |
+
 ## Core Commands
 
 ### `cgr start`
@@ -24,12 +33,18 @@ cgr start --repo-path /path/to/repo [OPTIONS]
 | `--batch-size` | Override Memgraph flush batch size |
 | `--orchestrator` | Specify provider:model for main operations (e.g., `google:gemini-2.5-pro`, `ollama:llama3.2`) |
 | `--cypher` | Specify provider:model for graph queries (e.g., `google:gemini-2.5-flash`, `ollama:codellama`) |
-| `-o` | Export graph to JSON file during update |
+| `-o/--output` | Export graph to JSON file during update |
+| `--no-confirm` | Suppress confirmation prompts |
+| `-y/--yolo` | Alias for --no-confirm, skip all confirmation prompts |
+| `--project-name` | Override auto-detected project name |
+| `--exclude` | Exclude paths matching given pattern from indexing (can be used multiple times) |
+| `--interactive-setup` | Interactive setup to select which directories to include/exclude |
+| `-a/--ask-agent` | Run a single query directly without entering interactive mode |
 | `--with-docs` | Connect to document graph for dual-graph querying |
 | `--index-docs` | Index documents before starting chat |
 | `--index-all` | Index both code and documents before starting chat |
 | `--doc-workspace` | Document graph workspace identifier (default: `default`) |
-| `--check-freshness` | Check if graphs are up-to-date before starting (default: enabled) |
+| `--check-freshness` | Check if graphs are up-to-date before starting (default: enabled, use `--no-check-freshness` to disable) |
 | `--mode` | Query routing mode: `code_only`, `document_only`, `both_merged`, `code_vs_doc`, `doc_vs_code` |
 | `--index-timeout` | Maximum seconds for indexing operations (default: 300s) |
 
@@ -72,8 +87,14 @@ cgr start --repo-path /path/to/repo --index-docs --with-docs --mode document_onl
 Export the knowledge graph to JSON.
 
 ```bash
-cgr export -o my_graph.json
+cgr export -o my_graph.json [OPTIONS]
 ```
+
+| Option | Description |
+|--------|-------------|
+| `-o/--output` | Path to output JSON file (required) |
+| `--batch-size` | Override Memgraph flush batch size |
+| `--json/--no-json` | Output format (only JSON is currently supported) |
 
 ### `cgr optimize`
 
@@ -86,9 +107,12 @@ cgr optimize <language> --repo-path /path/to/repo [OPTIONS]
 | Option | Description |
 |--------|-------------|
 | `--repo-path` | Path to repository |
-| `--orchestrator` | Specify provider:model for operations |
+| `--orchestrator` | Specify provider:model for main operations |
+| `--cypher` | Specify provider:model for graph queries |
 | `--batch-size` | Override Memgraph flush batch size |
 | `--reference-document` | Path to reference documentation for guided optimization |
+| `--no-confirm` | Suppress confirmation prompts |
+| `-y/--yolo` | Alias for --no-confirm, skip all confirmation prompts |
 
 Supported languages: `python`, `javascript`, `typescript`, `rust`, `go`, `java`, `scala`, `cpp`
 
@@ -97,16 +121,30 @@ Supported languages: `python`, `javascript`, `typescript`, `rust`, `go`, `java`,
 Start the MCP server for Claude Code integration.
 
 ```bash
-cgr mcp-server
+cgr mcp-server [OPTIONS]
 ```
+
+| Option | Description |
+|--------|-------------|
+| `--transport` | Transport mode: `stdio` (default) or `http` |
+| `--host` | HTTP server host (default: 127.0.0.1) |
+| `--port` | HTTP server port (default: 8000) |
 
 ### `cgr index`
 
 Index a repository to protobuf for offline use.
 
 ```bash
-cgr index -o ./index-output --repo-path ./my-project
+cgr index -o ./index-output --repo-path ./my-project [OPTIONS]
 ```
+
+| Option | Description |
+|--------|-------------|
+| `-o/--output-proto-dir` | Path to output directory for protobuf files (required) |
+| `--repo-path` | Path to repository (defaults to current directory) |
+| `--split-index` | Split index into multiple files for large repositories |
+| `--exclude` | Exclude paths matching given pattern from indexing (can be used multiple times) |
+| `--interactive-setup` | Interactive setup to select which directories to include/exclude |
 
 ### `cgr doctor`
 
@@ -114,6 +152,22 @@ Check that all required dependencies and services are available.
 
 ```bash
 cgr doctor
+```
+
+### `cgr stats`
+
+Show statistics about the code graph (node counts, relationship counts, etc.).
+
+```bash
+cgr stats
+```
+
+### `cgr graph-loader`
+
+Load an exported graph file and display summary information.
+
+```bash
+cgr graph-loader <graph-file-path>
 ```
 
 ### `cgr language`
@@ -165,6 +219,7 @@ cgr query-all "Tell me about authentication" [OPTIONS]
 
 | Option | Description |
 |--------|-------------|
+| `--repo-path` | Path to repository (defaults to current directory) |
 | `--top-k` | Number of results per graph (default: 5) |
 
 ### `cgr validate-spec`
@@ -177,6 +232,7 @@ cgr validate-spec <spec-path> [OPTIONS]
 
 | Option | Description |
 |--------|-------------|
+| `--repo-path` | Path to repository (defaults to current directory) |
 | `--scope` | Validation scope: `all`, `sections`, or `claims` (default: `all`) |
 | `--max-cost` | Maximum cost budget in USD (default: 0.50) |
 | `--dry-run` | Estimate cost without running validation |
@@ -191,6 +247,7 @@ cgr validate-doc <doc-path> [OPTIONS]
 
 | Option | Description |
 |--------|-------------|
+| `--repo-path` | Path to repository (defaults to current directory) |
 | `--scope` | Validation scope: `all`, `sections`, or `claims` (default: `all`) |
 | `--max-cost` | Maximum cost budget in USD (default: 0.50) |
 | `--dry-run` | Estimate cost without running validation |
