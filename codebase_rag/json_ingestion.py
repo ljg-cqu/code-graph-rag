@@ -6,13 +6,13 @@ from typing import Any
 
 from tqdm import tqdm
 
-from .config import get_config
+from .config import settings
 from .cypher_queries import build_merge_node_query, build_merge_relationship_query
 from .embedder import EmbeddingCache, get_embedding_provider_instance
-from .logs import get_logger
+from loguru import logger
 from .schemas import IngestionResult, JSONInputSchema, UpdateResult
-from .services.graph_service import GraphService
-from .vector_store import get_vector_store_instance
+from .services.graph_service import MemgraphIngestor
+from .vector_store import _get_backend as get_vector_store_instance
 
 __all__ = [
     "ingest_json_data",
@@ -24,13 +24,15 @@ __all__ = [
     "UpdateResult",
 ]
 
-logger = get_logger(__name__)
-config = get_config()
+
+config = settings
 
 embedding_provider = get_embedding_provider_instance()
 embedding_cache = EmbeddingCache()
 vector_store = get_vector_store_instance()
-graph_service = GraphService()
+graph_service = MemgraphIngestor(
+    host=settings.MEMGRAPH_HOST, port=settings.MEMGRAPH_PORT
+)
 
 
 def validate_json_input(
