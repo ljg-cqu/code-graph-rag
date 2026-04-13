@@ -94,6 +94,29 @@ for func in functions[:5]:
     print(f"Function {func.properties['name']} has {len(relationships)} relationships")
 ```
 
+## Step 4: Ingest Custom JSON Data
+
+Ingest pre-processed entities, relationships, and domain knowledge from JSON files directly into the knowledge graph and vector database:
+
+```bash
+cgr ingest-json --input-path /path/to/your/data.json
+```
+
+**Ingest a directory of JSON files:**
+```bash
+cgr ingest-json --input-path /path/to/json/directory
+```
+
+**Additional options:**
+```bash
+cgr ingest-json --input-path /path/to/data.json \
+  --dataset-id custom-dataset \
+  --skip-existing \
+  --incremental \
+  --dry-run \
+  --conflict-resolution last-write-wins
+```
+
 ## What Next?
 
 - [CLI Reference](../guide/cli-reference.md) for all available commands
@@ -101,3 +124,4 @@ for func in functions[:5]:
 - [Code Optimization](../guide/code-optimization.md) for AI-powered improvements
 - [MCP Server](../guide/mcp-server.md) for Claude Code integration
 - [Python SDK](../sdk/overview.md) for programmatic access
+- [JSON Data Ingestion](../guide/json-ingestion.md) for detailed schema and usage docs

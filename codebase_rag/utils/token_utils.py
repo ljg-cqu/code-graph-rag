@@ -22,7 +22,12 @@ def _get_encoding() -> tiktoken.Encoding:
 
 
 def count_tokens(text: str) -> int:
-    return len(_get_encoding().encode(text))
+    try:
+        return len(_get_encoding().encode(text))
+    except ImportError:
+        # Fallback: approximate tokens as words * 1.3 (cl100k_base ratio)
+        # This is a rough approximation - actual tokenization varies by content
+        return int(len(text.split()) * 1.3)
 
 
 def truncate_results_by_tokens(
@@ -129,7 +134,11 @@ def truncate_results_smart(
         kept, tokens_used = _truncate_by_relevance(row_token_counts, max_tokens)
     else:  # balanced
         kept, tokens_used = _truncate_balanced(
-            row_token_counts, max_tokens, min_rows, max_row_tokens or 2000, diversity_budget_pct
+            row_token_counts,
+            max_tokens,
+            min_rows,
+            max_row_tokens or 2000,
+            diversity_budget_pct,
         )
 
     # Collect dropped rows from token truncation
@@ -229,7 +238,9 @@ def _truncate_balanced(
     effective_cap = max(effective_cap, 200)  # Absolute floor
 
     # Step 1: Apply capping and collect with indices
-    capped_rows: list[tuple[int, ResultRow, int, float]] = []  # (original_idx, row, tokens, relevance)
+    capped_rows: list[
+        tuple[int, ResultRow, int, float]
+    ] = []  # (original_idx, row, tokens, relevance)
 
     for idx, (row, tokens) in enumerate(row_token_counts):
         relevance = row.get("relevance_score", 0.5) or 0.5
@@ -277,7 +288,9 @@ def _truncate_balanced(
 
     # Third pass: enforce min_rows guarantee by force-adding remaining rows
     # This ensures we always return at least min_rows (or all rows if fewer exist)
-    remaining = unselected[len(kept) - len(row_token_counts):]  # Rows not yet processed
+    remaining = unselected[
+        len(kept) - len(row_token_counts) :
+    ]  # Rows not yet processed
     remaining_unselected = [r for r in unselected if r not in kept]
 
     while len(kept) < min_rows and remaining_unselected and len(kept) < n:

@@ -166,6 +166,8 @@ This installs Tree-sitter grammars for all supported languages (see Multi-Langua
 ```bash
 cp .env.example .env
 # Edit .env with your configuration (see options below)
+# ⚠️ Security Note: Always set database credentials (MEMGRAPH_*, QDRANT_API_KEY)
+# for production deployments. Never commit your .env file with secrets to version control.
 ```
 
 ### Configuration Options
@@ -286,13 +288,14 @@ Use the Makefile for common development tasks:
 
 ## 🎯 Usage
 
-The Code-Graph-RAG system offers five main modes of operation:
+The Code-Graph-RAG system offers seven main modes of operation:
 1. **Parse & Ingest**: Build knowledge graph from your codebase
 2. **Interactive Query**: Ask questions about your code in natural language
 3. **Export & Analyze**: Export graph data for programmatic analysis
-4. **AI Optimization**: Get AI-powered optimization suggestions for your code.
-5. **Editing**: Perform surgical code replacements and modifications with precise targeting.
-6. **📚 Document GraphRAG**: Index and query documentation alongside code, with validation capabilities.
+4. **Editing**: Perform surgical code replacements and modifications with precise targeting.
+5. **📚 Document GraphRAG**: Index and query documentation alongside code, with validation capabilities.
+6. **📄 JSON Data Ingestion**: Ingest custom entities, relationships, and domain knowledge directly from JSON files
+7. **AI Optimization**: Get AI-powered optimization suggestions for your code.
 
 ### Step 1: Parse a Repository
 
@@ -468,6 +471,99 @@ This provides a reliable, programmatic way to access your codebase structure wit
 - Building documentation generators
 - Creating code metrics dashboards
 
+### JSON Data Ingestion (New!)
+Import custom domain knowledge, entities, relationships, and metadata directly into your knowledge graph using structured JSON files. This feature lets you extend the auto-parsed code graph with custom business logic, external metadata, domain-specific entities, and custom relationships.
+
+---
+
+#### 1. Core Concepts & Key Features (MECE-Compliant, No Overlap)
+| Category | Features |
+|----------|----------|
+| **Entity Management** | Import custom entities with any schema/label; reference auto-parsed code entities via qualified names |
+| **Relationship Management** | Add custom relationships between any nodes (custom ↔ custom, custom ↔ auto-parsed) |
+| **Dataset Isolation** | All imported data is grouped by `dataset_id` for independent management, updates, and deletion |
+| **Ingest Control** | Dry run previews, batch processing of multiple files, idempotent operation, configurable conflict resolution |
+| **Vector Integration** | Embeddings automatically generated for all text properties for semantic search |
+| **API Access** | First-class Python API + CLI support for programmatic and interactive usage |
+
+*All features are mutually exclusive with no overlapping functionality, and collectively cover all custom ingestion use cases.*
+
+---
+
+#### 2. JSON Schema Specification (Deterministic, Fully Validated)
+All JSON input is strictly validated against this formal schema for deterministic behavior:
+```json
+{
+  "metadata": {
+    "dataset_id": "string (required, unique identifier for this dataset)",
+    "description": "string (optional, human-readable description)",
+    "version": "string (optional, version tag for this dataset)"
+  },
+  "entities": [
+    {
+      "id": "string (required, unique per dataset)",
+      "label": "string (required, node label/type)",
+      "properties": "object (required, key-value properties for the node)"
+    }
+  ],
+  "relationships": [
+    {
+      "from_id": "string (required, ID of source entity)",
+      "to_id": "string (required, ID of target entity)",
+      "type": "string (required, relationship type)",
+      "properties": "object (optional, key-value properties for the relationship)"
+    }
+  ]
+}
+```
+**Validation Guarantees:**
+- Missing required fields fail fast with clear error messages
+- ID uniqueness is enforced per dataset
+- Relationship IDs must exist either in the current import or the existing graph
+- Property values are type-checked for consistency
+
+---
+
+#### 3. Programmatic Usage (Python API, Separation of Concerns)
+Use the Python API for scripted integration and workflows:
+```python
+from codebase_rag.json_ingest import ingest_json_data, delete_dataset
+
+# Ingest JSON data programmatically
+result = ingest_json_data(
+    repo_path="/path/to/repo",
+    input_path="./custom_data.json",
+    dataset_id="my_dataset",
+    dry_run=False,
+    conflict_strategy="overwrite"  # Options: overwrite, skip, fail
+)
+# Result object contains deterministic counts:
+# - nodes_created, nodes_updated, nodes_skipped
+# - relationships_created, relationships_skipped
+# - errors (list of validation or processing errors)
+
+# Delete all data in a dataset (atomic operation)
+delete_result = delete_dataset(repo_path="/path/to/repo", dataset_id="my_dataset")
+print(f"Deleted {delete_result['nodes_deleted']} nodes, {delete_result['relationships_deleted']} relationships")
+```
+*API maintains strict separation of concerns: ingestion logic is isolated from graph storage and embedding generation.*
+
+---
+
+#### 4. Reliability Guarantees (Deterministic & Correct)
+The JSON ingestion system provides these deterministic guarantees:
+- **Atomicity:** Ingest operations are all-or-nothing - partial failures leave the graph unchanged
+- **Idempotency:** Re-running the same import with the same data will not create duplicate nodes/relationships
+- **Consistency:** All nodes, relationships, and embeddings are created transactionally
+- **Dry Run Accuracy:** Dry run mode produces exactly the same change summary as a real run, with no modifications
+- **Error Determinism:** Same input will always produce the same error or success result
+- **Conflict Resolution Predictability:** Configurable strategies (`overwrite`, `skip`, `fail`) produce consistent results for duplicate entities
+
+---
+
+#### 5. CLI Command Usage
+See [JSON Data Ingestion Commands](#json-data-ingestion-commands) in the CLI section for interactive usage examples.
+
 ### Step 4: Document GraphRAG (New!)
 
 Index and query documentation alongside your codebase. This feature enables comprehensive RAG across both code and documentation, with powerful validation capabilities.
@@ -569,93 +665,43 @@ cgr validate-doc \
 - **API Documentation Compliance**: Ensure code implements all specified endpoints
 - **Documentation Audits**: Find outdated or incorrect documentation
 - **Comprehensive Search**: Get answers spanning both code and documentation
-- **Regulatory Compliance**: Validate implementation against requirements documents
 
-### Step 5: Code Optimization
+<a id="json-data-ingestion-commands"></a>
+#### JSON Data Ingestion Commands (Logical, Deterministic)
+All CLI commands produce deterministic, consistent output and follow the same reliability guarantees as the Python API.
 
-For AI-powered codebase optimization with best practices guidance:
+##### 🔹 `ingest-json` - Import custom JSON data
+| Flag | Description | Behavior |
+|------|-------------|----------|
+| `--input <path>` | Path to JSON file or directory of JSON files | Deterministic processing order: files sorted alphanumerically |
+| `--dataset-id <id>` | Unique dataset identifier for isolation | All imported data is tagged with this ID for independent management |
+| `--dry-run` | Preview changes without modifying graph | Outputs exact counts of nodes/relationships that would be created/updated |
+| `--conflict-strategy <strategy>` | Handling for duplicate entity IDs | Options: `overwrite` (default, update existing nodes), `skip` (keep existing), `fail` (abort on duplicates) |
+| `--batch-size <n>` | Number of operations per transaction | Default: 1000, adjust for large imports |
 
-**Basic optimization for a specific language:**
+**Examples:**
 ```bash
-cgr optimize python --repo-path /path/to/your/repo
+# Ingest a single file with default settings
+cgr ingest-json --repo-path /path/to/repo --input my_data.json
+
+# Ingest directory with explicit conflict strategy
+cgr ingest-json --repo-path /path/to/repo --input ./custom_data/ --conflict-strategy skip
+
+# Dry run to preview changes before applying
+cgr ingest-json --repo-path /path/to/repo --input my_data.json --dry-run
+
+# Import with custom dataset ID
+cgr ingest-json --repo-path /path/to/repo --input my_data.json --dataset-id business_rules
 ```
 
-**Optimization with reference documentation:**
-```bash
-cgr optimize python \
-  --repo-path /path/to/your/repo \
-  --reference-document /path/to/best_practices.md
-```
-
-**Using specific models for optimization:**
-```bash
-cgr optimize javascript \
-  --repo-path /path/to/frontend \
-  --orchestrator google:gemini-2.0-flash-thinking-exp-01-21
-
-# Optional: override Memgraph batch flushing during optimization
-cgr optimize javascript --repo-path /path/to/frontend \
-  --batch-size 5000
-```
-
-**Supported Languages for Optimization:**
-All supported languages: `python`, `javascript`, `typescript`, `rust`, `go`, `java`, `scala`, `c`, `cpp`
-
-**How It Works:**
-1. **Analysis Phase**: The agent analyzes your codebase structure using the knowledge graph
-2. **Pattern Recognition**: Identifies common anti-patterns, performance issues, and improvement opportunities
-3. **Best Practices Application**: Applies language-specific best practices and patterns
-4. **Interactive Approval**: Presents each optimization suggestion for your approval before implementation
-5. **Guided Implementation**: Implements approved changes with detailed explanations
-
-**Example Optimization Session:**
-```
-Starting python optimization session...
-┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃ The agent will analyze your python codebase and propose specific          ┃
-┃ optimizations. You'll be asked to approve each suggestion before          ┃
-┃ implementation. Type 'exit' or 'quit' to end the session.                 ┃
-┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-
-🔍 Analyzing codebase structure...
-📊 Found 23 Python modules with potential optimizations
-
-💡 Optimization Suggestion #1:
-   File: src/data_processor.py
-   Issue: Using list comprehension in a loop can be optimized
-   Suggestion: Replace with generator expression for memory efficiency
-
-   [y/n] Do you approve this optimization?
-```
-
-**Reference Document Support:**
-You can provide reference documentation (like coding standards, architectural guidelines, or best practices documents) to guide the optimization process:
+##### 🔹 `delete-dataset` - Delete all data in a dataset
+Atomic operation that removes all nodes and relationships belonging to a specific dataset, with no impact on other data.
 
 ```bash
-# Use company coding standards
-cgr optimize python \
-  --reference-document ./docs/coding_standards.md
-
-# Use architectural guidelines
-cgr optimize java \
-  --reference-document ./ARCHITECTURE.md
-
-# Use performance best practices
-cgr optimize rust \
-  --reference-document ./docs/performance_guide.md
+# Delete all data in the "business_rules" dataset
+cgr delete-dataset --repo-path /path/to/repo --dataset-id business_rules
 ```
-
-The agent will incorporate the guidance from your reference documents when suggesting optimizations, ensuring they align with your project's standards and architectural decisions.
-
-**Common CLI Arguments:**
-- `--orchestrator`: Specify provider:model for main operations (e.g., `google:gemini-2.0-flash-thinking-exp-01-21`, `ollama:llama3.2`)
-- `--cypher`: Specify provider:model for graph queries (e.g., `google:gemini-2.5-flash-lite-preview-06-17`, `ollama:codellama`)
-- `--repo-path`, `-r`: Path to repository (defaults to current directory)
-- `--ask-agent`, `-a`: Run a single query in non-interactive mode and exit (outputs to stdout, useful for scripting)
-- `--batch-size`: Override Memgraph flush batch size (defaults to `MEMGRAPH_BATCH_SIZE` in settings)
-- `--reference-document`: Path to reference documentation (optimization only)
-- `--yolo`, `-y`: **YOLO Mode** - Disable all interactive confirmations (auto-approve all tool calls)
-- `--no-confirm`: Alias for `--yolo` (backward compatible)
+*Operation is idempotent: deleting a non-existent dataset returns a success with 0 items deleted.*
 
 ### YOLO Mode
 
@@ -695,6 +741,36 @@ CGR_YOLO_MODE=true cgr mcp-server
 
 **Security Warning:**
 When yolo mode is enabled, a prominent red warning banner is displayed at session start. All auto-approved actions are logged with `YOLO:` prefix for audit trail. Use with caution on production codebases.
+
+## 🔒 Security Best Practices
+Follow these recommendations to ensure secure deployment and usage of Code-Graph-RAG:
+
+### Database Security
+- **Always enable authentication** for Memgraph and Qdrant instances, especially when deployed in shared environments or exposed to networks
+- **Bind database services to `localhost` only** by default. Never use `0.0.0.0` as the host binding unless you explicitly intend to expose the service to external networks
+- Use strong, unique passwords for all database accounts
+- For production deployments, use TLS encryption for all database connections
+
+### Submodule & Supply Chain Security
+- All official Tree-sitter grammar submodules are pinned to specific, audited commit hashes to prevent supply chain attacks from malicious upstream changes
+- When adding custom Tree-sitter grammars, always pin them to specific commit hashes and verify the source before use
+- Regularly update dependencies to patch security vulnerabilities
+
+### Document Parsing Security
+- All file operations include path traversal protection to prevent access to files outside the target repository directory
+- Symlinks are validated to ensure they point to locations within the repository root
+- File size limits prevent denial-of-service attacks from oversized files
+- Untrusted file formats (PDF, DOCX) are parsed in isolated environments when enabled
+
+### Network Security
+- The MCP server binds to `127.0.0.1` by default to prevent external access
+- All external API calls (to LLM providers) use HTTPS encryption
+- Never expose the MCP server or database instances directly to the public internet without proper authentication and access controls
+
+### Yolo Mode Security
+- Yolo mode is intended for testing, CI/CD pipelines, and trusted environments only
+- Never enable Yolo mode for untrusted workloads or production codebases unless you fully understand the risks
+- All Yolo mode actions are logged for audit purposes
 
 ## 🔌 MCP Server (Claude Code Integration)
 

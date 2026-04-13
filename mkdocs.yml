@@ -83,6 +83,7 @@ nav:
     - Quick Start: getting-started/quickstart.md
   - User Guide:
     - CLI Reference: guide/cli-reference.md
+    - JSON Data Ingestion: guide/json-ingestion.md
     - Interactive Querying: guide/interactive-querying.md
     - Code Optimization: guide/code-optimization.md
     - Graph Export: guide/graph-export.md

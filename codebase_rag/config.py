@@ -293,7 +293,9 @@ class AppConfig(BaseSettings):
     # Embedding cache (backend-agnostic)
     EMBEDDING_CACHE_DIR: str = "./.embedding_cache"
 
-    QDRANT_DB_PATH: str = "./.qdrant_code_embeddings"  # Legacy: used only when backend=qdrant
+    QDRANT_DB_PATH: str = (
+        "./.qdrant_code_embeddings"  # Legacy: used only when backend=qdrant
+    )
     QDRANT_COLLECTION_NAME: str = "code_embeddings"
     QDRANT_VECTOR_DIM: int = 768
     QDRANT_TOP_K: int = 5
@@ -322,8 +324,12 @@ class AppConfig(BaseSettings):
     EMBEDDING_MODEL: str = "microsoft/unixcoder-base"
     EMBEDDING_API_KEY: str | None = None
     EMBEDDING_ENDPOINT: str | None = None  # Custom endpoint URL
-    EMBEDDING_BASE_URL: str | None = None  # Alias for EMBEDDING_ENDPOINT (OpenAI-compatible APIs)
-    EMBEDDING_KEEP_ALIVE: str | None = None  # Ollama: keep model loaded duration (e.g., "5m")
+    EMBEDDING_BASE_URL: str | None = (
+        None  # Alias for EMBEDDING_ENDPOINT (OpenAI-compatible APIs)
+    )
+    EMBEDDING_KEEP_ALIVE: str | None = (
+        None  # Ollama: keep model loaded duration (e.g., "5m")
+    )
     EMBEDDING_PROJECT_ID: str | None = None  # Google Vertex AI
     EMBEDDING_REGION: str = "us-central1"
     EMBEDDING_PROVIDER_TYPE: str | None = None  # Google: gla/vertex
@@ -334,7 +340,9 @@ class AppConfig(BaseSettings):
     EMBEDDING_PROGRESS_INTERVAL: int = 10
 
     # Embedding chunking strategy
-    EMBEDDING_CHUNKING_STRATEGY: Literal["truncate", "chunk", "hierarchical", "error"] = "chunk"
+    EMBEDDING_CHUNKING_STRATEGY: Literal[
+        "truncate", "chunk", "hierarchical", "error"
+    ] = "chunk"
     EMBEDDING_CHUNK_OVERLAP_TOKENS: int = 32
     EMBEDDING_MAX_CHUNKS_PER_NODE: int = 5
     EMBEDDING_SKIP_BINARY_FILES: bool = True
@@ -377,7 +385,9 @@ class AppConfig(BaseSettings):
 
     QUERY_RESULT_MAX_TOKENS: int = Field(default=16000, gt=0)
     QUERY_RESULT_ROW_CAP: int = Field(default=500, gt=0)
-    QUERY_RESULT_TRUNCATION_STRATEGY: Literal["fifo", "relevance", "balanced"] = "balanced"
+    QUERY_RESULT_TRUNCATION_STRATEGY: Literal["fifo", "relevance", "balanced"] = (
+        "balanced"
+    )
     QUERY_RESULT_MAX_ROW_TOKENS: int = 2000
     QUERY_RESULT_MIN_ROWS: int = 5
     QUERY_RESULT_DIVERSITY_BUDGET_PCT: float = 0.15
@@ -397,7 +407,7 @@ class AppConfig(BaseSettings):
     # Yolo mode via environment (for MCP server and persistent settings)
     CGR_YOLO_MODE: bool = False
 
-    MCP_HTTP_HOST: str = "0.0.0.0"
+    MCP_HTTP_HOST: str = "127.0.0.1"
     MCP_HTTP_PORT: int = 8080
     MCP_HTTP_ENDPOINT_PATH: str = "/mcp"
 
@@ -621,9 +631,7 @@ class AppConfig(BaseSettings):
                 f"EMBEDDING_MAX_LENGTH ({max_length})"
             )
         if v < 0:
-            raise ValueError(
-                f"EMBEDDING_CHUNK_OVERLAP_TOKENS ({v}) must be >= 0"
-            )
+            raise ValueError(f"EMBEDDING_CHUNK_OVERLAP_TOKENS ({v}) must be >= 0")
         return v
 
     @field_validator("QUERY_RESULT_MAX_ROW_TOKENS")
@@ -670,6 +678,7 @@ class AppConfig(BaseSettings):
             # Try JSON parse first (pydantic-settings 2.x uses JSON for list fields)
             if v.startswith("["):
                 import json
+
                 try:
                     parsed = json.loads(v)
                     if isinstance(parsed, list):

@@ -383,13 +383,23 @@ def start(
     from codebase_rag.shared.query_router import QueryMode
 
     # Yolo mode: --yolo or --no-confirm both enable it (CLI flags take precedence)
-    if yolo or no_confirm:
+    yolo_enabled = yolo or no_confirm or settings.CGR_YOLO_MODE
+    if yolo_enabled:
         app_context.session.yolo_mode = True
         app_context.session.confirm_edits = False
-    elif settings.CGR_YOLO_MODE:
-        # Environment variable (lower precedence than CLI flags)
-        app_context.session.yolo_mode = True
-        app_context.session.confirm_edits = False
+        # SECURITY WARNING: Yolo mode enables auto-approval of all operations
+        from rich.panel import Panel
+        from rich.text import Text
+
+        warning = Text("⚠️  YOLO MODE ENABLED ⚠️\n", style="bold red")
+        warning.append(
+            "All file edits, shell commands, and external API calls will be auto-approved without confirmation.\n"
+        )
+        warning.append(
+            "This is intended for testing and trusted environments only. Use at your own risk.\n",
+            style="yellow",
+        )
+        app_context.console.print(Panel(warning, style="bold red"))
     else:
         app_context.session.yolo_mode = False
         app_context.session.confirm_edits = True
@@ -439,7 +449,7 @@ def start(
     # === Handle --clean alone (no indexing) ===
     # Preserves backward compatibility: clean database and return immediately
     # without model validation, freshness check, or chat session
-    if clean and not (update_graph or index_docs or index_all):
+    if clean and not (index_code or index_docs or index_all):
         effective_batch_size = settings.resolve_batch_size(batch_size)
         _info(style(cs.CLI_MSG_CLEANING_DB, cs.Color.YELLOW))
         # Clean main code database
@@ -708,13 +718,23 @@ def optimize(
     ),
 ) -> None:
     # Yolo mode: --yolo or --no-confirm both enable it (CLI flags take precedence)
-    if yolo or no_confirm:
+    yolo_enabled = yolo or no_confirm or settings.CGR_YOLO_MODE
+    if yolo_enabled:
         app_context.session.yolo_mode = True
         app_context.session.confirm_edits = False
-    elif settings.CGR_YOLO_MODE:
-        # Environment variable (lower precedence than CLI flags)
-        app_context.session.yolo_mode = True
-        app_context.session.confirm_edits = False
+        # SECURITY WARNING: Yolo mode enables auto-approval of all operations
+        from rich.panel import Panel
+        from rich.text import Text
+
+        warning = Text("⚠️  YOLO MODE ENABLED ⚠️\n", style="bold red")
+        warning.append(
+            "All file edits, shell commands, and external API calls will be auto-approved without confirmation.\n"
+        )
+        warning.append(
+            "This is intended for testing and trusted environments only. Use at your own risk.\n",
+            style="yellow",
+        )
+        app_context.console.print(Panel(warning, style="bold red"))
     else:
         app_context.session.yolo_mode = False
         app_context.session.confirm_edits = True
@@ -1335,6 +1355,161 @@ def index_docs(
     except Exception as e:
         app_context.console.print(style(f"Document indexing failed: {e}", cs.Color.RED))
         logger.exception("Document indexing failed")
+        raise typer.Exit(1) from e
+
+
+@app.command(
+    name=ch.CLICommandName.INGEST_JSON,
+    help=ch.CMD_INGEST_JSON,
+)
+def ingest_json(
+    input_path: str = typer.Argument(
+        ..., help="Path to JSON file or directory containing JSON files."
+    ),
+    dataset_id: str | None = typer.Option(
+        None,
+        "--dataset-id",
+        help="Override dataset ID (defaults to value in JSON metadata).",
+    ),
+    skip_existing: bool = typer.Option(
+        False,
+        "--skip-existing",
+        help="Skip entities/relationships that already exist in the graph.",
+    ),
+    batch_size: int = typer.Option(
+        100, "--batch-size", min=1, help="Batch size for database operations."
+    ),
+    incremental: bool = typer.Option(
+        False,
+        "--incremental",
+        help="Run incremental update, only process changed entities/relationships.",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Validate input and calculate changes without writing to databases.",
+    ),
+    conflict_resolution: str = typer.Option(
+        "last-write-wins",
+        "--conflict-resolution",
+        help="Conflict resolution strategy: last-write-wins (default), highest-confidence-wins, manual-review.",
+    ),
+) -> None:
+    from .json_ingestion import ingest_json_data
+
+    _info(style(f"Ingesting JSON data from: {input_path}", cs.Color.CYAN))
+    if dataset_id:
+        _info(style(f"Using dataset ID: {dataset_id}", cs.Color.CYAN))
+
+    try:
+        result = ingest_json_data(
+            input_path=input_path,
+            dataset_id=dataset_id,
+            skip_existing=skip_existing,
+            batch_size=batch_size,
+            incremental=incremental,
+            dry_run=dry_run,
+            conflict_resolution=conflict_resolution,
+        )
+
+        # Display results
+        table = Table(
+            title=style(
+                f"Ingestion Results {'(Dry Run)' if dry_run else ''}", cs.Color.GREEN
+            ),
+            show_header=True,
+            header_style=f"{cs.StyleModifier.BOLD} {cs.Color.MAGENTA}",
+        )
+        table.add_column("Metric", style=cs.Color.CYAN)
+        table.add_column("Count", style=cs.Color.YELLOW, justify="right")
+
+        table.add_row("Entities Processed", str(result.entities_processed))
+        table.add_row("Entities Ingested", str(result.entities_ingested))
+        table.add_row("Entities Updated", str(result.entities_updated))
+        table.add_row("Entities Skipped", str(result.entities_skipped))
+        table.add_row("Entities Failed", str(result.entities_failed))
+        table.add_section()
+        table.add_row("Relationships Processed", str(result.relationships_processed))
+        table.add_row("Relationships Ingested", str(result.relationships_ingested))
+        table.add_row("Relationships Updated", str(result.relationships_updated))
+        table.add_row("Relationships Skipped", str(result.relationships_skipped))
+        table.add_row("Relationships Failed", str(result.relationships_failed))
+
+        app_context.console.print(table)
+
+        if result.errors:
+            app_context.console.print()
+            app_context.console.print(
+                style(
+                    f"Ingestion completed with {len(result.errors)} errors:",
+                    cs.Color.YELLOW,
+                )
+            )
+            for error in result.errors[:10]:  # Show up to 10 errors
+                app_context.console.print(style(f"  - {error}", cs.Color.RED))
+            if len(result.errors) > 10:
+                app_context.console.print(
+                    style(
+                        f"  ... and {len(result.errors) - 10} more errors", cs.Color.RED
+                    )
+                )
+
+    except Exception as e:
+        app_context.console.print(style(f"Ingestion failed: {e}", cs.Color.RED))
+        logger.exception("JSON ingestion failed")
+        raise typer.Exit(1) from e
+
+
+@app.command(
+    name=ch.CLICommandName.DELETE_DATASET,
+    help=ch.CMD_DELETE_DATASET,
+)
+def delete_dataset_command(
+    dataset_id: str = typer.Argument(..., help="ID of the dataset to delete."),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Show what would be deleted without making changes."
+    ),
+) -> None:
+    from .json_ingestion import delete_dataset
+
+    _info(
+        style(
+            f"Deleting dataset: {dataset_id}{' (Dry Run)' if dry_run else ''}",
+            cs.Color.YELLOW,
+        )
+    )
+
+    try:
+        success, nodes_deleted, rels_deleted, errors = delete_dataset(
+            dataset_id, dry_run=dry_run
+        )
+
+        if success:
+            if dry_run:
+                _info(
+                    style(
+                        f"Dry run: Would delete {nodes_deleted} nodes and {rels_deleted} relationships for dataset {dataset_id}",
+                        cs.Color.GREEN,
+                    )
+                )
+            else:
+                _info(
+                    style(
+                        f"Successfully deleted dataset {dataset_id}: {nodes_deleted} nodes, {rels_deleted} relationships",
+                        cs.Color.GREEN,
+                    )
+                )
+        else:
+            app_context.console.print(
+                style(f"Failed to delete dataset {dataset_id}", cs.Color.RED)
+            )
+            for error in errors:
+                app_context.console.print(style(f"  - {error}", cs.Color.RED))
+            raise typer.Exit(1)
+
+    except Exception as e:
+        app_context.console.print(style(f"Delete dataset failed: {e}", cs.Color.RED))
+        logger.exception("Delete dataset failed")
         raise typer.Exit(1) from e
 
 

@@ -96,6 +96,24 @@ cgr export -o my_graph.json [OPTIONS]
 | `--batch-size` | Override Memgraph flush batch size |
 | `--json/--no-json` | Output format (only JSON is currently supported) |
 
+### `cgr ingest-json`
+
+Ingest custom entities, relationships, and domain knowledge from JSON files directly into the knowledge graph and vector database.
+
+```bash
+cgr ingest-json --input-path /path/to/input [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--input-path` | Path to single JSON file or directory containing multiple JSON files (required) |
+| `--dataset-id` | Optional custom identifier for the dataset (defaults to value defined in JSON metadata) |
+| `--skip-existing` | Skip entities/relationships that already exist in the graph |
+| `--incremental` | Run incremental update, only process changed entities/relationships (uses last modified timestamps) |
+| `--dry-run` | Validate input and calculate changes without writing to databases |
+| `--conflict-resolution` | Conflict resolution strategy for overlapping updates: `last-write-wins` (default), `highest-confidence-wins`, `manual-review` |
+| `--batch-size` | Override default batch size for database operations |
+
 ### `cgr optimize`
 
 AI-powered codebase optimization.

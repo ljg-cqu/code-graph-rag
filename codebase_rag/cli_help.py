@@ -17,6 +17,9 @@ class CLICommandName(StrEnum):
     VALIDATE_SPEC = "validate-spec"
     VALIDATE_DOC = "validate-doc"
     INDEX_DOCS = "index-docs"
+    # JSON Data Ingestion commands
+    INGEST_JSON = "ingest-json"
+    DELETE_DATASET = "delete-dataset"
 
 
 APP_DESCRIPTION = (
@@ -46,6 +49,11 @@ CMD_QUERY_ALL = "Query both code and document graphs, merge results"
 CMD_VALIDATE_SPEC = "Validate code against a specification document"
 CMD_VALIDATE_DOC = "Validate documentation against actual code"
 CMD_INDEX_DOCS = "Index documents into the document graph"
+# JSON Data Ingestion commands
+CMD_INGEST_JSON = "Ingest pre-extracted JSON data containing entities/relationships into graph and vector databases"
+CMD_DELETE_DATASET = (
+    "Delete all nodes, relationships, and vector entries for a specific dataset ID"
+)
 
 CMD_LANGUAGE_GROUP = "CLI for managing language grammars"
 CMD_LANGUAGE_ADD = "Add a new language grammar to the project."
@@ -185,4 +193,7 @@ CLI_COMMANDS: dict[CLICommandName, str] = {
     CLICommandName.VALIDATE_SPEC: CMD_VALIDATE_SPEC,
     CLICommandName.VALIDATE_DOC: CMD_VALIDATE_DOC,
     CLICommandName.INDEX_DOCS: CMD_INDEX_DOCS,
+    # JSON Data Ingestion commands
+    CLICommandName.INGEST_JSON: CMD_INGEST_JSON,
+    CLICommandName.DELETE_DATASET: CMD_DELETE_DATASET,
 }
