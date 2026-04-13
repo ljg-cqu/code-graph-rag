@@ -13,6 +13,7 @@ from .types_defs import (
     LoadableProtocol,
     PathValidatorProtocol,
 )
+from .utils.path_utils import is_path_allowed
 
 
 def ensure_loaded[T](func: Callable[..., T]) -> Callable[..., T]:
@@ -71,12 +72,18 @@ def validate_project_path[T](
                 )
             try:
                 full_path = (self.project_root / file_path_str).resolve()
-                project_root = self.project_root.resolve()
-                full_path.relative_to(project_root)
             except (ValueError, RuntimeError):
                 return result_factory(
                     file_path=file_path_str,
-                    error_message=ls.FILE_OUTSIDE_ROOT.format(action="access"),
+                    error_message=ls.FILE_OUTSIDE_ROOT.format(action="access")
+                    + " To allow access to files outside the project root, set ENABLE_GLOBAL_FILE_ACCESS=true in your environment or .env file.",
+                )
+
+            if not is_path_allowed(full_path, self.project_root):
+                return result_factory(
+                    file_path=file_path_str,
+                    error_message=ls.FILE_OUTSIDE_ROOT.format(action="access")
+                    + " To allow access to files outside the project root, set ENABLE_GLOBAL_FILE_ACCESS=true in your environment or .env file.",
                 )
 
             bound.arguments[path_arg_name] = full_path

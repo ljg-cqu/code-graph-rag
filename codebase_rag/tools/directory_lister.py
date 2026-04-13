@@ -9,6 +9,7 @@ from pydantic_ai import Tool
 from .. import exceptions as ex
 from .. import logs as ls
 from .. import tool_errors as te
+from ..utils.path_utils import is_path_allowed
 from . import tool_descriptions as td
 
 
@@ -49,13 +50,10 @@ class DirectoryLister:
         else:
             safe_path = (self.project_root / file_path).resolve()
 
-        try:
-            safe_path.relative_to(self.project_root.resolve())
-        except ValueError as e:
-            raise PermissionError(ex.ACCESS_DENIED) from e
-
-        if not str(safe_path).startswith(str(self.project_root.resolve())):
-            raise PermissionError(ex.ACCESS_DENIED)
+        if not is_path_allowed(safe_path, self.project_root):
+            raise PermissionError(
+                f"{ex.ACCESS_DENIED} To allow access to files outside the project root, set ENABLE_GLOBAL_FILE_ACCESS=true in your environment or .env file."
+            )
 
         return safe_path
 

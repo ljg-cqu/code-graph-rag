@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from .. import constants as cs
+from ..config import settings
 
 
 def should_skip_path(
@@ -39,3 +40,50 @@ def get_all_code_files(
         ):
             code_files.append(path)
     return code_files
+
+
+def is_path_allowed(path: Path, project_root: Path) -> bool:
+    """Check if a path is allowed for file operations.
+
+    Args:
+        path: Path to check
+        project_root: Original project root path
+
+    Returns:
+        True if path is allowed, False otherwise
+    """
+
+    # Resolve both paths to absolute paths, follow symlinks
+    resolved_path = path.resolve()
+    resolved_root = project_root.resolve()
+
+    # Global access enabled: all paths are allowed
+    if settings.ENABLE_GLOBAL_FILE_ACCESS:
+        return True
+
+    # Check if path is inside project root
+    try:
+        resolved_path.relative_to(resolved_root)
+        return True
+    except ValueError:
+        return False
+
+
+def is_path_outside_project_root(path: Path, project_root: Path) -> bool:
+    """Check if a path is outside the project root, regardless of global access setting.
+
+    Args:
+        path: Path to check
+        project_root: Original project root path
+
+    Returns:
+        True if path is outside project root, False otherwise
+    """
+    resolved_path = path.resolve()
+    resolved_root = project_root.resolve()
+
+    try:
+        resolved_path.relative_to(resolved_root)
+        return False
+    except ValueError:
+        return True

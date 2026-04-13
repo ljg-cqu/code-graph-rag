@@ -8,6 +8,7 @@ from pydantic_ai import Tool
 from .. import constants as cs
 from .. import logs as ls
 from .. import tool_errors as te
+from ..config import settings
 from ..decorators import validate_project_path
 from ..schemas import FileCreationResult
 from . import tool_descriptions as td
@@ -52,5 +53,5 @@ def create_file_writer_tool(file_writer: FileWriter) -> Tool:
         function=create_new_file,
         name=td.AgenticToolName.CREATE_FILE,
         description=td.FILE_WRITER,
-        requires_approval=True,
+        requires_approval=settings.GLOBAL_FILE_ACCESS_WRITE_REQUIRES_APPROVAL,
     )

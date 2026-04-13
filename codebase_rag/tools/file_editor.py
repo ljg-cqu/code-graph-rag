@@ -11,11 +11,13 @@ from tree_sitter import Node, Parser
 from .. import constants as cs
 from .. import logs as ls
 from .. import tool_errors as te
+from ..config import settings
 from ..decorators import validate_project_path
 from ..language_spec import get_language_for_extension, get_language_spec
 from ..parser_loader import load_parsers
 from ..schemas import EditResult
 from ..types_defs import FunctionMatch
+from ..utils.path_utils import is_path_allowed
 from . import tool_descriptions as td
 
 
@@ -211,8 +213,19 @@ class FileEditor:
     ) -> bool:
         logger.info(ls.TOOL_FILE_EDIT_SURGICAL.format(path=file_path))
         try:
-            full_path = (self.project_root / file_path).resolve()
-            full_path.relative_to(self.project_root)
+            # Resolve path correctly, handle absolute paths
+            if Path(file_path).is_absolute():
+                full_path = Path(file_path).resolve()
+            else:
+                full_path = (self.project_root / file_path).resolve()
+
+            # Validate path access
+            if not is_path_allowed(full_path, self.project_root):
+                logger.error(
+                    ls.FILE_OUTSIDE_ROOT.format(action=cs.FileAction.EDIT)
+                    + " To allow access to files outside the project root, set ENABLE_GLOBAL_FILE_ACCESS=true in your environment or .env file."
+                )
+                return False
 
             if not full_path.is_file():
                 logger.error(ls.EDITOR_FILE_NOT_FOUND.format(path=file_path))
@@ -250,9 +263,6 @@ class FileEditor:
             logger.success(ls.TOOL_FILE_EDIT_SURGICAL_SUCCESS.format(path=file_path))
             return True
 
-        except ValueError:
-            logger.error(ls.FILE_OUTSIDE_ROOT.format(action=cs.FileAction.EDIT))
-            return False
         except Exception as e:
             logger.error(ls.EDITOR_SURGICAL_ERROR.format(error=e))
             return False
@@ -296,5 +306,5 @@ def create_file_editor_tool(file_editor: FileEditor) -> Tool:
         function=replace_code_surgically,
         name=td.AgenticToolName.REPLACE_CODE,
         description=td.FILE_EDITOR,
-        requires_approval=True,
+        requires_approval=settings.GLOBAL_FILE_ACCESS_WRITE_REQUIRES_APPROVAL,
     )

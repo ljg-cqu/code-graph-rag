@@ -49,6 +49,7 @@ An accurate Retrieval-Augmented Generation (RAG) system that analyzes multi-lang
 
 ## Latest News 🔥
 
+- **🌐 Global Filesystem Access**: Full support for reading, writing, and editing files anywhere on the host filesystem, with configurable security controls and approval workflows.
 - **📚 Document GraphRAG Support**: Full document indexing and querying now available! Index Markdown, PDF, DOCX files and query them alongside your code. Features include bidirectional validation (code vs docs), merged queries across both graphs, and specification compliance checking.
 - **💎 Solidity Support**: Full Solidity smart contract support added — contracts, interfaces, libraries, events, modifiers, state variables, fallback/receive functions, and call graph analysis for blockchain development.
 - **🤖 AutoHotkey Support**: AutoHotkey (AHK) scripting language support added — functions, labels, hotkeys, hotstrings, and include directive parsing. Perfect for Windows automation script analysis.
@@ -58,6 +59,7 @@ An accurate Retrieval-Augmented Generation (RAG) system that analyzes multi-lang
 
 ## 🚀 Features
 
+- **🌐 Global Filesystem Access**: Access files anywhere on your host system (enabled by default), with optional write approval requirements and built-in protection against path traversal attacks.
 - **📚 Document GraphRAG**: Index and query documentation (Markdown, PDF, DOCX) alongside code. Supports bidirectional validation between code and specs, merged queries across both graphs, and automated documentation audits.
 - **Multi-Language Support**:
 
@@ -757,10 +759,16 @@ Follow these recommendations to ensure secure deployment and usage of Code-Graph
 - Regularly update dependencies to patch security vulnerabilities
 
 ### Document Parsing Security
-- All file operations include path traversal protection to prevent access to files outside the target repository directory
-- Symlinks are validated to ensure they point to locations within the repository root
+- File operations include path traversal protection by default. When global filesystem access is disabled, all operations are restricted to the target repository directory. When enabled, path validation still prevents traversal attacks while allowing access to other locations.
+- Symlinks are validated to ensure they point to allowed locations
 - File size limits prevent denial-of-service attacks from oversized files
 - Untrusted file formats (PDF, DOCX) are parsed in isolated environments when enabled
+
+### Global Filesystem Access Security
+- Global filesystem access is enabled by default to allow flexible file operations across your system
+- Write operations outside the project repository require explicit approval by default, to prevent accidental or malicious modifications
+- Disable global access in shared or untrusted environments by setting `ENABLE_GLOBAL_FILE_ACCESS=false` in your `.env` file
+- All file operations are logged for audit purposes, including access to locations outside the project repository
 
 ### Network Security
 - The MCP server binds to `127.0.0.1` by default to prevent external access
@@ -1003,6 +1011,8 @@ EMBEDDING_PROJECT_ID=your-project-id
 - `TARGET_REPO_PATH`: Default repository path (default: `.`)
 - `LOCAL_MODEL_ENDPOINT`: Fallback endpoint for Ollama (default: `http://localhost:11434/v1`)
 - `CGR_YOLO_MODE`: Enable yolo mode globally (default: `false`)
+- `ENABLE_GLOBAL_FILE_ACCESS`: Enable access to files outside the project repository (default: `true`)
+- `GLOBAL_FILE_ACCESS_WRITE_REQUIRES_APPROVAL`: Require explicit approval for write operations outside the project repository (default: `true`)
 
 ### Custom Ignore Patterns
 

@@ -35,8 +35,8 @@ DIRECTORY_INVALID = "Error: '{path}' is not a valid directory."
 DIRECTORY_EMPTY = "Error: The directory '{path}' is empty."
 DIRECTORY_LIST_FAILED = "Error: Could not list contents of '{path}'."
 DIRECTORY_PATH_OUTSIDE_ROOT = (
-    "Error: '{path}' is outside the project root ({root}). "
-    "Use a relative path from the project root, or the full absolute path within it."
+    "Error: Security risk: Attempted to list path outside of project root: '{path}' (root: {root}). "
+    "To allow access to files outside the project root, set ENABLE_GLOBAL_FILE_ACCESS=true in your environment or .env file."
 )
 
 # (H) Shell command errors

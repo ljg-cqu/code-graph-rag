@@ -407,6 +407,10 @@ class AppConfig(BaseSettings):
     # Yolo mode via environment (for MCP server and persistent settings)
     CGR_YOLO_MODE: bool = False
 
+    # Global file access configuration
+    ENABLE_GLOBAL_FILE_ACCESS: bool = True
+    GLOBAL_FILE_ACCESS_WRITE_REQUIRES_APPROVAL: bool = True
+
     MCP_HTTP_HOST: str = "127.0.0.1"
     MCP_HTTP_PORT: int = 8080
     MCP_HTTP_ENDPOINT_PATH: str = "/mcp"
