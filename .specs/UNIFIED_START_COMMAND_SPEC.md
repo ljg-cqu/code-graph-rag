@@ -22,7 +22,7 @@ The current `cgr start` command has two limitations:
 This creates a fragmented workflow:
 ```bash
 # Current workflow (3-4 commands) - document querying requires separate commands
-cgr index --update-graph              # Index code
+cgr index --index-code              # Index code
 cgr index-docs                        # Index documents
 cgr query-docs "question"             # Query documents (separate command)
 cgr start                             # Query code only (no document support)
@@ -36,7 +36,7 @@ Enhance `cgr start` to be a **unified entry point** for both **indexing** and **
 |---------|---------------|
 | **Dual-Graph Querying** | `--with-docs` flag + `--mode` selection |
 | **Document Indexing** | `--index-docs` flag (opt-in) |
-| **Code Indexing** | `--update-graph` (existing, enhanced) |
+| **Code Indexing** | `--index-code` (existing, enhanced) |
 | **Full Indexing** | `--index-all` convenience flag |
 | **Freshness Checking** | `--check-freshness` (default on) |
 | **Backend Routing** | Explicit connection management per graph type |
@@ -85,7 +85,7 @@ DOC_MEMGRAPH_PASSWORD: str | None = None
 
 | Command | Backend | Indexing | Querying | Mode |
 |---------|---------|----------|----------|------|
-| `cgr start` | Code (7687) | Optional (`--update-graph`) | ✅ Yes | N/A |
+| `cgr start` | Code (7687) | Optional (`--index-code`) | ✅ Yes | N/A |
 | `cgr index` | Code (7687) | ✅ Yes | ❌ No | N/A |
 | `cgr index-docs` | Doc (7688) | ✅ Yes | ❌ No | N/A |
 | `cgr query-docs` | Doc (7688) | ❌ No | ✅ Yes | DOCUMENT_ONLY |
@@ -124,10 +124,10 @@ from codebase_rag.shared.query_router import QueryMode
 def start(
     # === Existing flags (unchanged) ===
     repo_path: str | None = typer.Option(
-        None, "--repo-path", help=ch.HELP_REPO_PATH_RETRIEVAL
+        None, "-r", "--repo-path", help=ch.HELP_REPO_PATH_RETRIEVAL
     ),
-    update_graph: bool = typer.Option(
-        False, "--update-graph", help=ch.HELP_UPDATE_GRAPH,
+    index_code: bool = typer.Option(
+        False, "--index-code", help=ch.HELP_INDEX_CODE,
     ),
     clean: bool = typer.Option(
         False, "--clean", help=ch.HELP_CLEAN_DB,
@@ -143,6 +143,9 @@ def start(
     ),
     no_confirm: bool = typer.Option(
         False, "--no-confirm", help=ch.HELP_NO_CONFIRM,
+    ),
+    yolo: bool = typer.Option(
+        False, "--yolo", "-y", help=ch.HELP_YOLO,
     ),
     batch_size: int | None = typer.Option(
         None, "--batch-size", min=1, help=ch.HELP_BATCH_SIZE,
@@ -211,6 +214,22 @@ def start(
 
     Supports both code and document GraphRAG with explicit indexing and querying options.
     """
+    import re
+
+    from codebase_rag.shared.query_router import QueryMode
+
+    # Yolo mode: --yolo or --no-confirm both enable it (CLI flags take precedence)
+    if yolo or no_confirm:
+        app_context.session.yolo_mode = True
+        app_context.session.confirm_edits = False
+    elif settings.CGR_YOLO_MODE:
+        # Environment variable (lower precedence than CLI flags)
+        app_context.session.yolo_mode = True
+        app_context.session.confirm_edits = False
+    else:
+        app_context.session.yolo_mode = False
+        app_context.session.confirm_edits = True
+
     # === CLI Flag Validation ===
     # Mode validation: non-code_only modes require --with-docs (or implied by --index-docs)
     effective_with_docs = with_docs or index_docs or index_all
@@ -254,7 +273,13 @@ CMD_START = (
     "Supports both code and document GraphRAG. "
     "Use --with-docs to enable document queries. "
     "Use --index-docs or --index-all to index before chatting. "
-    "Use --mode to specify query mode (default: code_only)."
+    "Use --mode to specify query mode (default: code_only). "
+    "Use --yolo/-y to disable edit confirmation prompts."
+)
+
+HELP_YOLO = (
+    "Enable yolo mode: disable edit confirmation prompts. "
+    "Equivalent to --no-confirm, with shorter flag."
 )
 
 HELP_WITH_DOCS = (
@@ -267,8 +292,8 @@ HELP_INDEX_DOCS = (
     "Implies --with-docs. Uses DocumentGraphUpdater with version caching."
 )
 
-HELP_INDEX_ALL = (
-    "Index both code (--update-graph) and documents (--index-docs) before starting. "
+    HELP_INDEX_ALL = (
+    "Index both code (--index-code) and documents (--index-docs) before starting. "
     "Convenience flag for first-time setup or major updates."
 )
 
@@ -436,7 +461,7 @@ from codebase_rag.config import load_cgrignore_patterns
 
 def _handle_indexing(
     repo_path: Path,
-    update_graph: bool,
+    index_code: bool,
     index_docs: bool,
     index_all: bool,
     with_docs: bool,
@@ -453,7 +478,7 @@ def _handle_indexing(
 
     Args:
         repo_path: Repository path
-        update_graph: --update-graph flag
+        index_code: --index-code flag
         index_docs: --index-docs flag
         index_all: --index-all flag
         with_docs: --with-docs flag
@@ -470,7 +495,7 @@ def _handle_indexing(
         Tuple of (code_indexed, docs_indexed, effective_with_docs)
 
     Raises:
-        typer.Exit: If code indexing fails with --update-graph flag (blocking)
+        typer.Exit: If code indexing fails with --index-code flag (blocking)
         Note: Document indexing failures are non-blocking, return docs_indexed=False
     """
     from codebase_rag.main import _info, style, _delete_hash_cache
@@ -483,7 +508,7 @@ def _handle_indexing(
     effective_with_docs = with_docs
 
     # Resolve effective flags
-    effective_update_graph = update_graph or index_all
+    effective_index_code = index_code or index_all
     effective_index_docs = index_docs or index_all
 
     # Implied --with-docs if indexing docs
@@ -491,7 +516,7 @@ def _handle_indexing(
         effective_with_docs = True
 
     # === Code Indexing ===
-    if effective_update_graph:
+    if effective_index_code:
         _info(style(cs.CLI_MSG_UPDATING_GRAPH.format(path=repo_path), cs.Color.GREEN))
 
         cgrignore = load_cgrignore_patterns(repo_path)
@@ -517,7 +542,7 @@ def _handle_indexing(
 
             updater = GraphUpdater(
                 ingestor=ingestor,
-                repo_path=str(repo_path),
+                repo_path=repo_path,
                 parsers=parsers,
                 queries=queries,
                 unignore_paths=unignore_paths,
@@ -1538,7 +1563,7 @@ tools.extend(document_analyzer_tools)  # Use extend() not append()
 ┌─────────────────────────────────────────────────────────────┐
 │              Indexing Phase (Optional)                      │
 │  ┌─────────────────────┐    ┌─────────────────────────┐    │
-│  │  --update-graph     │    │  --index-docs           │    │
+│  │  --index-code     │    │  --index-docs           │    │
 │  │  GraphUpdater       │    │  DocumentGraphUpdater   │    │
 │  │  MEMGRAPH:7687      │    │  DOC_MEMGRAPH:7688      │    │
 │  └─────────────────────┘    └─────────────────────────┘    │
@@ -1573,7 +1598,7 @@ tools.extend(document_analyzer_tools)  # Use extend() not append()
 | Error Scenario | Code Graph | Document Graph | User Impact |
 |---------------|-----------|----------------|-------------|
 | Connection failed | ❌ Block startup | ⚠️ Warn, continue code-only | Chat starts (code only) |
-| Indexing failed | ❌ Block if `--update-graph` | ⚠️ Warn, disable `--with-docs` | Chat starts (code only) |
+| Indexing failed | ❌ Block if `--index-code` | ⚠️ Warn, disable `--with-docs` | Chat starts (code only) |
 | Query failed | ⚠️ Show error, continue | ⚠️ Show error, continue | Session continues |
 | Mode invalid | ⚠️ Show error | ⚠️ Show error | Mode unchanged |
 | Freshness check failed | ⚠️ Warn, prompt for re-index | ⚠️ Warn, prompt for re-index | User decides |
@@ -1611,7 +1636,7 @@ tools.extend(document_analyzer_tools)  # Use extend() not append()
 ```bash
 # Existing workflows (all still work)
 cgr start
-cgr start --update-graph
+cgr start --index-code
 cgr start --repo-path /path/to/repo
 cgr index-docs --repo-path /path/to/repo
 cgr query-docs "How do I use the API?"
@@ -1741,7 +1766,7 @@ class TestIndexing:
 
     @patch('codebase_rag.cli.GraphUpdater')
     def test_update_graph_routes_to_code_backend(self, mock_updater_class):
-        """Verify --update-graph indexes to code graph."""
+        """Verify --index-code indexes to code graph."""
         # Verify GraphUpdater is called with MEMGRAPH_HOST:MEMGRAPH_PORT
         pass
 
@@ -1838,7 +1863,7 @@ class TestEndToEnd:
 - [ ] `cgr start` works without changes
 - [ ] `cgr start --with-docs` connects to both graphs
 - [ ] `cgr start --index-docs` indexes documents to correct port
-- [ ] `cgr start --update-graph` indexes code to correct port
+- [ ] `cgr start --index-code` indexes code to correct port
 - [ ] `cgr start --index-all` indexes both to correct ports
 - [ ] `/mode` command works in chat
 - [ ] Mode switches affect query routing
@@ -1882,7 +1907,7 @@ class TestEndToEnd:
 - [ ] `cgr start` works without changes
 - [ ] `cgr start --with-docs` connects to both graphs
 - [ ] `cgr start --index-docs` indexes documents to port 7688
-- [ ] `cgr start --update-graph` indexes code to port 7687
+- [ ] `cgr start --index-code` indexes code to port 7687
 - [ ] `cgr start --index-all` indexes both to correct ports
 - [ ] `/mode` command works in chat
 - [ ] Mode switches affect query routing
