@@ -135,33 +135,9 @@ class JSONMetadata(BaseModel):
     last_updated: str | None = None
 
 
-class JSONInputSchema(BaseModel):
-    metadata: JSONMetadata
-    entities: list[JSONEntity] = []
-    relationships: list[JSONRelationship] = []
-
-    @model_validator(mode="after")
-    def _validate_duplicate_entity_ids(self) -> JSONInputSchema:
-        entity_ids = [e.id for e in self.entities]
-        if len(entity_ids) != len(set(entity_ids)):
-            raise ValueError("Duplicate entity IDs found in input")
-        return self
-
-    @model_validator(mode="after")
-    def _validate_relationship_references(self) -> JSONInputSchema:
-        entity_ids = {e.id for e in self.entities}
-        for rel in self.relationships:
-            if rel.source_entity_id not in entity_ids:
-                raise ValueError(
-                    f"Relationship references non-existent source entity ID: {rel.source_entity_id}"
-                )
-            if rel.target_entity_id not in entity_ids:
-                raise ValueError(
-                    f"Relationship references non-existent target entity ID: {rel.target_entity_id}"
-                )
-        return self
-
-    model_config = ConfigDict(extra="forbid")
+# JSONInputSchema REMOVED:
+# Deprecated in favor of direct validation against ingestion_schema.json
+# as the single source of truth for input validation
 
 
 class IngestionResult(BaseModel):

@@ -18,8 +18,8 @@ def main():
     if not splitter.validate_subtasks(subtasks, prompt):
         return
 
-    # Step 2: Initialize sub-agent orchestrator with 5 workers
-    orchestrator = SubAgentOrchestrator(worker_count=5)
+    # Step 2: Initialize sub-agent orchestrator with 10 parallel workers (per optimization spec)
+    orchestrator = SubAgentOrchestrator(worker_count=10)
 
     # Step 3: Execute subtasks in parallel
     orchestrator.execute_tasks(subtasks)

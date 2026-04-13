@@ -8,13 +8,10 @@ from codebase_rag.orchestrator import (
 
 
 def main():
-    # Initialize orchestrator with base 5 workers, round-robin scheduling
+    # Initialize orchestrator with 10 parallel workers, round-robin scheduling (per optimization spec)
     orchestrator = SubAgentOrchestrator(
-        worker_count=5, scheduling_strategy="round-robin"
+        worker_count=10, scheduling_strategy="round-robin"
     )
-
-    # Add 10 additional parallel workers as requested
-    orchestrator.adjust_worker_count(adjustment=10)
 
     # Step 1: Split code review task into file-based subtasks
     splitter = TaskSplitter()

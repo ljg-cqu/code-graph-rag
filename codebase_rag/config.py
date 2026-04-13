@@ -417,7 +417,7 @@ class AppConfig(BaseSettings):
 
     # Parallel Sub-Agent Configuration
     CGR_MAX_PARALLEL_WORKERS: int = 20
-    CGR_DEFAULT_PARALLEL_WORKERS: int = 5
+    CGR_DEFAULT_PARALLEL_WORKERS: int = 10
     CGR_ALLOW_DYNAMIC_MAX_OVERRIDE: bool = True
     CGR_AUTO_SCALE_WORKERS: bool = True
     CGR_SUBAGENT_TIMEOUT: int = 300

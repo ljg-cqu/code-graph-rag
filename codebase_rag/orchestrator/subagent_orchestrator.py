@@ -93,8 +93,9 @@ class SubAgentOrchestrator:
                 self.config = settings
                 self.allow_write = settings.CGR_SUBAGENT_ALLOW_WRITE
 
-            def execute(self, prompt: str) -> str:
+            def execute(self, subtask: dict) -> str:
                 # Placeholder execution logic
+                prompt = subtask.get("prompt", "")
                 time.sleep(0.1)  # Simulate work
                 return f"Processed prompt: {prompt[:50]}..."
 
@@ -171,6 +172,7 @@ class SubAgentOrchestrator:
         logger.info(
             f"Starting parallel execution of {len(subtasks)} subtasks with {self.worker_count} workers (scheduling: {self.scheduling_strategy})"
         )
+        logger.info(f"✅ ACTIVE PARALLEL WORKERS: {self.worker_count} - running concurrently")
 
         # Track remaining tasks and retries
         remaining_tasks = subtasks.copy()
@@ -254,7 +256,7 @@ class SubAgentOrchestrator:
 
         try:
             # Execute the task with timeout
-            result = agent.execute(subtask["prompt"])
+            result = agent.execute(subtask)
             execution_time = time.time() - start_time
 
             if execution_time > timeout:

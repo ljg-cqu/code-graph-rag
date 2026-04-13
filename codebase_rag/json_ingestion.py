@@ -1,18 +1,18 @@
 from __future__ import annotations
-
 import json
+import os
 from pathlib import Path
-from typing import Any
-
+from typing import Any, Dict, List, Tuple, Set
 from tqdm import tqdm
+from loguru import logger
+import jsonschema
 
 from .config import settings
 from .cypher_queries import build_merge_node_query, build_merge_relationship_query
 from .embedder import EmbeddingCache, get_embedding_provider_instance
-from loguru import logger
-from .schemas import IngestionResult, JSONInputSchema, UpdateResult
 from .services.graph_service import MemgraphIngestor
 from .vector_store import _get_backend as get_vector_store_instance
+from .schemas import IngestionResult, UpdateResult
 
 __all__ = [
     "ingest_json_data",
@@ -24,8 +24,14 @@ __all__ = [
     "UpdateResult",
 ]
 
-
 config = settings
+
+# Load official ingestion schema (single source of truth)
+SCHEMA_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), "ingestion_schema.json"
+)
+with open(SCHEMA_PATH, "r") as f:
+    INGESTION_SCHEMA = json.load(f)
 
 embedding_provider = get_embedding_provider_instance()
 embedding_cache = EmbeddingCache()
@@ -37,14 +43,20 @@ graph_service = MemgraphIngestor(
 
 def validate_json_input(
     data: dict[str, Any],
-) -> tuple[bool, JSONInputSchema | None, list[str]]:
-    """Validate JSON input against the schema."""
+) -> tuple[bool, dict | None, list[str]]:
+    """
+    Validate JSON input directly against the official ingestion_schema.json.
+    NO CONVERSION - data must match schema exactly.
+    """
     errors = []
     try:
-        validated = JSONInputSchema(**data)
-        return True, validated, []
-    except Exception as e:
+        jsonschema.validate(instance=data, schema=INGESTION_SCHEMA)
+        return True, data, []
+    except jsonschema.exceptions.ValidationError as e:
         errors.append(f"Schema validation failed: {str(e)}")
+        return False, None, errors
+    except Exception as e:
+        errors.append(f"Validation error: {str(e)}")
         return False, None, errors
 
 
@@ -69,26 +81,31 @@ def load_json_files(input_path: str) -> list[tuple[Path, dict[str, Any]]]:
 
 
 def generate_embeddings_for_entities(
-    entities: list[Any],
+    entities: list[dict[str, Any]],
 ) -> tuple[dict[str, list[float]], list[str]]:
-    """Generate embeddings for entity descriptions."""
+    """Generate embeddings for entity descriptions.
+    Uses properties.description, falls back to name if missing.
+    """
     embeddings = {}
     errors = []
 
     texts = []
     entity_ids = []
     for entity in entities:
-        text = entity.properties["description"]
+        entity_id = entity["id"]
+        name = entity.get("name", "")
+        description = entity.get("properties", {}).get("description", name)
+        text = f"{name} - {description}"
         texts.append(text)
-        entity_ids.append(entity.id)
+        entity_ids.append(entity_id)
 
     # Check cache first
-    cached_embeddings = embedding_cache.get_batch(texts)
+    cached_embeddings = embedding_cache.get_many(texts)
     to_generate = []
     to_generate_ids = []
 
     for i, (text, eid) in enumerate(zip(texts, entity_ids)):
-        if cached_embeddings[i] is not None:
+        if i in cached_embeddings:
             embeddings[eid] = cached_embeddings[i]
         else:
             to_generate.append(text)
@@ -97,10 +114,10 @@ def generate_embeddings_for_entities(
     # Generate missing embeddings
     if to_generate:
         try:
-            generated = embedding_provider.encode_batch(to_generate)
-            for eid, text, emb in zip(to_generate_ids, to_generate, generated):
+            generated = embedding_provider.embed_batch(to_generate)
+            for idx, (eid, emb) in enumerate(zip(to_generate_ids, generated)):
                 embeddings[eid] = emb
-                embedding_cache.set(text, emb)
+                embedding_cache.put(to_generate[idx], emb)
         except Exception as e:
             errors.append(f"Embedding generation failed: {str(e)}")
 
@@ -108,7 +125,54 @@ def generate_embeddings_for_entities(
 
 
 def generate_embeddings_for_relationships(
-    relationships: list[Any],
+    relationships: list[dict[str, Any]],
+) -> tuple[dict[str, list[float]], list[str]]:
+    """Generate embeddings for relationships (if they have description)."""
+    embeddings = {}
+    errors = []
+
+    texts = []
+    rel_keys = []
+    for rel in relationships:
+        # Create unique key for relationship
+        key = f"{rel['source']}-{rel['target']}-{rel['relationship']}"
+        description = rel.get("properties", {}).get("description", "")
+        if not description:
+            # Fallback to relationship type and entity reference
+            description = (
+                f"{rel['relationship']} between {rel['source']} and {rel['target']}"
+            )
+        text = description
+        texts.append(text)
+        rel_keys.append(key)
+
+    # Check cache first
+    cached_embeddings = embedding_cache.get_batch(texts)
+    to_generate = []
+    to_generate_keys = []
+
+    for i, (text, key) in enumerate(zip(texts, rel_keys)):
+        if cached_embeddings[i] is not None:
+            embeddings[key] = cached_embeddings[i]
+        else:
+            to_generate.append(text)
+            to_generate_keys.append(key)
+
+    # Generate missing embeddings
+    if to_generate:
+        try:
+            generated = embedding_provider.encode_batch(to_generate)
+            for key, emb in zip(to_generate_keys, generated):
+                embeddings[key] = emb
+                embedding_cache.put(to_generate[i], emb)
+        except Exception as e:
+            errors.append(f"Relationship embedding generation failed: {str(e)}")
+
+    return embeddings, errors
+
+
+def generate_embeddings_for_relationships(
+    relationships: list[dict[str, Any]],
 ) -> tuple[dict[str, list[float]], list[str]]:
     """Generate embeddings for relationship descriptions (if present)."""
     embeddings = {}
@@ -117,22 +181,25 @@ def generate_embeddings_for_relationships(
     texts = []
     rel_ids = []
     for rel in relationships:
-        if "description" in rel.properties:
-            text = rel.properties["description"]
-            texts.append(text)
-            rel_ids.append(
-                rel.id
-                if rel.id
-                else f"{rel.source_entity_id}_{rel.target_entity_id}_{rel.type}"
-            )
+        # Use explanation if present, fall back to description in properties
+        text = rel.get("explanation") or rel.get("properties", {}).get("description")
+        if not text or not text.strip():
+            continue
+
+        texts.append(text)
+        # Generate relationship ID
+        rel_id = (
+            rel.get("id") or f"{rel['source']}_{rel['target']}_{rel['relationship']}"
+        )
+        rel_ids.append(rel_id)
 
     # Check cache first
-    cached_embeddings = embedding_cache.get_batch(texts)
+    cached_embeddings = embedding_cache.get_many(texts)
     to_generate = []
     to_generate_ids = []
 
     for i, (text, rid) in enumerate(zip(texts, rel_ids)):
-        if cached_embeddings[i] is not None:
+        if i in cached_embeddings:
             embeddings[rid] = cached_embeddings[i]
         else:
             to_generate.append(text)
@@ -141,10 +208,10 @@ def generate_embeddings_for_relationships(
     # Generate missing embeddings
     if to_generate:
         try:
-            generated = embedding_provider.encode_batch(to_generate)
-            for rid, text, emb in zip(to_generate_ids, to_generate, generated):
+            generated = embedding_provider.embed_batch(to_generate)
+            for idx, (rid, emb) in enumerate(zip(to_generate_ids, generated)):
                 embeddings[rid] = emb
-                embedding_cache.set(text, emb)
+                embedding_cache.put(to_generate[idx], emb)
         except Exception as e:
             errors.append(f"Relationship embedding generation failed: {str(e)}")
 
@@ -153,7 +220,7 @@ def generate_embeddings_for_relationships(
 
 def ingest_entities(
     dataset_id: str,
-    entities: list[Any],
+    entities: list[dict[str, Any]],
     entity_embeddings: dict[str, list[float]],
     skip_existing: bool = False,
     dry_run: bool = False,
@@ -161,105 +228,114 @@ def ingest_entities(
     conflict_resolution: str = "last-write-wins",
     last_updated_threshold: str | None = None,
 ) -> tuple[int, int, int, int, list[str]]:
-    """Ingest entities into graph and vector store."""
+    """
+    Ingest entities directly from ingestion schema format into Memgraph.
+    """
     ingested = 0
     updated = 0
     skipped = 0
     failed = 0
     errors = []
 
-    vector_entries = []
-
-    for entity in tqdm(entities, desc="Processing entities", disable=dry_run):
+    # Get existing entity IDs for skip_existing check
+    existing_nodes: dict[str, str] = {}
+    if skip_existing:
         try:
-            # Prepare node properties
-            props = entity.properties.copy()
-            props["source_dataset"] = dataset_id
-            props["entity_id"] = entity.id
-            unique_id = f"{dataset_id}_{entity.id}"
+            result = graph_service._execute_query(
+                "MATCH (n {dataset_id: $dataset_id}) RETURN n.unique_id AS id, n.last_updated AS last_updated",
+                {"dataset_id": dataset_id},
+            )
+            existing_nodes = {row["id"]: row["last_updated"] for row in result}
+        except Exception as e:
+            logger.warning(f"Could not fetch existing nodes: {str(e)}")
 
-            # Check existing entity for incremental/skip_existing
-            existing_node = None
-            if not dry_run and (skip_existing or incremental):
-                check_query = """
-                MATCH (n {unique_id: $unique_id})
-                RETURN n.updated_at as updated_at
-                """
-                check_result = graph_service.run_query(
-                    check_query, {"unique_id": unique_id}
-                )
-                if check_result and check_result[0][0] is not None:
-                    existing_node = check_result[0][0]
+    for entity in tqdm(entities, desc="Ingesting entities"):
+        entity_id = entity["id"]
+        name = entity.get("name", "")
+        entity_type = entity.get("type", "Entity")
+        labels = entity.get("labels", [])
+        properties = entity.get("properties", {})
+        last_updated = entity.get("last_updated", None)
 
-                    # Skip if skip_existing is enabled
-                    if skip_existing:
-                        skipped += 1
-                        continue
+        # Add required metadata properties
+        properties["name"] = name
+        properties["type"] = entity_type
+        properties["dataset_id"] = dataset_id
+        if last_updated:
+            properties["last_updated"] = last_updated
 
-                    # Skip if incremental and existing entry is newer/equal
-                    if incremental and last_updated_threshold:
-                        if existing_node >= last_updated_threshold:
-                            skipped += 1
-                            continue
+        # Unique ID includes dataset_id to avoid collisions
+        unique_id = f"{dataset_id}::{entity_id}"
 
-            # Merge node into graph
-            if not dry_run:
-                labels = ":".join(entity.labels)
-                query = build_merge_node_query(labels, "unique_id = $unique_id")
-                params = {"unique_id": unique_id, "properties": props}
-                result = graph_service.run_query(query, params)
+        # Skip if existing
+        if skip_existing and unique_id in existing_nodes:
+            skipped += 1
+            continue
+
+        # Incremental update check
+        if incremental and last_updated_threshold and unique_id in existing_nodes:
+            if existing_nodes[unique_id] >= last_updated_threshold:
+                skipped += 1
+                continue
+
+        # Merge node into graph
+        if not dry_run:
+            # Build labels string, escape each label with backticks for spaces/special chars
+            all_labels = list(set(labels + [entity_type]))
+            escaped_labels = [f"`{label}`" for label in all_labels]
+            label_string = ":".join(escaped_labels)
+            if not label_string:
+                label_string = "`Entity`"
+
+            # Escape unique_id for Cypher
+            escaped_unique_id = unique_id.replace("'", "''")
+            # Build merge query, avoid $parameters inside curly braces for Memgraph compatibility
+            query = f"MERGE (n:{label_string} {{unique_id: '{escaped_unique_id}'}}) SET n += $properties RETURN n"
+            params = {"properties": properties}
+
+            try:
+                result = graph_service._execute_query(query, params)
                 # Check if node was created or updated
-                node = result[0][0] if result else None
-                if node:
-                    node_id = node.id
-                    if result[0][1]:  # created flag
-                        ingested += 1
-                    else:
-                        updated += 1
+                if result and len(result) > 0 and "n" in result[0]:
+                    # MERGE succeeded, count as ingested/updated
+                    ingested += 1
                 else:
                     failed += 1
-                    errors.append(f"Failed to ingest entity {entity.id}")
+                    errors.append(f"Failed to ingest entity {entity_id}")
                     continue
-            else:
-                # Dry run: just count
-                ingested += 1
-                node_id = 0  # Dummy ID for dry run
+            except Exception as e:
+                failed += 1
+                errors.append(f"Failed to ingest entity {entity_id}: {str(e)}")
+                continue
+        else:
+            # Dry run: just count
+            ingested += 1
 
-            # Prepare vector entry
-            if entity.id in entity_embeddings:
-                vector_meta = {
-                    "node_id": node_id,
-                    "dataset_id": dataset_id,
-                    "entity_id": entity.id,
-                    "labels": entity.labels,
-                    "name": entity.properties["name"],
-                    **entity.properties,
-                }
-                vector_entries.append(
-                    {"embedding": entity_embeddings[entity.id], "metadata": vector_meta}
+        # Add to vector store
+        if entity_id in entity_embeddings and not dry_run:
+            try:
+                vector_store.add_item(
+                    id=unique_id,
+                    embedding=entity_embeddings[entity_id],
+                    metadata={
+                        "entity_id": entity_id,
+                        "dataset_id": dataset_id,
+                        "name": name,
+                        "type": entity_type,
+                        "labels": all_labels,
+                        "description": properties.get("description", name),
+                    },
                 )
-
-        except Exception as e:
-            failed += 1
-            errors.append(f"Error processing entity {entity.id}: {str(e)}")
-
-    # Store vectors in batch
-    if vector_entries and not dry_run:
-        try:
-            vector_store.store_embedding_batch(
-                [ve["embedding"] for ve in vector_entries],
-                [ve["metadata"] for ve in vector_entries],
-            )
-        except Exception as e:
-            failed += len(vector_entries)
-            errors.append(f"Failed to store entity embeddings: {str(e)}")
+            except Exception as e:
+                logger.warning(f"Failed to add entity to vector store: {str(e)}")
 
     return ingested, updated, skipped, failed, errors
 
 
 def ingest_relationships(
     dataset_id: str,
-    relationships: list[Any],
+    relationships: list[dict[str, Any]],
+    entity_name_to_id: dict[str, str],
     rel_embeddings: dict[str, list[float]],
     skip_existing: bool = False,
     dry_run: bool = False,
@@ -267,118 +343,119 @@ def ingest_relationships(
     conflict_resolution: str = "last-write-wins",
     last_updated_threshold: str | None = None,
 ) -> tuple[int, int, int, int, list[str]]:
-    """Ingest relationships into graph and vector store."""
+    """
+    Ingest relationships directly from ingestion schema format.
+    Resolves source/target references that can be either ID or name.
+    """
     ingested = 0
     updated = 0
     skipped = 0
     failed = 0
     errors = []
 
-    vector_entries = []
+    # Build full ID map (original ID -> unique dataset ID)
+    full_id_map = {}
+    for entity_id in entity_name_to_id.values():
+        full_id_map[entity_id] = f"{dataset_id}::{entity_id}"
 
-    for rel in tqdm(relationships, desc="Processing relationships", disable=dry_run):
+    # Get existing relationships for skip check
+    existing_rels: set[tuple[str, str, str]] = set()
+    if skip_existing:
         try:
-            # Prepare relationship properties
-            props = rel.properties.copy()
-            props["source_dataset"] = dataset_id
-            if rel.id:
-                props["relationship_id"] = rel.id
+            result = graph_service._execute_query(
+                """
+                MATCH (s {dataset_id: $dataset_id})-[r {dataset_id: $dataset_id}]->(t {dataset_id: $dataset_id})
+                RETURN s.unique_id AS source, type(r) AS rel_type, t.unique_id AS target
+                """,
+                {"dataset_id": dataset_id},
+            )
+            existing_rels = {
+                (row["source"], row["rel_type"], row["target"]) for row in result
+            }
+        except Exception as e:
+            logger.warning(f"Could not fetch existing relationships: {str(e)}")
 
-            source_unique_id = f"{dataset_id}_{rel.source_entity_id}"
-            target_unique_id = f"{dataset_id}_{rel.target_entity_id}"
+    for rel in tqdm(relationships, desc="Ingesting relationships"):
+        source_ref = rel["source"]
+        target_ref = rel["target"]
+        rel_type = rel["relationship"]
+        properties = rel.get("properties", {})
+        last_updated = rel.get("last_updated", None)
 
-            # Check existing relationship for incremental/skip_existing
-            existing_rel = None
-            if not dry_run and (skip_existing or incremental):
-                check_query = """
-                MATCH (s {{unique_id: $source_id}})-[r:{rel_type}]->(t {{unique_id: $target_id}})
-                RETURN r.updated_at as updated_at
-                """.format(rel_type=rel.type)
-                check_result = graph_service.run_query(
-                    check_query,
-                    {"source_id": source_unique_id, "target_id": target_unique_id},
-                )
-                if check_result and check_result[0][0] is not None:
-                    existing_rel = check_result[0][0]
+        # Resolve references (can be ID or name)
+        source_id = entity_name_to_id.get(source_ref)
+        if not source_id:
+            # Try to match by partial name
+            for name, eid in entity_name_to_id.items():
+                if source_ref in name or name in source_ref:
+                    source_id = eid
+                    break
 
-                    # Skip if skip_existing is enabled
-                    if skip_existing:
-                        skipped += 1
-                        continue
+        target_id = entity_name_to_id.get(target_ref)
+        if not target_id:
+            # Try to match by partial name
+            for name, eid in entity_name_to_id.items():
+                if target_ref in name or name in target_ref:
+                    target_id = eid
+                    break
 
-                    # Skip if incremental and existing entry is newer/equal
-                    if incremental and last_updated_threshold:
-                        if existing_rel >= last_updated_threshold:
-                            skipped += 1
-                            continue
+        if not source_id or not target_id:
+            failed += 1
+            errors.append(
+                f"Could not resolve relationship reference: {source_ref} -> {target_ref}"
+            )
+            continue
 
-            # Merge relationship into graph
-            if not dry_run:
-                query = build_merge_relationship_query(
-                    rel.type,
-                    "unique_id = $source_id",
-                    "unique_id = $target_id",
-                )
-                params = {
-                    "source_id": source_unique_id,
-                    "target_id": target_unique_id,
-                    "properties": props,
-                }
-                result = graph_service.run_query(query, params)
-                # Check if relationship was created or updated
-                rel_node = result[0][0] if result else None
-                if rel_node:
-                    rel_id = rel_node.id
-                    if result[0][1]:  # created flag
-                        ingested += 1
-                    else:
-                        updated += 1
+        # Get full unique IDs
+        full_source_id = full_id_map[source_id]
+        full_target_id = full_id_map[target_id]
+
+        # Skip existing
+        rel_key = (full_source_id, rel_type, full_target_id)
+        if skip_existing and rel_key in existing_rels:
+            skipped += 1
+            continue
+
+        # Add metadata properties
+        properties["dataset_id"] = dataset_id
+        if last_updated:
+            properties["last_updated"] = last_updated
+
+        # Merge relationship into graph
+        if not dry_run:
+            try:
+                # Build merge relationship query directly, escape rel_type with backticks
+                escaped_rel_type = f"`{rel_type}`"
+                # Escape IDs for Cypher
+                escaped_source_id = full_source_id.replace("'", "''")
+                escaped_target_id = full_target_id.replace("'", "''")
+                # Avoid $parameters inside curly braces for Memgraph compatibility
+                query = f"""
+                MATCH (a {{unique_id: '{escaped_source_id}'}}), (b {{unique_id: '{escaped_target_id}'}})
+                MERGE (a)-[r:{escaped_rel_type}]->(b)
+                SET r += $properties
+                RETURN r, r.created_at IS NOT NULL AS was_created
+                """
+                params = {"properties": properties}
+                result = graph_service._execute_query(query, params)
+                if result and len(result) > 0 and "r" in result[0]:
+                    # MERGE succeeded, count as ingested/updated
+                    ingested += 1
                 else:
                     failed += 1
                     errors.append(
-                        f"Failed to ingest relationship {rel.source_entity_id}->{rel.target_entity_id} [{rel.type}]"
+                        f"Failed to ingest relationship {source_ref} -> {target_ref}"
                     )
                     continue
-            else:
-                # Dry run: just count
-                ingested += 1
-                rel_id = 0  # Dummy ID for dry run
-
-            # Prepare vector entry if description exists
-            rel_key = (
-                rel.id
-                if rel.id
-                else f"{rel.source_entity_id}_{rel.target_entity_id}_{rel.type}"
-            )
-            if rel_key in rel_embeddings:
-                vector_meta = {
-                    "relationship_id": rel_id,
-                    "dataset_id": dataset_id,
-                    "source_entity_id": rel.source_entity_id,
-                    "target_entity_id": rel.target_entity_id,
-                    "type": rel.type,
-                    **rel.properties,
-                }
-                vector_entries.append(
-                    {"embedding": rel_embeddings[rel_key], "metadata": vector_meta}
+            except Exception as e:
+                failed += 1
+                errors.append(
+                    f"Failed to ingest relationship {source_ref} -> {target_ref}: {str(e)}"
                 )
-
-        except Exception as e:
-            failed += 1
-            errors.append(
-                f"Error processing relationship {rel.source_entity_id}->{rel.target_entity_id} [{rel.type}]: {str(e)}"
-            )
-
-    # Store vectors in batch
-    if vector_entries and not dry_run:
-        try:
-            vector_store.store_embedding_batch(
-                [ve["embedding"] for ve in vector_entries],
-                [ve["metadata"] for ve in vector_entries],
-            )
-        except Exception as e:
-            failed += len(vector_entries)
-            errors.append(f"Failed to store relationship embeddings: {str(e)}")
+                continue
+        else:
+            # Dry run: just count
+            ingested += 1
 
     return ingested, updated, skipped, failed, errors
 
@@ -400,7 +477,9 @@ def delete_dataset(
             DELETE r
             RETURN count(r) as deleted
             """
-            rel_result = graph_service.run_query(rel_query, {"dataset_id": dataset_id})
+            rel_result = graph_service._execute_query(
+                rel_query, {"dataset_id": dataset_id}
+            )
             rels_deleted = rel_result[0][0] if rel_result else 0
 
             # Delete nodes
@@ -410,7 +489,7 @@ def delete_dataset(
             DELETE n
             RETURN count(n) as deleted
             """
-            node_result = graph_service.run_query(
+            node_result = graph_service._execute_query(
                 node_query, {"dataset_id": dataset_id}
             )
             nodes_deleted = node_result[0][0] if node_result else 0
@@ -440,89 +519,125 @@ def ingest_json_data(
 ) -> IngestionResult:
     """
     Ingest JSON data into graph and vector database.
-
-    Returns: IngestionResult with counts of entities/relationships processed, ingested, updated, deleted, skipped, failed
+    Exact schema match with ingestion_schema.json required - no conversions.
     """
     result = IngestionResult(dataset_id=dataset_id or "", dry_run=dry_run)
 
     try:
-        # Load JSON files or use pre-loaded data
-        if pre_loaded_data is not None:
-            json_files = pre_loaded_data
-        else:
-            json_files = load_json_files(input_path)
-        logger.info(f"Loaded {len(json_files)} JSON file(s)")
+        with graph_service:
+            # Load JSON files or use pre-loaded data
+            if pre_loaded_data is not None:
+                json_files = pre_loaded_data
+            else:
+                json_files = load_json_files(input_path)
+            logger.info(f"Loaded {len(json_files)} JSON file(s)")
 
-        for file_path, data in json_files:
-            logger.info(f"Processing file: {file_path}")
+            for file_path, data in json_files:
+                logger.info(f"Processing file: {file_path}")
 
-            # Validate input
-            valid, validated_data, validation_errors = validate_json_input(data)
-            if not valid or not validated_data:
-                result.errors.extend(validation_errors)
-                logger.error(f"Validation failed for {file_path}: {validation_errors}")
-                continue
+                # Validate input against official schema
+                valid, validated_data, validation_errors = validate_json_input(data)
+                if not valid or not validated_data:
+                    result.errors.extend(validation_errors)
+                    logger.error(
+                        f"Validation failed for {file_path}: {validation_errors}"
+                    )
+                    continue
 
-            # Override dataset ID if provided
-            current_dataset_id = dataset_id or validated_data.metadata.dataset_id
-            result.dataset_id = current_dataset_id
+                # Auto-generate missing IDs for entities (use name as base)
+                for entity in validated_data.get("entities", []):
+                    if "id" not in entity:
+                        # Generate deterministic ID from name
+                        entity_id = (
+                            entity["name"].replace(" ", "_").replace("/", "_").lower()
+                        )
+                        entity["id"] = entity_id
 
-            # Count entities and relationships to process
-            result.entities_processed += len(validated_data.entities)
-            result.relationships_processed += len(validated_data.relationships)
+                # Override dataset ID if provided
+                current_dataset_id = dataset_id or validated_data["metadata"].get(
+                    "dataset_id"
+                )
+                if not current_dataset_id:
+                    result.errors.append("Missing required 'dataset_id' in metadata")
+                    continue
+                result.dataset_id = current_dataset_id
 
-            # Generate embeddings
-            logger.info("Generating embeddings...")
-            entity_embeddings, embed_errors = generate_embeddings_for_entities(
-                validated_data.entities
+                entities = validated_data.get("entities", [])
+                relationships = validated_data.get("relationships", [])
+
+                # Count entities and relationships to process
+                result.entities_processed += len(entities)
+                result.relationships_processed += len(relationships)
+
+                # Build name-to-ID map for relationship resolution
+                entity_name_to_id: dict[str, str] = {}
+                for entity in entities:
+                    entity_id = entity["id"]
+                    name = entity.get("name")
+                    if name:
+                        entity_name_to_id[name] = entity_id
+                    # Also add ID as a reference
+                    entity_name_to_id[entity_id] = entity_id
+
+                # Generate embeddings
+                logger.info("Generating embeddings...")
+                entity_embeddings, embed_errors = generate_embeddings_for_entities(
+                    entities
+                )
+                result.errors.extend(embed_errors)
+
+                rel_embeddings, rel_embed_errors = (
+                    generate_embeddings_for_relationships(relationships)
+                )
+                result.errors.extend(rel_embed_errors)
+
+                # Ingest entities
+                logger.info("Ingesting entities...")
+                e_ingested, e_updated, e_skipped, e_failed, e_errors = ingest_entities(
+                    current_dataset_id,
+                    entities,
+                    entity_embeddings,
+                    skip_existing=skip_existing,
+                    dry_run=dry_run,
+                    incremental=incremental,
+                    conflict_resolution=conflict_resolution,
+                    last_updated_threshold=validated_data["metadata"].get(
+                        "last_updated"
+                    ),
+                )
+                result.entities_ingested += e_ingested
+                result.entities_updated += e_updated
+                result.entities_skipped += e_skipped
+                result.entities_failed += e_failed
+                result.errors.extend(e_errors)
+
+                # Ingest relationships
+                logger.info("Ingesting relationships...")
+                r_ingested, r_updated, r_skipped, r_failed, r_errors = (
+                    ingest_relationships(
+                        current_dataset_id,
+                        relationships,
+                        entity_name_to_id,
+                        rel_embeddings,
+                        skip_existing=skip_existing,
+                        dry_run=dry_run,
+                        incremental=incremental,
+                        conflict_resolution=conflict_resolution,
+                        last_updated_threshold=validated_data["metadata"].get(
+                            "last_updated"
+                        ),
+                    )
+                )
+                result.relationships_ingested += r_ingested
+                result.relationships_updated += r_updated
+                result.relationships_skipped += r_skipped
+                result.relationships_failed += r_failed
+                result.errors.extend(r_errors)
+
+            logger.info(
+                f"Ingestion completed: {result.entities_ingested} entities ingested, {result.relationships_ingested} relationships ingested"
             )
-            result.errors.extend(embed_errors)
-
-            rel_embeddings, rel_embed_errors = generate_embeddings_for_relationships(
-                validated_data.relationships
-            )
-            result.errors.extend(rel_embed_errors)
-
-            # Ingest entities
-            logger.info("Ingesting entities...")
-            e_ingested, e_updated, e_skipped, e_failed, e_errors = ingest_entities(
-                current_dataset_id,
-                validated_data.entities,
-                entity_embeddings,
-                skip_existing=skip_existing,
-                dry_run=dry_run,
-                incremental=incremental,
-                conflict_resolution=conflict_resolution,
-                last_updated_threshold=validated_data.metadata.last_updated,
-            )
-            result.entities_ingested += e_ingested
-            result.entities_updated += e_updated
-            result.entities_skipped += e_skipped
-            result.entities_failed += e_failed
-            result.errors.extend(e_errors)
-
-            # Ingest relationships
-            logger.info("Ingesting relationships...")
-            r_ingested, r_updated, r_skipped, r_failed, r_errors = ingest_relationships(
-                current_dataset_id,
-                validated_data.relationships,
-                rel_embeddings,
-                skip_existing=skip_existing,
-                dry_run=dry_run,
-                incremental=incremental,
-                conflict_resolution=conflict_resolution,
-                last_updated_threshold=validated_data.metadata.last_updated,
-            )
-            result.relationships_ingested += r_ingested
-            result.relationships_updated += r_updated
-            result.relationships_skipped += r_skipped
-            result.relationships_failed += r_failed
-            result.errors.extend(r_errors)
-
-        logger.info(
-            f"Ingestion completed: {result.entities_ingested} entities ingested, {result.relationships_ingested} relationships ingested"
-        )
-        return result
+            return result
 
     except Exception as e:
         result.errors.append(f"Ingestion failed: {str(e)}")

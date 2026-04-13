@@ -32,7 +32,14 @@ class MemgraphBackend(VectorBackend):
     - Lower latency: no cross-database coordination
     """
 
-    LABELS_TO_INDEX = ("Function", "Method", "Class", "Interface", "Contract", "Library")
+    LABELS_TO_INDEX = (
+        "Function",
+        "Method",
+        "Class",
+        "Interface",
+        "Contract",
+        "Library",
+    )
 
     def __init__(self) -> None:
         self._conn: mgclient.Connection | None = None
@@ -66,9 +73,7 @@ class MemgraphBackend(VectorBackend):
             finally:
                 conn.close()
 
-    def _execute_query(
-        self, query: str, params: dict | None = None
-    ) -> list[dict]:
+    def _execute_query(self, query: str, params: dict | None = None) -> list[dict]:
         """Execute Cypher query and return results."""
         params = params or {}
         with self._get_connection() as conn:
@@ -142,9 +147,7 @@ class MemgraphBackend(VectorBackend):
         except Exception:
             pass  # Non-critical
 
-    def store_batch(
-        self, points: Sequence[tuple[int, list[float], str]]
-    ) -> int:
+    def store_batch(self, points: Sequence[tuple[int, list[float], str]]) -> int:
         """Store embeddings as node properties.
 
         Updates nodes by their internal ID, setting embedding property.
@@ -168,10 +171,7 @@ class MemgraphBackend(VectorBackend):
         """
 
         params = {
-            "points": [
-                {"node_id": nid, "embedding": emb}
-                for nid, emb, _ in points
-            ],
+            "points": [{"node_id": nid, "embedding": emb} for nid, emb, _ in points],
             "model_name": UNIXCODER_MODEL,
             "version": EMBEDDING_VERSION,
         }
@@ -349,9 +349,7 @@ class MemgraphBackend(VectorBackend):
         Args:
             new_dimension: New vector dimension for the indexes.
         """
-        logger.info(
-            f"Recreating vector indexes with dimension {new_dimension}..."
-        )
+        logger.info(f"Recreating vector indexes with dimension {new_dimension}...")
 
         for label in self.LABELS_TO_INDEX:
             index_name = f"{label.lower()}_embedding_index"
@@ -390,6 +388,32 @@ class MemgraphBackend(VectorBackend):
                 raise
 
         logger.info(f"Vector indexes recreated with dimension {new_dimension}")
+
+    def add_item(self, id: int, embedding: list[float], metadata: dict) -> None:
+        """Add a single entity embedding to the vector store.
+
+        Args:
+            id: Memgraph internal node ID
+            embedding: Vector embedding
+            metadata: Entity metadata
+        """
+        cypher = """
+        MATCH (n) WHERE id(n) = $node_id
+        SET n.embedding = $embedding,
+            n.embedding_model = $model_name,
+            n.embedding_version = $version
+        SET n += $metadata
+        """
+
+        params = {
+            "node_id": id,
+            "embedding": embedding,
+            "model_name": UNIXCODER_MODEL,
+            "version": EMBEDDING_VERSION,
+            "metadata": metadata,
+        }
+
+        self._execute_query(cypher, params)
 
     def close(self) -> None:
         """Close Memgraph connection."""

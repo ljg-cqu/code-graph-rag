@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Code-Graph RAG Custom Data Ingestion Schema",
-  "description": "Standard schema for ingesting custom entities, relationships, and metadata into Memgraph + vector database. Fully backwards compatible with existing formats, supports optional incremental update operations.",
+  "description": "Standard schema for ingesting custom entities, relationships, and metadata into Memgraph + vector database. Fully backwards compatible with existing formats, supports optional incremental update operations.\n\nTHIS IS THE SINGLE SOURCE OF TRUTH FOR ALL JSON INGESTION. NO TRANSFORMATIONS OR CONVERSIONS ARE APPLIED DURING INGESTION.",
   "type": "object",
   "required": ["entities"],
   "additionalProperties": true,

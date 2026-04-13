@@ -493,26 +493,9 @@ Import custom domain knowledge, entities, relationships, and metadata directly i
 ---
 
 #### 2. JSON Schema Specification (Deterministic, Fully Validated)
-All JSON input is strictly validated against this formal schema for deterministic behavior:
-```json
-{
-  "metadata": {
-    "dataset_id": "string (required, unique identifier for this dataset)",
-    "description": "string (optional, human-readable description)",
-    "version": "string (optional, version tag for this dataset)"
-  },
-  "entities": [
-    {
-      "id": "string (required, unique per dataset)",
-      "label": "string (required, node label/type)",
-      "properties": "object (required, key-value properties for the node)"
-    }
-  ],
-  "relationships": [
-    {
-      "from_id": "string (required, ID of source entity)",
-      "to_id": "string (required, ID of target entity)",
-      "type": "string (required, relationship type)",
+All JSON input is strictly validated against [ingestion_schema.json](./ingestion_schema.json) for deterministic behavior. NO TRANSFORMATIONS OR CONVERSIONS ARE PERFORMED DURING INGESTION - the schema is the single source of truth.
+
+For schema definition, see [ingestion_schema.json](./ingestion_schema.json).
       "properties": "object (optional, key-value properties for the relationship)"
     }
   ]
@@ -675,25 +658,33 @@ All CLI commands produce deterministic, consistent output and follow the same re
 ##### 🔹 `ingest-json` - Import custom JSON data
 | Flag | Description | Behavior |
 |------|-------------|----------|
-| `--input <path>` | Path to JSON file or directory of JSON files | Deterministic processing order: files sorted alphanumerically |
+| `INPUT_PATH` (positional) | Path to JSON file or directory of JSON files | Deterministic processing order: files sorted alphanumerically |
 | `--dataset-id <id>` | Unique dataset identifier for isolation | All imported data is tagged with this ID for independent management |
 | `--dry-run` | Preview changes without modifying graph | Outputs exact counts of nodes/relationships that would be created/updated |
-| `--conflict-strategy <strategy>` | Handling for duplicate entity IDs | Options: `overwrite` (default, update existing nodes), `skip` (keep existing), `fail` (abort on duplicates) |
-| `--batch-size <n>` | Number of operations per transaction | Default: 1000, adjust for large imports |
+| `--conflict-resolution <strategy>` | Handling for duplicate entity IDs | Options: `last-write-wins` (default), `highest-confidence-wins`, `manual-review` |
+| `--batch-size <n>` | Number of operations per transaction | Default: 100, adjust for large imports |
+| `--skip-existing` | Skip entities/relationships that already exist | Useful for incremental updates |
+| `--incremental` | Run incremental update, only process changed entities/relationships | Optimizes performance for large datasets |
 
 **Examples:**
 ```bash
 # Ingest a single file with default settings
-cgr ingest-json --repo-path /path/to/repo --input my_data.json
+cgr ingest-json my_data.json
 
 # Ingest directory with explicit conflict strategy
-cgr ingest-json --repo-path /path/to/repo --input ./custom_data/ --conflict-strategy skip
+cgr ingest-json ./custom_data/ --conflict-resolution highest-confidence-wins
 
 # Dry run to preview changes before applying
-cgr ingest-json --repo-path /path/to/repo --input my_data.json --dry-run
+cgr ingest-json my_data.json --dry-run
 
 # Import with custom dataset ID
-cgr ingest-json --repo-path /path/to/repo --input my_data.json --dataset-id business_rules
+cgr ingest-json my_data.json --dataset-id business_rules
+
+# Skip existing entities and relationships
+cgr ingest-json my_data.json --skip-existing
+
+# Incremental update for large datasets
+cgr ingest-json my_data.json --incremental --batch-size 500
 ```
 
 ##### 🔹 `delete-dataset` - Delete all data in a dataset
@@ -701,7 +692,10 @@ Atomic operation that removes all nodes and relationships belonging to a specifi
 
 ```bash
 # Delete all data in the "business_rules" dataset
-cgr delete-dataset --repo-path /path/to/repo --dataset-id business_rules
+cgr delete-dataset business_rules
+
+# Dry run to see what would be deleted
+cgr delete-dataset business_rules --dry-run
 ```
 *Operation is idempotent: deleting a non-existent dataset returns a success with 0 items deleted.*
 
