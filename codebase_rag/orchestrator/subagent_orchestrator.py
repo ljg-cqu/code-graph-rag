@@ -5,8 +5,9 @@ Manages sub-agent pool, task distribution, lifecycle, and execution guarantees.
 
 import signal
 import time
+import queue
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait
 from typing import Any
 
 from loguru import logger
@@ -34,7 +35,7 @@ class SubAgentOrchestrator:
             worker_count
         )
         self.agent_factory = agent_factory or self._default_agent_factory
-        self.agent_pool: list[Any] = []
+        self.agent_pool: queue.Queue[Any] = queue.Queue()
         self.running = False
         self._shutdown_called = False
 
@@ -46,7 +47,6 @@ class SubAgentOrchestrator:
                 f"Invalid scheduling strategy: {scheduling_strategy}. Valid options: {', '.join(valid_strategies)}"
             )
         self.scheduling_strategy = scheduling_strategy
-        self._round_robin_index = 0  # Counter for round-robin task assignment
 
         # Per-worker rate limiting to prevent LLM API throttling
         try:
@@ -98,12 +98,24 @@ class SubAgentOrchestrator:
                 time.sleep(0.1)  # Simulate work
                 return f"Processed prompt: {prompt[:50]}..."
 
+            def reset(self):
+                # Reset any mutable state between tasks
+                pass
+
         return SimpleSubAgent()
 
     def initialize_agents(self):
         """Initialize the pool of sub-agents."""
         logger.info(f"Initializing {self.worker_count} sub-agents")
-        self.agent_pool = [self.agent_factory() for _ in range(self.worker_count)]
+        # Clear existing queue first
+        while not self.agent_pool.empty():
+            try:
+                self.agent_pool.get_nowait()
+            except queue.Empty:
+                break
+        # Add new agents to queue
+        for _ in range(self.worker_count):
+            self.agent_pool.put(self.agent_factory())
         logger.info("Sub-agent pool initialized successfully")
 
     def execute_tasks(
@@ -122,17 +134,6 @@ class SubAgentOrchestrator:
             retry_attempts: Number of retries for failed tasks (defaults to config value)
             dry_run: If True, simulate execution without making actual LLM calls (for cost estimation)
         """
-        """
-        Execute a list of subtasks in parallel using the sub-agent pool.
-
-        Args:
-            subtasks: List of subtasks to execute
-            result_aggregator: Optional aggregator to use for results
-            retry_attempts: Number of retries for failed tasks (defaults to config value)
-
-        Returns:
-            ResultAggregator with all results and errors
-        """
         retry_attempts = retry_attempts or settings.CGR_SUBAGENT_RETRY_ATTEMPTS
         result_aggregator = result_aggregator or ResultAggregator()
         result_aggregator.set_total_subtasks(len(subtasks))
@@ -143,7 +144,7 @@ class SubAgentOrchestrator:
         )
 
         # Initialize agents if not already done
-        if not self.agent_pool:
+        if self.agent_pool.empty():
             self.initialize_agents()
 
         # Handle dry run mode
@@ -174,82 +175,58 @@ class SubAgentOrchestrator:
         # Track remaining tasks and retries
         remaining_tasks = subtasks.copy()
         retry_counts = {st["id"]: 0 for st in subtasks}
+        active_futures = {}
 
         try:
-            while remaining_tasks and self.running and not self._shutdown_called:
-                with ThreadPoolExecutor(max_workers=self.worker_count) as executor:
-                    # Map subtasks to future objects
-                    future_to_subtask = {}
+            # Single long-lived executor for all tasks (no per-batch recreation)
+            with ThreadPoolExecutor(max_workers=self.worker_count) as executor:
+                while (remaining_tasks or active_futures) and self.running and not self._shutdown_called:
+                    # Submit new tasks as agents become available (continuous parallelism)
+                    while remaining_tasks and not self.agent_pool.empty():
+                        # Round-robin: take next task from front of queue
+                        subtask = remaining_tasks.pop(0)
+                        agent = self.agent_pool.get()
+                        future = executor.submit(self._execute_subtask, agent, subtask)
+                        active_futures[future] = (subtask, agent)
 
-                    # Assign tasks based on scheduling strategy (only assign as many as available agents)
-                    num_tasks_to_assign = min(
-                        len(remaining_tasks), len(self.agent_pool)
-                    )
-                    tasks_to_assign = remaining_tasks[:num_tasks_to_assign]
+                    # Process completed tasks as they finish
+                    if active_futures:
+                        done, _ = wait(
+                            active_futures.keys(),
+                            return_when='FIRST_COMPLETED'
+                        )
 
-                    if self.scheduling_strategy == "round-robin":
-                        # Round-robin assignment: cycle through available agents
-                        for subtask in tasks_to_assign:
-                            # Get next agent in round-robin order
-                            agent = self.agent_pool[
-                                self._round_robin_index % len(self.agent_pool)
-                            ]
-                            self._round_robin_index += 1
-                            # Remove agent from pool temporarily during execution
-                            self.agent_pool.remove(agent)
-                            future = executor.submit(
-                                self._execute_subtask, agent, subtask
-                            )
-                            future_to_subtask[future] = (subtask, agent)
-                    else:
-                        # Default FIFO assignment
-                        for subtask in tasks_to_assign:
-                            agent = self.agent_pool.pop()
-                            future = executor.submit(
-                                self._execute_subtask, agent, subtask
-                            )
-                            future_to_subtask[future] = (subtask, agent)
+                        for future in done:
+                            subtask, agent = active_futures.pop(future)
 
-                    # Process completed futures
-                    for future in as_completed(future_to_subtask):
-                        subtask, agent = future_to_subtask[future]
+                            # Reset agent state before returning to pool
+                            if hasattr(agent, "reset") and callable(agent.reset):
+                                agent.reset()
+                            # Return agent to pool immediately for new tasks
+                            self.agent_pool.put(agent)
 
-                        # Return agent to pool
-                        self.agent_pool.append(agent)
-
-                        try:
-                            result, execution_time = future.result()
-                            result_aggregator.add_result(
-                                subtask, result, execution_time
-                            )
-                            # Remove from remaining tasks
-                            remaining_tasks = [
-                                st
-                                for st in remaining_tasks
-                                if st["id"] != subtask["id"]
-                            ]
-
-                        except Exception as e:
-                            error_msg = str(e)
-                            retry_count = retry_counts.get(subtask["id"], 0)
-
-                            if retry_count < retry_attempts:
-                                # Retry the task
-                                retry_counts[subtask["id"]] = retry_count + 1
-                                logger.warning(
-                                    f"Subtask {subtask['id']} failed (attempt {retry_count + 1}/{retry_attempts + 1}): {error_msg}. Retrying..."
+                            try:
+                                result, execution_time = future.result()
+                                result_aggregator.add_result(
+                                    subtask, result, execution_time
                                 )
-                            else:
-                                # Max retries reached, mark as failed
-                                result_aggregator.add_error(subtask, error_msg)
-                                remaining_tasks = [
-                                    st
-                                    for st in remaining_tasks
-                                    if st["id"] != subtask["id"]
-                                ]
-                                logger.error(
-                                    f"Subtask {subtask['id']} failed permanently after {retry_attempts + 1} attempts: {error_msg}"
-                                )
+                            except Exception as e:
+                                error_msg = str(e)
+                                retry_count = retry_counts.get(subtask["id"], 0)
+
+                                if retry_count < retry_attempts:
+                                    # Retry the task, add back to front for round-robin
+                                    retry_counts[subtask["id"]] = retry_count + 1
+                                    logger.warning(
+                                        f"Subtask {subtask['id']} failed (attempt {retry_count + 1}/{retry_attempts + 1}): {error_msg}. Retrying..."
+                                    )
+                                    remaining_tasks.insert(0, subtask)
+                                else:
+                                    # Max retries reached, mark as failed
+                                    result_aggregator.add_error(subtask, error_msg)
+                                    logger.error(
+                                        f"Subtask {subtask['id']} failed permanently after {retry_attempts + 1} attempts: {error_msg}"
+                                    )
 
         finally:
             self.running = False
@@ -302,7 +279,11 @@ class SubAgentOrchestrator:
         self.running = False
 
         # Clear agent pool
-        self.agent_pool.clear()
+        while not self.agent_pool.empty():
+            try:
+                self.agent_pool.get_nowait()
+            except queue.Empty:
+                break
         logger.info("Sub-agent orchestrator shutdown complete")
 
     def get_current_progress(self) -> dict[str, Any]:
@@ -323,15 +304,16 @@ class SubAgentOrchestrator:
 
         if new_count > self.worker_count:
             # Add new workers
-            new_workers = [
-                self.agent_factory() for _ in range(new_count - self.worker_count)
-            ]
-            self.agent_pool.extend(new_workers)
+            for _ in range(new_count - self.worker_count):
+                self.agent_pool.put(self.agent_factory())
         elif new_count < self.worker_count:
             # Remove excess workers
             remove_count = self.worker_count - new_count
             for _ in range(remove_count):
-                if self.agent_pool:
-                    self.agent_pool.pop()
+                if not self.agent_pool.empty():
+                    try:
+                        self.agent_pool.get_nowait()
+                    except queue.Empty:
+                        pass
 
         self.worker_count = new_count

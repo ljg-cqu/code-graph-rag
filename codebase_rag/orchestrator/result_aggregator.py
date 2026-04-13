@@ -3,6 +3,7 @@ Result Aggregator module for parallel sub-agent execution.
 Collects, deduplicates, and consolidates results from multiple sub-agents.
 """
 
+import threading
 from collections import defaultdict
 from typing import Any
 
@@ -16,6 +17,7 @@ class ResultAggregator:
     """
 
     def __init__(self):
+        self._lock = threading.Lock()
         self.results: list[dict[str, Any]] = []
         self.errors: list[dict[str, Any]] = []
         self.metadata: dict[str, Any] = {
@@ -36,10 +38,11 @@ class ResultAggregator:
             result: Result returned by the sub-agent
             execution_time: Time taken to execute the subtask in seconds
         """
-        self.results.append(
-            {"subtask": subtask, "result": result, "execution_time": execution_time}
-        )
-        self.metadata["completed_subtasks"] += 1
+        with self._lock:
+            self.results.append(
+                {"subtask": subtask, "result": result, "execution_time": execution_time}
+            )
+            self.metadata["completed_subtasks"] += 1
         logger.debug(f"Added result for subtask {subtask['id']}")
 
     def add_error(
@@ -53,10 +56,11 @@ class ResultAggregator:
             error: Error message
             execution_time: Time taken before failure in seconds
         """
-        self.errors.append(
-            {"subtask": subtask, "error": error, "execution_time": execution_time}
-        )
-        self.metadata["failed_subtasks"] += 1
+        with self._lock:
+            self.errors.append(
+                {"subtask": subtask, "error": error, "execution_time": execution_time}
+            )
+            self.metadata["failed_subtasks"] += 1
         logger.warning(f"Added error for subtask {subtask['id']}: {error}")
 
     def set_total_subtasks(self, count: int):
@@ -66,7 +70,8 @@ class ResultAggregator:
         Args:
             count: Total number of subtasks
         """
-        self.metadata["total_subtasks"] = count
+        with self._lock:
+            self.metadata["total_subtasks"] = count
 
     def set_total_execution_time(self, time: float):
         """
@@ -75,7 +80,8 @@ class ResultAggregator:
         Args:
             time: Total execution time in seconds
         """
-        self.metadata["total_execution_time"] = time
+        with self._lock:
+            self.metadata["total_execution_time"] = time
 
     def _deduplicate_results(self) -> list[dict[str, Any]]:
         """

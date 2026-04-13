@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import random
 import time
+import threading
 
 
 class TokenBucket:
@@ -23,6 +24,7 @@ class TokenBucket:
             rate: Tokens added per second.
             capacity: Maximum tokens in bucket.
         """
+        self._lock = threading.Lock()
         self._rate = rate
         self._capacity = capacity
         self._tokens = capacity
@@ -37,17 +39,18 @@ class TokenBucket:
         Returns:
             Time to wait before tokens are available (0 if immediate).
         """
-        now = time.monotonic()
-        elapsed = now - self._last_time
-        self._tokens = min(self._capacity, self._tokens + elapsed * self._rate)
-        self._last_time = now
+        with self._lock:
+            now = time.monotonic()
+            elapsed = now - self._last_time
+            self._tokens = min(self._capacity, self._tokens + elapsed * self._rate)
+            self._last_time = now
 
-        if self._tokens >= tokens:
-            self._tokens -= tokens
-            return 0.0
+            if self._tokens >= tokens:
+                self._tokens -= tokens
+                return 0.0
 
-        wait_time = (tokens - self._tokens) / self._rate
-        return wait_time
+            wait_time = (tokens - self._tokens) / self._rate
+            return wait_time
 
 
 class AdaptiveRateLimiter:
@@ -76,6 +79,7 @@ class AdaptiveRateLimiter:
         rpm_rate = requests_per_minute / 60.0
         tpm_rate = tokens_per_minute / 60.0
 
+        self._lock = threading.Lock()
         self.rpm_bucket = TokenBucket(rpm_rate, requests_per_minute)
         self.tpm_bucket = TokenBucket(tpm_rate, tokens_per_minute)
         self._consecutive_429s: int = 0
@@ -90,10 +94,7 @@ class AdaptiveRateLimiter:
         Returns:
             Total wait time in seconds.
         """
-        wait_time = max(
-            self.rpm_bucket.acquire(1),
-            self.tpm_bucket.acquire(tokens)
-        )
+        wait_time = max(self.rpm_bucket.acquire(1), self.tpm_bucket.acquire(tokens))
         if wait_time > 0:
             time.sleep(wait_time)
         return wait_time
@@ -107,26 +108,29 @@ class AdaptiveRateLimiter:
         Returns:
             Backoff time in seconds.
         """
-        self._consecutive_429s += 1
+        with self._lock:
+            self._consecutive_429s += 1
 
-        if retry_after and retry_after > 0:
-            backoff = retry_after
-        else:
-            # Exponential backoff with jitter
-            base = min(60.0, 2.0 ** self._consecutive_429s)
-            backoff = base + random.uniform(0, 1)
+            if retry_after and retry_after > 0:
+                backoff = retry_after
+            else:
+                # Exponential backoff with jitter
+                base = min(60.0, 2.0**self._consecutive_429s)
+                backoff = base + random.uniform(0, 1)
 
         time.sleep(backoff)
         return backoff
 
     def reset_429_counter(self) -> None:
         """Reset the consecutive 429 counter after a successful request."""
-        self._consecutive_429s = 0
+        with self._lock:
+            self._consecutive_429s = 0
 
     @property
     def is_circuit_open(self) -> bool:
         """Check if circuit breaker is open (too many consecutive 429s)."""
-        return self._consecutive_429s >= self._max_consecutive_429s
+        with self._lock:
+            return self._consecutive_429s >= self._max_consecutive_429s
 
 
 __all__ = ["TokenBucket", "AdaptiveRateLimiter"]
