@@ -275,7 +275,7 @@ def _delete_hash_cache(repo_path: Path) -> None:
 @app.command(help=ch.CMD_START)
 def start(
     repo_path: str | None = typer.Option(
-        None, "--repo-path", help=ch.HELP_REPO_PATH_RETRIEVAL
+        None, "-r", "--repo-path", help=ch.HELP_REPO_PATH_RETRIEVAL
     ),
     index_code: bool = typer.Option(
         False,
@@ -564,7 +564,7 @@ def start(
 @app.command(help=ch.CMD_INDEX)
 def index(
     repo_path: str | None = typer.Option(
-        None, "--repo-path", help=ch.HELP_REPO_PATH_INDEX
+        None, "-r", "--repo-path", help=ch.HELP_REPO_PATH_INDEX
     ),
     output_proto_dir: str = typer.Option(
         ...,
@@ -672,7 +672,7 @@ def optimize(
         help=ch.HELP_LANGUAGE_ARG,
     ),
     repo_path: str | None = typer.Option(
-        None, "--repo-path", help=ch.HELP_REPO_PATH_OPTIMIZE
+        None, "-r", "--repo-path", help=ch.HELP_REPO_PATH_OPTIMIZE
     ),
     reference_document: str | None = typer.Option(
         None,
@@ -938,6 +938,9 @@ def stats() -> None:
 
 @app.command(name=ch.CLICommandName.QUERY_DOCS, help=ch.CMD_QUERY_DOCS)
 def query_docs(
+    repo_path: str | None = typer.Option(
+        None, "-r", "--repo-path", help=ch.HELP_REPO_PATH_RETRIEVAL
+    ),
     query: str = typer.Argument(..., help=ch.HELP_QUERY),
     top_k: int = typer.Option(5, "--top-k", "-k", help=ch.HELP_TOP_K),
 ) -> None:
@@ -988,6 +991,9 @@ def query_docs(
 
 @app.command(name=ch.CLICommandName.QUERY_ALL, help=ch.CMD_QUERY_ALL)
 def query_all(
+    repo_path: str | None = typer.Option(
+        None, "-r", "--repo-path", help=ch.HELP_REPO_PATH_RETRIEVAL
+    ),
     query: str = typer.Argument(..., help=ch.HELP_QUERY),
     top_k: int = typer.Option(5, "--top-k", "-k", help=ch.HELP_TOP_K),
 ) -> None:
@@ -1053,6 +1059,9 @@ def query_all(
 
 @app.command(name=ch.CLICommandName.VALIDATE_SPEC, help=ch.CMD_VALIDATE_SPEC)
 def validate_spec(
+    repo_path: str | None = typer.Option(
+        None, "-r", "--repo-path", help=ch.HELP_REPO_PATH_RETRIEVAL
+    ),
     spec_path: str = typer.Argument(..., help=ch.HELP_SPEC_PATH),
     scope: str = typer.Option("all", "--scope", "-s", help=ch.HELP_SCOPE),
     max_cost: float = typer.Option(0.50, "--max-cost", "-c", help=ch.HELP_MAX_COST),
@@ -1161,6 +1170,9 @@ def validate_spec(
 
 @app.command(name=ch.CLICommandName.VALIDATE_DOC, help=ch.CMD_VALIDATE_DOC)
 def validate_doc(
+    repo_path: str | None = typer.Option(
+        None, "-r", "--repo-path", help=ch.HELP_REPO_PATH_RETRIEVAL
+    ),
     doc_path: str = typer.Argument(..., help=ch.HELP_DOC_PATH),
     scope: str = typer.Option("all", "--scope", "-s", help=ch.HELP_SCOPE),
     max_cost: float = typer.Option(0.50, "--max-cost", "-c", help=ch.HELP_MAX_COST),
@@ -1270,7 +1282,7 @@ def validate_doc(
 @app.command(name=ch.CLICommandName.INDEX_DOCS, help=ch.CMD_INDEX_DOCS)
 def index_docs(
     repo_path: str | None = typer.Option(
-        None, "--repo-path", help=ch.HELP_REPO_PATH_RETRIEVAL
+        None, "-r", "--repo-path", help=ch.HELP_REPO_PATH_RETRIEVAL
     ),
     clean: bool = typer.Option(
         False,

@@ -496,6 +496,8 @@ cgr start --repo-path /path/to/your/repo --index-docs --with-docs --mode documen
 | `--index-all` | Index both code and documents before starting chat |
 | `--mode` | Query routing mode (see below) |
 | `--doc-workspace` | Document workspace identifier (default: `default`) |
+| `--check-freshness/--no-check-freshness` | Check if indexed graphs are up-to-date and prompt for reindex if stale (default: enabled) |
+| `--index-timeout` | Maximum time in seconds for indexing operations (default: 300) |
 
 **In-chat mode switching:**
 
@@ -648,7 +650,8 @@ The agent will incorporate the guidance from your reference documents when sugge
 **Common CLI Arguments:**
 - `--orchestrator`: Specify provider:model for main operations (e.g., `google:gemini-2.0-flash-thinking-exp-01-21`, `ollama:llama3.2`)
 - `--cypher`: Specify provider:model for graph queries (e.g., `google:gemini-2.5-flash-lite-preview-06-17`, `ollama:codellama`)
-- `--repo-path`: Path to repository (defaults to current directory)
+- `--repo-path`, `-r`: Path to repository (defaults to current directory)
+- `--ask-agent`, `-a`: Run a single query in non-interactive mode and exit (outputs to stdout, useful for scripting)
 - `--batch-size`: Override Memgraph flush batch size (defaults to `MEMGRAPH_BATCH_SIZE` in settings)
 - `--reference-document`: Path to reference documentation (optimization only)
 - `--yolo`, `-y`: **YOLO Mode** - Disable all interactive confirmations (auto-approve all tool calls)
