@@ -37,7 +37,7 @@ embedding_provider = get_embedding_provider_instance()
 embedding_cache = EmbeddingCache()
 vector_store = get_vector_store_instance()
 graph_service = MemgraphIngestor(
-    host=settings.MEMGRAPH_HOST, port=settings.MEMGRAPH_PORT
+    host=settings.DOC_MEMGRAPH_HOST, port=settings.DOC_MEMGRAPH_PORT
 )
 
 
@@ -287,11 +287,9 @@ def ingest_entities(
             if not label_string:
                 label_string = "`Entity`"
 
-            # Escape unique_id for Cypher
-            escaped_unique_id = unique_id.replace("'", "''")
-            # Build merge query, avoid $parameters inside curly braces for Memgraph compatibility
-            query = f"MERGE (n:{label_string} {{unique_id: '{escaped_unique_id}'}}) SET n += $properties RETURN n"
-            params = {"properties": properties}
+            # Build merge query with parameters to avoid escaping issues
+            query = f"MERGE (n:{label_string} {{unique_id: $unique_id}}) SET n += $properties RETURN n"
+            params = {"unique_id": unique_id, "properties": properties}
 
             try:
                 result = graph_service._execute_query(query, params)
@@ -426,17 +424,18 @@ def ingest_relationships(
             try:
                 # Build merge relationship query directly, escape rel_type with backticks
                 escaped_rel_type = f"`{rel_type}`"
-                # Escape IDs for Cypher
-                escaped_source_id = full_source_id.replace("'", "''")
-                escaped_target_id = full_target_id.replace("'", "''")
-                # Avoid $parameters inside curly braces for Memgraph compatibility
+                # Build merge query with parameters to avoid escaping issues
                 query = f"""
-                MATCH (a {{unique_id: '{escaped_source_id}'}}), (b {{unique_id: '{escaped_target_id}'}})
+                MATCH (a {{unique_id: $source_id}}), (b {{unique_id: $target_id}})
                 MERGE (a)-[r:{escaped_rel_type}]->(b)
                 SET r += $properties
                 RETURN r, r.created_at IS NOT NULL AS was_created
                 """
-                params = {"properties": properties}
+                params = {
+                    "source_id": full_source_id,
+                    "target_id": full_target_id,
+                    "properties": properties,
+                }
                 result = graph_service._execute_query(query, params)
                 if result and len(result) > 0 and "r" in result[0]:
                     # MERGE succeeded, count as ingested/updated
