@@ -13,20 +13,20 @@ Parse and ingest a multi-language repository into the knowledge graph.
 **For the first repository (clean start):**
 
 ```bash
-cgr start --repo-path /path/to/repo1 --update-graph --clean
+cgr start --repo-path /path/to/repo1 --index-code --clean
 ```
 
 **For additional repositories (preserve existing data):**
 
 ```bash
-cgr start --repo-path /path/to/repo2 --update-graph
-cgr start --repo-path /path/to/repo3 --update-graph
+cgr start --repo-path /path/to/repo2 --index-code
+cgr start --repo-path /path/to/repo3 --index-code
 ```
 
 **Control Memgraph batch flushing:**
 
 ```bash
-cgr start --repo-path /path/to/repo --update-graph --batch-size 5000
+cgr start --repo-path /path/to/repo --index-code --batch-size 5000
 ```
 
 The system automatically detects and processes files for all supported languages.
@@ -69,7 +69,7 @@ cgr start --repo-path /path/to/your/repo \
 **Export during graph update:**
 
 ```bash
-cgr start --repo-path /path/to/repo --update-graph --clean -o my_graph.json
+cgr start --repo-path /path/to/repo --index-code --clean -o my_graph.json
 ```
 
 **Export existing graph without updating:**

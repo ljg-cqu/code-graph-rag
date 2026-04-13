@@ -300,19 +300,19 @@ Parse and ingest a multi-language repository into the knowledge graph:
 
 **For the first repository (clean start):**
 ```bash
-cgr start --repo-path /path/to/repo1 --update-graph --clean
+cgr start --repo-path /path/to/repo1 --index-code --clean
 ```
 
 **For additional repositories (preserve existing data):**
 ```bash
-cgr start --repo-path /path/to/repo2 --update-graph
-cgr start --repo-path /path/to/repo3 --update-graph
+cgr start --repo-path /path/to/repo2 --index-code
+cgr start --repo-path /path/to/repo3 --index-code
 ```
 
 **Control Memgraph batch flushing:**
 ```bash
 # Flush every 5,000 records instead of the default from settings
-cgr start --repo-path /path/to/repo --update-graph \
+cgr start --repo-path /path/to/repo --index-code \
   --batch-size 5000
 ```
 
@@ -422,7 +422,7 @@ For programmatic access and integration with other tools, you can export the ent
 
 **Export during graph update:**
 ```bash
-cgr start --repo-path /path/to/repo --update-graph --clean -o my_graph.json
+cgr start --repo-path /path/to/repo --index-code --clean -o my_graph.json
 ```
 
 **Export existing graph without updating:**

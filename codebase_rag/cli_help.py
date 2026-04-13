@@ -78,9 +78,9 @@ HELP_MAX_WAIT = (
     "Maximum wait time in seconds before forcing an update during continuous edits."
 )
 
-HELP_UPDATE_GRAPH = "Update the knowledge graph by parsing the repository"
+HELP_INDEX_CODE = "Index code assets from repository into the knowledge graph"
 HELP_CLEAN_DB = "Clean the database before updating (use when adding first repo)"
-HELP_OUTPUT_GRAPH = "Export graph to JSON file after updating (requires --update-graph)"
+HELP_OUTPUT_GRAPH = "Export graph to JSON file after updating (requires --index-code)"
 HELP_OUTPUT_PATH = "Output file path for the exported graph"
 HELP_OUTPUT_PROTO_DIR = (
     "Required. Path to the output directory for the protobuf index file(s)."
@@ -133,7 +133,9 @@ HELP_DOC_PATH = "Path to the document to validate"
 HELP_SCOPE = "Scope of validation: 'all', 'sections', or 'claims'"
 HELP_MAX_COST = "Maximum cost budget for validation in USD"
 HELP_DRY_RUN = "Estimate cost without running validation"
-HELP_CLEAN_DOC_DB = "Clean the document database before indexing (use when adding first documents)"
+HELP_CLEAN_DOC_DB = (
+    "Clean the document database before indexing (use when adding first documents)"
+)
 
 # Unified start command help text
 HELP_WITH_DOCS = (
@@ -145,7 +147,7 @@ HELP_INDEX_DOCS = (
     "Implies --with-docs. Uses DocumentGraphUpdater with version caching."
 )
 HELP_INDEX_ALL = (
-    "Index both code (--update-graph) and documents (--index-docs) before starting. "
+    "Index both code (--index-code) and documents (--index-docs) before starting. "
     "Convenience flag for first-time setup or major updates."
 )
 HELP_DOC_WORKSPACE = (

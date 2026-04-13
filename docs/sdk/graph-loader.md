@@ -17,7 +17,7 @@ cgr export -o my_graph.json
 Or export during graph update:
 
 ```bash
-cgr start --repo-path /path/to/repo --update-graph --clean -o my_graph.json
+cgr start --repo-path /path/to/repo --index-code --clean -o my_graph.json
 ```
 
 ## Load and Query

@@ -11,7 +11,7 @@ Export the entire knowledge graph to JSON for programmatic access and integratio
 **Export during graph update:**
 
 ```bash
-cgr start --repo-path /path/to/repo --update-graph --clean -o my_graph.json
+cgr start --repo-path /path/to/repo --index-code --clean -o my_graph.json
 ```
 
 **Export existing graph without updating:**

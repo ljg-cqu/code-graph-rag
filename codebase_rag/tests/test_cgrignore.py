@@ -301,7 +301,7 @@ class TestCgrignoreLoadedWithoutInteractiveSetup:
 
         result = self.runner.invoke(
             app,
-            ["start", "--update-graph", "--repo-path", str(tmp_path)],
+            ["start", "--index-code", "--repo-path", str(tmp_path)],
         )
 
         assert result.exit_code == 0, result.output
@@ -363,7 +363,7 @@ class TestCgrignoreLoadedWithoutInteractiveSetup:
             app,
             [
                 "start",
-                "--update-graph",
+                "--index-code",
                 "--repo-path",
                 str(tmp_path),
                 "--exclude",
@@ -396,7 +396,7 @@ class TestCgrignoreLoadedWithoutInteractiveSetup:
 
         result = self.runner.invoke(
             app,
-            ["start", "--update-graph", "--repo-path", str(tmp_path)],
+            ["start", "--index-code", "--repo-path", str(tmp_path)],
         )
 
         assert result.exit_code == 0, result.output

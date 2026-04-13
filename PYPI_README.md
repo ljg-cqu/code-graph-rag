@@ -36,7 +36,7 @@ The package installs a `cgr` command.
 ```bash
 docker compose up -d                       # start Memgraph
 cgr start --repo-path ./my-project \
-          --update-graph --clean           # parse & launch interactive chat
+          --index-code --clean           # parse & launch interactive chat
 ```
 
 **Index to protobuf for offline use:**

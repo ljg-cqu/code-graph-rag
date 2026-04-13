@@ -77,7 +77,7 @@ def _update_and_validate_models(orchestrator: str | None, cypher: str | None) ->
 
 def _handle_indexing(
     repo_path: Path,
-    update_graph: bool,
+    index_code: bool,
     index_docs: bool,
     index_all: bool,
     with_docs: bool,
@@ -94,7 +94,7 @@ def _handle_indexing(
 
     Args:
         repo_path: Repository path
-        update_graph: --update-graph flag
+        index_code: --index-code flag
         index_docs: --index-docs flag
         index_all: --index-all flag
         with_docs: --with-docs flag
@@ -111,7 +111,7 @@ def _handle_indexing(
         Tuple of (code_indexed, docs_indexed, effective_with_docs)
 
     Raises:
-        typer.Exit: If code indexing fails with --update-graph flag (blocking)
+        typer.Exit: If code indexing fails with --index-code flag (blocking)
         Note: Document indexing failures are non-blocking, return docs_indexed=False
     """
     code_indexed = False
@@ -119,7 +119,7 @@ def _handle_indexing(
     effective_with_docs = with_docs
 
     # Resolve effective flags
-    effective_update_graph = update_graph or index_all
+    effective_index_code = index_code or index_all
     effective_index_docs = index_docs or index_all
 
     # Implied --with-docs if indexing docs
@@ -127,7 +127,7 @@ def _handle_indexing(
         effective_with_docs = True
 
     # === Code Indexing ===
-    if effective_update_graph:
+    if effective_index_code:
         _info(style(cs.CLI_MSG_UPDATING_GRAPH.format(path=repo_path), cs.Color.GREEN))
 
         cgrignore = load_cgrignore_patterns(repo_path)
@@ -277,10 +277,10 @@ def start(
     repo_path: str | None = typer.Option(
         None, "--repo-path", help=ch.HELP_REPO_PATH_RETRIEVAL
     ),
-    update_graph: bool = typer.Option(
+    index_code: bool = typer.Option(
         False,
-        "--update-graph",
-        help=ch.HELP_UPDATE_GRAPH,
+        "--index-code",
+        help=ch.HELP_INDEX_CODE,
     ),
     clean: bool = typer.Option(
         False,
@@ -429,8 +429,8 @@ def start(
 
     target_repo_path = repo_path or settings.TARGET_REPO_PATH
 
-    # --output requires --update-graph or --index-all (which triggers code update)
-    if output and not (update_graph or index_all):
+    # --output requires --index-code or --index-all (which triggers code update)
+    if output and not (index_code or index_all):
         app_context.console.print(
             style(cs.CLI_ERR_OUTPUT_REQUIRES_UPDATE, cs.Color.RED)
         )
@@ -442,8 +442,13 @@ def start(
     if clean and not (update_graph or index_docs or index_all):
         effective_batch_size = settings.resolve_batch_size(batch_size)
         _info(style(cs.CLI_MSG_CLEANING_DB, cs.Color.YELLOW))
+        # Clean main code database
         with connect_memgraph(effective_batch_size) as ingestor:
             ingestor.clean_database()
+        # Clean document database
+        _info(style("Cleaning document database...", cs.Color.YELLOW))
+        with connect_doc_memgraph(effective_batch_size) as doc_ingestor:
+            doc_ingestor.clean_database()
         _delete_hash_cache(Path(target_repo_path))
         _info(style(cs.CLI_MSG_CLEAN_DONE, cs.Color.GREEN))
         return
@@ -455,7 +460,7 @@ def start(
     # === Handle indexing with new flags ===
     code_indexed, docs_indexed, effective_with_docs = _handle_indexing(
         repo_path=Path(target_repo_path),
-        update_graph=update_graph,
+        index_code=index_code,
         index_docs=index_docs,
         index_all=index_all,
         with_docs=with_docs,
@@ -514,7 +519,9 @@ def start(
                     )
                 )
                 try:
-                    from codebase_rag.document.document_updater import DocumentGraphUpdater
+                    from codebase_rag.document.document_updater import (
+                        DocumentGraphUpdater,
+                    )
 
                     updater = DocumentGraphUpdater(
                         host=settings.DOC_MEMGRAPH_HOST,
@@ -928,6 +935,7 @@ def stats() -> None:
 
 # Document GraphRAG CLI commands
 
+
 @app.command(name=ch.CLICommandName.QUERY_DOCS, help=ch.CMD_QUERY_DOCS)
 def query_docs(
     query: str = typer.Argument(..., help=ch.HELP_QUERY),
@@ -992,13 +1000,16 @@ def query_all(
 
     try:
         # Connect to both graphs
-        with MemgraphIngestor(
-            host=settings.MEMGRAPH_HOST,
-            port=settings.MEMGRAPH_PORT,
-        ) as code_graph, MemgraphIngestor(
-            host=settings.DOC_MEMGRAPH_HOST,
-            port=settings.DOC_MEMGRAPH_PORT,
-        ) as doc_graph:
+        with (
+            MemgraphIngestor(
+                host=settings.MEMGRAPH_HOST,
+                port=settings.MEMGRAPH_PORT,
+            ) as code_graph,
+            MemgraphIngestor(
+                host=settings.DOC_MEMGRAPH_HOST,
+                port=settings.DOC_MEMGRAPH_PORT,
+            ) as doc_graph,
+        ):
             query_router = QueryRouter(code_graph=code_graph, doc_graph=doc_graph)
 
             request = QueryRequest(
@@ -1057,13 +1068,16 @@ def validate_spec(
 
     try:
         # Connect to both graphs
-        with MemgraphIngestor(
-            host=settings.MEMGRAPH_HOST,
-            port=settings.MEMGRAPH_PORT,
-        ) as code_graph, MemgraphIngestor(
-            host=settings.DOC_MEMGRAPH_HOST,
-            port=settings.DOC_MEMGRAPH_PORT,
-        ) as doc_graph:
+        with (
+            MemgraphIngestor(
+                host=settings.MEMGRAPH_HOST,
+                port=settings.MEMGRAPH_PORT,
+            ) as code_graph,
+            MemgraphIngestor(
+                host=settings.DOC_MEMGRAPH_HOST,
+                port=settings.DOC_MEMGRAPH_PORT,
+            ) as doc_graph,
+        ):
             query_router = QueryRouter(code_graph=code_graph, doc_graph=doc_graph)
             validation_api = ValidationTriggerAPI(llm_provider="google")
 
@@ -1076,7 +1090,9 @@ def validate_spec(
                 dry_run=dry_run,
             )
 
-            trigger_result = asyncio.run(validation_api.request_validation(validation_request))
+            trigger_result = asyncio.run(
+                validation_api.request_validation(validation_request)
+            )
 
             if not trigger_result.accepted:
                 app_context.console.print(
@@ -1111,7 +1127,9 @@ def validate_spec(
             report = result.get("validation_report")
 
             if report:
-                border_style = "green" if report.get("accuracy_score", 0) > 0.8 else "yellow"
+                border_style = (
+                    "green" if report.get("accuracy_score", 0) > 0.8 else "yellow"
+                )
                 app_context.console.print(
                     Panel(
                         result.get("answer", "Validation complete"),
@@ -1158,13 +1176,16 @@ def validate_doc(
 
     try:
         # Connect to both graphs
-        with MemgraphIngestor(
-            host=settings.MEMGRAPH_HOST,
-            port=settings.MEMGRAPH_PORT,
-        ) as code_graph, MemgraphIngestor(
-            host=settings.DOC_MEMGRAPH_HOST,
-            port=settings.DOC_MEMGRAPH_PORT,
-        ) as doc_graph:
+        with (
+            MemgraphIngestor(
+                host=settings.MEMGRAPH_HOST,
+                port=settings.MEMGRAPH_PORT,
+            ) as code_graph,
+            MemgraphIngestor(
+                host=settings.DOC_MEMGRAPH_HOST,
+                port=settings.DOC_MEMGRAPH_PORT,
+            ) as doc_graph,
+        ):
             query_router = QueryRouter(code_graph=code_graph, doc_graph=doc_graph)
             validation_api = ValidationTriggerAPI(llm_provider="google")
 
@@ -1177,7 +1198,9 @@ def validate_doc(
                 dry_run=dry_run,
             )
 
-            trigger_result = asyncio.run(validation_api.request_validation(validation_request))
+            trigger_result = asyncio.run(
+                validation_api.request_validation(validation_request)
+            )
 
             if not trigger_result.accepted:
                 app_context.console.print(
@@ -1212,7 +1235,9 @@ def validate_doc(
             report = result.get("validation_report")
 
             if report:
-                border_style = "green" if report.get("accuracy_score", 0) > 0.8 else "yellow"
+                border_style = (
+                    "green" if report.get("accuracy_score", 0) > 0.8 else "yellow"
+                )
                 app_context.console.print(
                     Panel(
                         result.get("answer", "Validation complete"),
@@ -1296,9 +1321,7 @@ def index_docs(
         app_context.console.print(table)
 
     except Exception as e:
-        app_context.console.print(
-            style(f"Document indexing failed: {e}", cs.Color.RED)
-        )
+        app_context.console.print(style(f"Document indexing failed: {e}", cs.Color.RED))
         logger.exception("Document indexing failed")
         raise typer.Exit(1) from e
 

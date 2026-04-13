@@ -28,7 +28,7 @@ def _get_ingestor(mock_connect: MagicMock) -> MagicMock:
     return mock_connect.return_value.__enter__.return_value
 
 
-class TestCleanWithoutUpdateGraph:
+class TestCleanWithoutIndexCode:
     def test_clean_alone_wipes_database(
         self,
         mock_memgraph_connect: MagicMock,
@@ -116,7 +116,7 @@ class TestCleanWithoutUpdateGraph:
         assert cs.CLI_MSG_CLEAN_DONE in result.output
 
 
-class TestCleanWithUpdateGraph:
+class TestCleanWithIndexCode:
     @patch("codebase_rag.cli.GraphUpdater")
     @patch("codebase_rag.cli.load_parsers", return_value=({}, {}))
     @patch("codebase_rag.cli.load_cgrignore_patterns")
@@ -137,7 +137,7 @@ class TestCleanWithUpdateGraph:
 
         result = runner.invoke(
             app,
-            ["start", "--clean", "--update-graph", "--repo-path", str(tmp_path)],
+            ["start", "--clean", "--index-code", "--repo-path", str(tmp_path)],
         )
 
         assert result.exit_code == 0, result.output
@@ -160,7 +160,7 @@ class TestCleanWithUpdateGraph:
 
         result = runner.invoke(
             app,
-            ["start", "--clean", "--update-graph", "--repo-path", str(tmp_path)],
+            ["start", "--clean", "--index-code", "--repo-path", str(tmp_path)],
         )
 
         assert result.exit_code == 0, result.output
@@ -188,7 +188,7 @@ class TestCleanWithUpdateGraph:
 
         result = runner.invoke(
             app,
-            ["start", "--update-graph", "--repo-path", str(tmp_path)],
+            ["start", "--index-code", "--repo-path", str(tmp_path)],
         )
 
         assert result.exit_code == 0, result.output
@@ -222,7 +222,7 @@ class TestCleanWithUpdateGraph:
 
         result = runner.invoke(
             app,
-            ["start", "--clean", "--update-graph", "--repo-path", str(test_file)],
+            ["start", "--clean", "--index-code", "--repo-path", str(test_file)],
         )
 
         assert result.exit_code == 0, result.output
@@ -250,7 +250,7 @@ class TestCleanWithUpdateGraph:
 
         result = runner.invoke(
             app,
-            ["start", "--clean", "--update-graph", "--repo-path", str(tmp_path)],
+            ["start", "--clean", "--index-code", "--repo-path", str(tmp_path)],
         )
 
         assert result.exit_code == 0, result.output
@@ -277,7 +277,7 @@ class TestCleanWithUpdateGraph:
 
         result = runner.invoke(
             app,
-            ["start", "--update-graph", "--repo-path", str(tmp_path)],
+            ["start", "--index-code", "--repo-path", str(tmp_path)],
         )
 
         assert result.exit_code == 0, result.output

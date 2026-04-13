@@ -38,6 +38,7 @@ from .providers.base import get_provider_from_config
 from .services import QueryProtocol
 from .services.graph_service import MemgraphIngestor
 from .services.llm import CypherGenerator, create_rag_orchestrator
+from .shared.query_router import QueryMode
 from .tools.code_retrieval import CodeRetriever, create_code_retrieval_tool
 from .tools.codebase_query import create_query_tool
 from .tools.directory_lister import DirectoryLister, create_directory_lister_tool
@@ -382,9 +383,7 @@ def _create_configuration_table(
     table.add_row(cs.TABLE_ROW_QUERY_MODE, query_mode)
 
     # Yolo mode indicator
-    yolo_status = (
-        cs.YOLO_ENABLED if app_context.session.yolo_mode else cs.YOLO_DISABLED
-    )
+    yolo_status = cs.YOLO_ENABLED if app_context.session.yolo_mode else cs.YOLO_DISABLED
     table.add_row(cs.TABLE_ROW_YOLO_MODE, yolo_status)
 
     confirmation_status = (
@@ -730,7 +729,9 @@ def _handle_mode_command(
         return current_mode, f"Current mode: {current_mode.value}"
 
     if arg == cs.HELP_ARG:
-        return current_mode, """
+        return (
+            current_mode,
+            """
 Available modes:
   /mode code_only       - Query code graph only
   /mode document_only   - Query document graph only
@@ -738,7 +739,8 @@ Available modes:
   /mode code_vs_doc     - Validate code against docs
   /mode doc_vs_code     - Validate docs against code
   /mode                 - Show current mode
-"""
+""",
+        )
 
     try:
         new_mode = QueryMode(arg)
@@ -791,9 +793,7 @@ async def _run_interactive_loop(
 
         if _shutdown_requested:
             # Second interrupt - force exit regardless of state
-            app_context.console.print(
-                f"\n{style(cs.MSG_FORCE_EXIT, cs.Color.RED)}"
-            )
+            app_context.console.print(f"\n{style(cs.MSG_FORCE_EXIT, cs.Color.RED)}")
             try:
                 loop.remove_signal_handler(signal.SIGINT)
                 loop.remove_signal_handler(signal.SIGTERM)
@@ -833,7 +833,9 @@ async def _run_interactive_loop(
                 _shutdown_requested = False  # Reset for each iteration
 
                 if not initial_question or question != initial_question:
-                    question = await asyncio.to_thread(get_multiline_input, input_prompt)
+                    question = await asyncio.to_thread(
+                        get_multiline_input, input_prompt
+                    )
 
                 stripped_question = question.strip()
                 stripped_lower = stripped_question.lower()
@@ -1123,7 +1125,9 @@ def _check_graph_freshness(
                 )
                 if not result or result[0].get("count", 0) == 0:
                     docs_fresh = False
-                    warnings.append(f"No documents indexed for workspace '{doc_workspace}'")
+                    warnings.append(
+                        f"No documents indexed for workspace '{doc_workspace}'"
+                    )
                 else:
                     # Check version cache exists
                     cgr_dir = repo_path / ".cgr"
@@ -1491,14 +1495,16 @@ def _initialize_services_and_agent(
         index_docs_tool = create_index_documents_tool()
         graph_query_tool = create_graph_query_tool(query_router)
 
-        tools.extend([
-            query_document_graph_tool,
-            query_both_graphs_tool,
-            validate_code_tool,
-            validate_doc_tool,
-            index_docs_tool,
-            graph_query_tool,
-        ])
+        tools.extend(
+            [
+                query_document_graph_tool,
+                query_both_graphs_tool,
+                validate_code_tool,
+                validate_doc_tool,
+                index_docs_tool,
+                graph_query_tool,
+            ]
+        )
 
     confirmation_tool_names = ConfirmationToolNames(
         replace_code=file_editor_tool.name,
@@ -1574,7 +1580,10 @@ async def main_unified_async(
     if with_docs:
         # Connect to both graphs
         try:
-            with connect_both_graphs(batch_size, doc_workspace) as (code_graph, doc_graph):
+            with connect_both_graphs(batch_size, doc_workspace) as (
+                code_graph,
+                doc_graph,
+            ):
                 app_context.console.print(
                     style("✅ Connected to code graph", cs.Color.GREEN)
                 )
@@ -1632,9 +1641,7 @@ async def main_unified_async(
     else:
         # Code graph only (existing behavior)
         async with connect_memgraph(batch_size) as ingestor:
-            app_context.console.print(
-                style(cs.MSG_CONNECTED_MEMGRAPH, cs.Color.GREEN)
-            )
+            app_context.console.print(style(cs.MSG_CONNECTED_MEMGRAPH, cs.Color.GREEN))
             app_context.console.print(
                 Panel(
                     style(cs.MSG_CHAT_INSTRUCTIONS, cs.Color.YELLOW),
