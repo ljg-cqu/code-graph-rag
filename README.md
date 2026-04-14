@@ -49,6 +49,7 @@ An accurate Retrieval-Augmented Generation (RAG) system that analyzes multi-lang
 
 ## Latest News 🔥
 
+- **📄 Automatic JSON Ingestion on Start**: Automatically ingest valid JSON data when running `cgr start --index-docs` or `--index-all`, with parallel processing (up to 32 workers), automatic schema validation against [ingestion_schema.json](./ingestion_schema.json), and workspace isolation.
 - **🌐 Global Filesystem Access**: Full support for reading, writing, and editing files anywhere on the host filesystem, with configurable security controls and approval workflows.
 - **📚 Document GraphRAG Support**: Full document indexing and querying now available! Index Markdown, PDF, DOCX files and query them alongside your code. Features include bidirectional validation (code vs docs), merged queries across both graphs, and specification compliance checking.
 - **💎 Solidity Support**: Full Solidity smart contract support added — contracts, interfaces, libraries, events, modifiers, state variables, fallback/receive functions, and call graph analysis for blockchain development.
@@ -484,7 +485,8 @@ Import custom domain knowledge, entities, relationships, and metadata directly i
 | **Entity Management** | Import custom entities with any schema/label; reference auto-parsed code entities via qualified names |
 | **Relationship Management** | Add custom relationships between any nodes (custom ↔ custom, custom ↔ auto-parsed) |
 | **Dataset Isolation** | All imported data is grouped by `dataset_id` for independent management, updates, and deletion |
-| **Ingest Control** | Dry run previews, batch processing of multiple files, idempotent operation, configurable conflict resolution |
+| **Ingest Control** | Dry run previews, batch processing of multiple files, idempotent operation, configurable conflict resolution, automatic ingestion during `cgr start` document indexing |
+| **Parallel Processing** | Up to 32 parallel workers, FIFO/round-robin scheduling, per-file locking for deterministic parallel ingestion with no duplicate processing |
 | **Vector Integration** | Embeddings automatically generated for all text properties for semantic search |
 | **API Access** | First-class Python API + CLI support for programmatic and interactive usage |
 
@@ -561,6 +563,19 @@ The `cgr start` command now supports unified dual-graph querying from a single s
 # Index both code and documents, then query both graphs
 cgr start --repo-path /path/to/your/repo --index-all --with-docs --mode both_merged
 
+# Index both code and documents + automatically ingest valid JSON files from repo root (10 parallel workers by default)
+cgr start --repo-path /path/to/your/repo --index-all --with-docs --mode both_merged --ingest-json
+
+# Index docs + ingest specific JSON file with 20 parallel workers and round-robin scheduling
+cgr start --repo-path /path/to/your/repo --index-docs --with-docs --ingest-json \
+  --json-path ./custom_domain_data.json \
+  --json-workers 20 \
+  --scheduling-strategy round-robin
+
+# Index docs + ingest JSON, fail immediately if any file is invalid
+cgr start --repo-path /path/to/your/repo --index-docs --with-docs --ingest-json \
+  --json-fail-on-invalid
+
 # Connect to document graph for specification validation
 cgr start --repo-path /path/to/your/repo --with-docs --mode code_vs_doc
 
@@ -579,6 +594,11 @@ cgr start --repo-path /path/to/your/repo --index-docs --with-docs --mode documen
 | `--doc-workspace` | Document workspace identifier (default: `default`) |
 | `--check-freshness/--no-check-freshness` | Check if indexed graphs are up-to-date and prompt for reindex if stale (default: enabled) |
 | `--index-timeout` | Maximum time in seconds for indexing operations (default: 300) |
+| `--ingest-json` | **NEW**: Enable automatic JSON ingestion during document indexing (validates against [ingestion_schema.json](./ingestion_schema.json)) |
+| `--json-path` | **NEW**: Path to specific JSON file or directory to ingest (defaults to scanning repo root for all *.json files if not provided) |
+| `--json-skip-invalid/--json-fail-on-invalid` | **NEW**: Skip invalid JSON files (default) or fail ingestion if any JSON file fails schema validation |
+| `--json-workers` | **NEW**: Number of parallel workers for JSON ingestion (default: 10, max: 32) |
+| `--scheduling-strategy` | **NEW**: Scheduling strategy for parallel JSON ingestion: `fifo` (default) or `round-robin` (even distribution of large/small files across workers) |
 
 **In-chat mode switching:**
 
@@ -654,6 +674,8 @@ cgr validate-doc \
 <a id="json-data-ingestion-commands"></a>
 #### JSON Data Ingestion Commands (Logical, Deterministic)
 All CLI commands produce deterministic, consistent output and follow the same reliability guarantees as the Python API.
+
+> **💡 Automatic Ingestion Tip**: You can also run JSON ingestion automatically during document indexing by adding the `--ingest-json` flag to `cgr start` (see [Unified start flags](#unified-start-flags)). This eliminates the need to run a separate `cgr ingest-json` command after indexing docs.
 
 ##### 🔹 `ingest-json` - Import custom JSON data
 | Flag | Description | Behavior |

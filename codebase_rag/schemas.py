@@ -142,6 +142,10 @@ class JSONMetadata(BaseModel):
 
 class IngestionResult(BaseModel):
     dataset_id: str
+    # New fields for file tracking
+    files_processed: int = 0
+    files_skipped: int = 0
+    # Existing fields unchanged
     entities_processed: int = 0
     entities_ingested: int = 0
     entities_updated: int = 0

@@ -89,6 +89,11 @@ def _handle_indexing(
     doc_workspace: str = "default",
     output: str | None = None,
     index_timeout: int = 300,
+    # New JSON ingestion parameters (backward compatible defaults)
+    ingest_json: bool = False,
+    json_path: str | None = None,
+    json_skip_invalid: bool = True,
+    json_parallel_workers: int = 10,
 ) -> tuple[bool, bool, bool]:
     """Handle code and document indexing before chat.
 
@@ -212,6 +217,59 @@ def _handle_indexing(
                 table.add_row(key.replace("_", " ").title(), str(value))
 
             app_context.console.print(table)
+            
+            # === Optional JSON Ingestion (10 Parallel Workers by Default) ===
+            if ingest_json:
+                from codebase_rag.json_ingestion import ingest_json_data
+                _info(style(f"Running JSON ingestion with {json_parallel_workers} parallel workers...", cs.Color.CYAN))
+                
+                # Resolve target JSON path (user-provided or repo root)
+                target_json_path = json_path or str(repo_path)
+                
+                try:
+                    ingest_result = ingest_json_data(
+                        input_path=target_json_path,
+                        skip_existing=True,
+                        batch_size=batch_size,
+                        incremental=True,
+                        dry_run=False,
+                        parallel_workers=json_parallel_workers,
+                        # Link ingested data to active document workspace for isolation
+                        metadata_override={"workspace": doc_workspace}
+                    )
+                    
+                    # Display ingestion results
+                    json_table = Table(
+                        title=style("JSON Ingestion Results", cs.Color.GREEN),
+                        show_header=True,
+                        header_style=f"{cs.StyleModifier.BOLD} {cs.Color.MAGENTA}",
+                    )
+                    json_table.add_column("Metric", style=cs.Color.CYAN)
+                    json_table.add_column("Count", style=cs.Color.YELLOW, justify="right")
+                    
+                    json_table.add_row("JSON files processed", str(getattr(ingest_result, 'files_processed', 0)))
+                    json_table.add_row("Invalid JSON files skipped", str(getattr(ingest_result, 'files_skipped', 0)))
+                    json_table.add_row("Entities ingested", str(ingest_result.entities_ingested))
+                    json_table.add_row("Relationships ingested", str(ingest_result.relationships_ingested))
+                    
+                    app_context.console.print(json_table)
+                    
+                    # Handle errors if fail-on-invalid is enabled
+                    if ingest_result.errors:
+                        _info(style(f"Ingestion completed with {len(ingest_result.errors)} errors:", cs.Color.YELLOW))
+                        for error in ingest_result.errors[:15]:
+                            _info(style(f"  - {error}", cs.Color.RED))
+                        if len(ingest_result.errors) > 15:
+                            _info(style(f"  ... and {len(ingest_result.errors) - 15} more errors", cs.Color.RED))
+                            
+                        if not json_skip_invalid:
+                            raise ValueError(f"JSON ingestion failed (--json-fail-on-invalid enabled)")
+                            
+                except Exception as e:
+                    _info(style(f"JSON ingestion failed: {e}", cs.Color.RED))
+                    if not json_skip_invalid:
+                        raise typer.Exit(1) from e
+            
             docs_indexed = True
 
         except Exception as e:
@@ -405,6 +463,29 @@ def start(
         "--scheduling-strategy",
         help="Task scheduling strategy for parallel workers: 'fifo' (default) or 'round-robin'",
     ),
+    # New JSON ingestion flags (disabled by default, backward compatible)
+    ingest_json: bool = typer.Option(
+        False,
+        "--ingest-json",
+        help="Enable automatic JSON ingestion during document indexing (validates against ingestion_schema.json)",
+    ),
+    json_path: str | None = typer.Option(
+        None,
+        "--json-path",
+        help="Path to specific JSON file or directory to ingest (defaults to repo root scanning for *.json if not provided)",
+    ),
+    json_skip_invalid: bool = typer.Option(
+        True,
+        "--json-skip-invalid/--json-fail-on-invalid",
+        help="Skip invalid JSON files (default) or fail ingestion if any JSON is invalid",
+    ),
+    json_parallel_workers: int = typer.Option(
+        10,
+        "--json-workers",
+        min=1,
+        max=32,
+        help="Number of parallel workers for JSON ingestion (default: 10, max: 32)",
+    ),
 ) -> None:
     import re
 
@@ -510,6 +591,11 @@ def start(
         doc_workspace=doc_workspace,
         output=output,
         index_timeout=index_timeout,
+        # Pass new JSON ingestion parameters
+        ingest_json=ingest_json,
+        json_path=json_path,
+        json_skip_invalid=json_skip_invalid,
+        json_parallel_workers=json_parallel_workers,
     )
 
     # If only updating graph (no chat), return

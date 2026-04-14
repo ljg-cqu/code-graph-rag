@@ -515,12 +515,110 @@ def ingest_json_data(
     dry_run: bool = False,
     conflict_resolution: str = "last-write-wins",
     pre_loaded_data: list[tuple[Path, dict[str, Any]]] | None = None,
+    # New parameters (backward compatible defaults)
+    parallel_workers: int = 1,
+    metadata_override: dict[str, Any] | None = None,
 ) -> IngestionResult:
     """
     Ingest JSON data into graph and vector database.
     Exact schema match with ingestion_schema.json required - no conversions.
+    Supports parallel processing with configurable worker count.
     """
+    import concurrent.futures
     result = IngestionResult(dataset_id=dataset_id or "", dry_run=dry_run)
+    
+    def process_single_file(file_data: tuple[Path, dict[str, Any]]) -> tuple[IngestionResult, bool]:
+        """Process a single JSON file, returns partial result and success flag"""
+        file_path, data = file_data
+        partial_result = IngestionResult(dataset_id=dataset_id or "", dry_run=dry_run)
+        
+        # Validate input against official schema
+        valid, validated_data, validation_errors = validate_json_input(data)
+        if not valid or not validated_data:
+            partial_result.errors.extend(validation_errors)
+            logger.error(f"Validation failed for {file_path}: {validation_errors}")
+            return partial_result, False
+        
+        # Apply metadata overrides if provided (e.g. workspace ID)
+        if metadata_override:
+            if "metadata" not in validated_data:
+                validated_data["metadata"] = {}
+            validated_data["metadata"].update(metadata_override)
+        
+        # Auto-generate missing IDs for entities (use name as base)
+        for entity in validated_data.get("entities", []):
+            if "id" not in entity:
+                # Generate deterministic ID from name
+                entity_id = entity["name"].replace(" ", "_").replace("/", "_").lower()
+                entity["id"] = entity_id
+        
+        # Override dataset ID if provided
+        current_dataset_id = dataset_id or validated_data["metadata"].get("dataset_id")
+        if not current_dataset_id:
+            partial_result.errors.append("Missing required 'dataset_id' in metadata")
+            return partial_result, False
+        partial_result.dataset_id = current_dataset_id
+        
+        entities = validated_data.get("entities", [])
+        relationships = validated_data.get("relationships", [])
+        
+        # Count entities and relationships to process
+        partial_result.entities_processed += len(entities)
+        partial_result.relationships_processed += len(relationships)
+        
+        # Build name-to-ID map for relationship resolution
+        entity_name_to_id: dict[str, str] = {}
+        for entity in entities:
+            entity_id = entity["id"]
+            name = entity.get("name")
+            if name:
+                entity_name_to_id[name] = entity_id
+            # Also add ID as a reference
+            entity_name_to_id[entity_id] = entity_id
+        
+        # Generate embeddings
+        entity_embeddings, embed_errors = generate_embeddings_for_entities(entities)
+        partial_result.errors.extend(embed_errors)
+        
+        rel_embeddings, rel_embed_errors = generate_embeddings_for_relationships(relationships)
+        partial_result.errors.extend(rel_embed_errors)
+        
+        # Ingest entities
+        e_ingested, e_updated, e_skipped, e_failed, e_errors = ingest_entities(
+            current_dataset_id,
+            entities,
+            entity_embeddings,
+            skip_existing=skip_existing,
+            dry_run=dry_run,
+            incremental=incremental,
+            conflict_resolution=conflict_resolution,
+            last_updated_threshold=validated_data["metadata"].get("last_updated"),
+        )
+        partial_result.entities_ingested += e_ingested
+        partial_result.entities_updated += e_updated
+        partial_result.entities_skipped += e_skipped
+        partial_result.entities_failed += e_failed
+        partial_result.errors.extend(e_errors)
+        
+        # Ingest relationships
+        r_ingested, r_updated, r_skipped, r_failed, r_errors = ingest_relationships(
+            current_dataset_id,
+            relationships,
+            entity_name_to_id,
+            rel_embeddings,
+            skip_existing=skip_existing,
+            dry_run=dry_run,
+            incremental=incremental,
+            conflict_resolution=conflict_resolution,
+            last_updated_threshold=validated_data["metadata"].get("last_updated"),
+        )
+        partial_result.relationships_ingested += r_ingested
+        partial_result.relationships_updated += r_updated
+        partial_result.relationships_skipped += r_skipped
+        partial_result.relationships_failed += r_failed
+        partial_result.errors.extend(r_errors)
+        
+        return partial_result, True
 
     try:
         with graph_service:
@@ -529,112 +627,65 @@ def ingest_json_data(
                 json_files = pre_loaded_data
             else:
                 json_files = load_json_files(input_path)
-            logger.info(f"Loaded {len(json_files)} JSON file(s)")
-
-            for file_path, data in json_files:
-                logger.info(f"Processing file: {file_path}")
-
-                # Validate input against official schema
-                valid, validated_data, validation_errors = validate_json_input(data)
-                if not valid or not validated_data:
-                    result.errors.extend(validation_errors)
-                    logger.error(
-                        f"Validation failed for {file_path}: {validation_errors}"
-                    )
-                    continue
-
-                # Auto-generate missing IDs for entities (use name as base)
-                for entity in validated_data.get("entities", []):
-                    if "id" not in entity:
-                        # Generate deterministic ID from name
-                        entity_id = (
-                            entity["name"].replace(" ", "_").replace("/", "_").lower()
-                        )
-                        entity["id"] = entity_id
-
-                # Override dataset ID if provided
-                current_dataset_id = dataset_id or validated_data["metadata"].get(
-                    "dataset_id"
-                )
-                if not current_dataset_id:
-                    result.errors.append("Missing required 'dataset_id' in metadata")
-                    continue
-                result.dataset_id = current_dataset_id
-
-                entities = validated_data.get("entities", [])
-                relationships = validated_data.get("relationships", [])
-
-                # Count entities and relationships to process
-                result.entities_processed += len(entities)
-                result.relationships_processed += len(relationships)
-
-                # Build name-to-ID map for relationship resolution
-                entity_name_to_id: dict[str, str] = {}
-                for entity in entities:
-                    entity_id = entity["id"]
-                    name = entity.get("name")
-                    if name:
-                        entity_name_to_id[name] = entity_id
-                    # Also add ID as a reference
-                    entity_name_to_id[entity_id] = entity_id
-
-                # Generate embeddings
-                logger.info("Generating embeddings...")
-                entity_embeddings, embed_errors = generate_embeddings_for_entities(
-                    entities
-                )
-                result.errors.extend(embed_errors)
-
-                rel_embeddings, rel_embed_errors = (
-                    generate_embeddings_for_relationships(relationships)
-                )
-                result.errors.extend(rel_embed_errors)
-
-                # Ingest entities
-                logger.info("Ingesting entities...")
-                e_ingested, e_updated, e_skipped, e_failed, e_errors = ingest_entities(
-                    current_dataset_id,
-                    entities,
-                    entity_embeddings,
-                    skip_existing=skip_existing,
-                    dry_run=dry_run,
-                    incremental=incremental,
-                    conflict_resolution=conflict_resolution,
-                    last_updated_threshold=validated_data["metadata"].get(
-                        "last_updated"
-                    ),
-                )
-                result.entities_ingested += e_ingested
-                result.entities_updated += e_updated
-                result.entities_skipped += e_skipped
-                result.entities_failed += e_failed
-                result.errors.extend(e_errors)
-
-                # Ingest relationships
-                logger.info("Ingesting relationships...")
-                r_ingested, r_updated, r_skipped, r_failed, r_errors = (
-                    ingest_relationships(
-                        current_dataset_id,
-                        relationships,
-                        entity_name_to_id,
-                        rel_embeddings,
-                        skip_existing=skip_existing,
-                        dry_run=dry_run,
-                        incremental=incremental,
-                        conflict_resolution=conflict_resolution,
-                        last_updated_threshold=validated_data["metadata"].get(
-                            "last_updated"
-                        ),
-                    )
-                )
-                result.relationships_ingested += r_ingested
-                result.relationships_updated += r_updated
-                result.relationships_skipped += r_skipped
-                result.relationships_failed += r_failed
-                result.errors.extend(r_errors)
+            logger.info(f"Loaded {len(json_files)} JSON file(s) for ingestion")
+            
+            # Process files in parallel if workers > 1
+            if parallel_workers > 1 and len(json_files) > 1:
+                logger.info(f"Processing files with {parallel_workers} parallel workers")
+                with concurrent.futures.ThreadPoolExecutor(max_workers=parallel_workers) as executor:
+                    # Submit all files for processing
+                    future_to_file = {executor.submit(process_single_file, file_data): file_data for file_data in json_files}
+                    
+                    # Aggregate results as they complete
+                    for future in concurrent.futures.as_completed(future_to_file):
+                        partial_result, success = future.result()
+                        if success:
+                            result.files_processed += 1
+                        else:
+                            result.files_skipped += 1
+                        
+                        # Merge partial results into main result
+                        result.entities_processed += partial_result.entities_processed
+                        result.entities_ingested += partial_result.entities_ingested
+                        result.entities_updated += partial_result.entities_updated
+                        result.entities_skipped += partial_result.entities_skipped
+                        result.entities_failed += partial_result.entities_failed
+                        result.relationships_processed += partial_result.relationships_processed
+                        result.relationships_ingested += partial_result.relationships_ingested
+                        result.relationships_updated += partial_result.relationships_updated
+                        result.relationships_skipped += partial_result.relationships_skipped
+                        result.relationships_failed += partial_result.relationships_failed
+                        result.errors.extend(partial_result.errors)
+                        if partial_result.dataset_id and not result.dataset_id:
+                            result.dataset_id = partial_result.dataset_id
+            else:
+                # Single worker processing (original logic, backward compatible)
+                logger.info("Processing files with single worker")
+                for file_path, data in json_files:
+                    partial_result, success = process_single_file((file_path, data))
+                    if success:
+                        result.files_processed += 1
+                    else:
+                        result.files_skipped += 1
+                    
+                    # Merge partial result
+                    result.entities_processed += partial_result.entities_processed
+                    result.entities_ingested += partial_result.entities_ingested
+                    result.entities_updated += partial_result.entities_updated
+                    result.entities_skipped += partial_result.entities_skipped
+                    result.entities_failed += partial_result.entities_failed
+                    result.relationships_processed += partial_result.relationships_processed
+                    result.relationships_ingested += partial_result.relationships_ingested
+                    result.relationships_updated += partial_result.relationships_updated
+                    result.relationships_skipped += partial_result.relationships_skipped
+                    result.relationships_failed += partial_result.relationships_failed
+                    result.errors.extend(partial_result.errors)
+                    if partial_result.dataset_id and not result.dataset_id:
+                        result.dataset_id = partial_result.dataset_id
 
             logger.info(
-                f"Ingestion completed: {result.entities_ingested} entities ingested, {result.relationships_ingested} relationships ingested"
+                f"Ingestion completed: {result.files_processed} files processed, {result.files_skipped} files skipped, "
+                f"{result.entities_ingested} entities ingested, {result.relationships_ingested} relationships ingested"
             )
             return result
 
