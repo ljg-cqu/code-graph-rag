@@ -672,7 +672,16 @@ class GraphUpdater:
                     continue
                 lang_spec = LANGUAGE_SPECS[lang]
                 parser = Parser()
-                parser.language = lang_lib()
+                # Handle both callable loaders and raw objects, wrap with Language if needed
+                if callable(lang_lib):
+                    lang_obj = lang_lib()
+                else:
+                    lang_obj = lang_lib
+                if isinstance(lang_obj, Language):
+                    language = lang_obj
+                else:
+                    language = Language(lang_obj)
+                parser.language = language
                 parsers[lang] = parser
             except Exception as e:
                 logger.debug(f"Skipping parser for {lang.value}: {str(e)}")

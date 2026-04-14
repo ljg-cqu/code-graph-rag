@@ -34,16 +34,18 @@ class DynamicConcurrencyController:
         # Worker pools
         self.permanent_workers: List[SubAgentWorker] = []
         self.burst_workers: List[SubAgentWorker] = []
-        # Initialize permanent base workers on startup (zero cold start)
-        self._initialize_permanent_workers()
 
-    def _initialize_permanent_workers(self) -> None:
+    def _initialize_permanent_workers(self, agent_factory: callable) -> None:
         """Initialize 10 permanent base workers that run continuously for zero cold start overhead."""
+        from codebase_rag.orchestrator.subagent_orchestrator import (
+            SubAgentWorker,
+        )  # Import here to avoid circular import
+
         logger.info(
             f"Initializing {self.PERMANENT_BASE_WORKERS} permanent base workers"
         )
         for i in range(self.PERMANENT_BASE_WORKERS):
-            worker = SubAgentWorker(worker_id=f"base-{i}")
+            worker = SubAgentWorker(worker_id=f"base-{i}", agent=agent_factory())
             self.permanent_workers.append(worker)
 
     def _get_cpu_core_limit(self) -> int:
@@ -117,16 +119,43 @@ class DynamicConcurrencyController:
         )
         return effective
 
-    def scale_workers(self, target_count: int) -> List[SubAgentWorker]:
+    def adjust_worker_count(self, current_count: int, adjustment: int) -> int:
+        """
+        Adjust worker count up or down within allowed limits.
+
+        Args:
+            current_count: Current number of workers
+            adjustment: Number of workers to add (positive) or remove (negative)
+
+        Returns:
+            New adjusted worker count
+        """
+        max_allowed_workers = min(self.MAX_TOTAL_WORKERS, self._get_cpu_core_limit())
+        new_count = max(1, min(current_count + adjustment, max_allowed_workers))
+        logger.info(f"Adjusted worker count from {current_count} to {new_count}")
+        return new_count
+
+    def scale_workers(
+        self, target_count: int, agent_factory: callable
+    ) -> List[SubAgentWorker]:
         """
         Scale worker pool to target count: use permanent base workers first, then spin up burst workers as needed.
 
         Args:
             target_count: Target number of active workers
+            agent_factory: Factory function to create new agent instances for workers
 
         Returns:
             List of active workers ready for assignment
         """
+        from codebase_rag.orchestrator.subagent_orchestrator import (
+            SubAgentWorker,
+        )  # Import here to avoid circular import
+
+        # Initialize permanent workers if not done yet
+        if not self.permanent_workers:
+            self._initialize_permanent_workers(agent_factory)
+
         active_workers = self.permanent_workers.copy()
         required_burst = max(0, target_count - self.PERMANENT_BASE_WORKERS)
 
@@ -136,7 +165,7 @@ class DynamicConcurrencyController:
             add_count = required_burst - current_burst_count
             logger.info(f"Spinning up {add_count} additional burst workers")
             for i in range(current_burst_count, current_burst_count + add_count):
-                worker = SubAgentWorker(worker_id=f"burst-{i}")
+                worker = SubAgentWorker(worker_id=f"burst-{i}", agent=agent_factory())
                 self.burst_workers.append(worker)
 
         # Return exactly target count of workers

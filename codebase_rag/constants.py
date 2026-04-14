@@ -528,6 +528,10 @@ class RelationshipType(StrEnum):
     INCLUDES_FILE = "INCLUDES_FILE"
 
 
+# Alias for shorter usage
+RelType = RelationshipType
+
+
 NODE_PROJECT = NodeLabel.PROJECT
 
 EXCLUDED_DEPENDENCY_NAMES = frozenset({"python", "php"})

@@ -18,6 +18,40 @@ from .dynamic_concurrency_controller import DynamicConcurrencyController
 from .result_aggregator import ResultAggregator
 
 
+class SubAgentWorker:
+    """
+    Worker wrapper for sub-agent instances.
+    Manages worker lifecycle, task execution, and state.
+    """
+
+    def __init__(self, worker_id: str, agent: Any = None):
+        self.worker_id = worker_id
+        self.agent = agent
+        self.busy = False
+        self.last_task_time = 0.0
+
+    def execute(self, subtask: dict[str, Any]) -> tuple[Any, float]:
+        """Execute a subtask using this worker's agent."""
+        self.busy = True
+        try:
+            start_time = time.time()
+            result = self.agent.execute(subtask)
+            execution_time = time.time() - start_time
+            self.last_task_time = time.time()
+            return result, execution_time
+        finally:
+            self.busy = False
+
+    def reset_agent(self, new_agent: Any) -> None:
+        """Reset the agent instance for this worker."""
+        self.agent = new_agent
+
+    def shutdown(self) -> None:
+        """Shutdown the worker and clean up resources."""
+        self.busy = False
+        self.agent = None
+
+
 class SubAgentOrchestrator:
     """
     Orchestrates parallel execution of sub-agent tasks.

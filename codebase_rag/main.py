@@ -1026,8 +1026,14 @@ async def _run_interactive_loop(
                         # Check for role-specific override first (highest precedence)
                         if settings.ORCHESTRATOR_CONTEXT_WINDOW:
                             max_context = settings.ORCHESTRATOR_CONTEXT_WINDOW
+                        elif model_override_config:
+                            # Get from model override if set
+                            provider = get_provider_from_config(model_override_config)
+                            max_context = provider.get_model_context_window(
+                                model_override_config.model_id
+                            )
                         else:
-                            # Get from active orchestrator config
+                            # Get from default orchestrator config
                             provider = get_provider_from_config(
                                 settings.active_orchestrator_config
                             )

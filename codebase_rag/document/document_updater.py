@@ -101,12 +101,8 @@ class DocumentGraphUpdater:
         cgr_dir.mkdir(parents=True, exist_ok=True)
 
         self.version_tracker = ContentVersionTracker()
-        self.version_cache = VersionCache(
-            cgr_dir / "doc_versions.json"
-        )
-        self.dead_letter_queue = DeadLetterQueue(
-            cgr_dir / "doc_errors"
-        )
+        self.version_cache = VersionCache(cgr_dir / "doc_versions.json")
+        self.dead_letter_queue = DeadLetterQueue(cgr_dir / "doc_errors")
         self.chunker = SemanticDocumentChunker()
 
         # Cache embedding provider to avoid recreation per document
@@ -211,16 +207,22 @@ class DocumentGraphUpdater:
                     elif result == "skipped":
                         stats["skipped"] += 1
                 except ExtractionException as e:
-                    logger.error(f"Failed to process {doc_path}: {type(e).__name__}: {e}")
+                    logger.error(
+                        f"Failed to process {doc_path}: {type(e).__name__}: {e}"
+                    )
                     stats["failed"] += 1
                     # Remove stale version cache entry so retry will re-process
                     self.version_cache.remove(str(doc_path))
                     try:
                         self.dead_letter_queue.enqueue(e.to_extraction_error())
                     except Exception as dlq_error:
-                        logger.warning(f"Could not enqueue error for {doc_path}: {dlq_error}")
+                        logger.warning(
+                            f"Could not enqueue error for {doc_path}: {dlq_error}"
+                        )
                 except Exception as e:
-                    logger.error(f"Failed to process {doc_path}: {type(e).__name__}: {e}")
+                    logger.error(
+                        f"Failed to process {doc_path}: {type(e).__name__}: {e}"
+                    )
                     stats["failed"] += 1
                     # Remove stale version cache entry so retry will re-process
                     self.version_cache.remove(str(doc_path))
@@ -233,7 +235,9 @@ class DocumentGraphUpdater:
                             )
                         )
                     except Exception as dlq_error:
-                        logger.warning(f"Could not enqueue error for {doc_path}: {dlq_error}")
+                        logger.warning(
+                            f"Could not enqueue error for {doc_path}: {dlq_error}"
+                        )
 
             # Flush all pending nodes and relationships
             try:
@@ -252,11 +256,11 @@ class DocumentGraphUpdater:
             try:
                 section_result = ingestor.fetch_all(
                     "MATCH (s:Section {workspace: $ws}) RETURN count(s) as count",
-                    {"ws": self.workspace}
+                    {"ws": self.workspace},
                 )
                 chunk_result = ingestor.fetch_all(
                     "MATCH (c:Chunk {workspace: $ws}) RETURN count(c) as count",
-                    {"ws": self.workspace}
+                    {"ws": self.workspace},
                 )
                 if section_result and len(section_result) > 0:
                     stats["sections_created"] = section_result[0].get("count", 0)
@@ -302,22 +306,32 @@ class DocumentGraphUpdater:
             # Process documents with async extraction but sequential graph writes
             for doc_path in documents:
                 try:
-                    result = await self._process_document_async(doc_path, ingestor, force=force)
+                    result = await self._process_document_async(
+                        doc_path, ingestor, force=force
+                    )
                     if result == "indexed":
                         stats["indexed"] += 1
                     elif result == "skipped":
                         stats["skipped"] += 1
                 except ExtractionException as e:
-                    logger.error(f"Failed to process {doc_path}: {type(e).__name__}: {e}")
+                    logger.error(
+                        f"Failed to process {doc_path}: {type(e).__name__}: {e}"
+                    )
                     stats["failed"] += 1
                     # Remove stale version cache entry so retry will re-process
                     self.version_cache.remove(str(doc_path))
                     try:
-                        await asyncio.to_thread(self.dead_letter_queue.enqueue, e.to_extraction_error())
+                        await asyncio.to_thread(
+                            self.dead_letter_queue.enqueue, e.to_extraction_error()
+                        )
                     except Exception as dlq_error:
-                        logger.warning(f"Could not enqueue error for {doc_path}: {dlq_error}")
+                        logger.warning(
+                            f"Could not enqueue error for {doc_path}: {dlq_error}"
+                        )
                 except Exception as e:
-                    logger.error(f"Failed to process {doc_path}: {type(e).__name__}: {e}")
+                    logger.error(
+                        f"Failed to process {doc_path}: {type(e).__name__}: {e}"
+                    )
                     stats["failed"] += 1
                     # Remove stale version cache entry so retry will re-process
                     self.version_cache.remove(str(doc_path))
@@ -331,7 +345,9 @@ class DocumentGraphUpdater:
                             ),
                         )
                     except Exception as dlq_error:
-                        logger.warning(f"Could not enqueue error for {doc_path}: {dlq_error}")
+                        logger.warning(
+                            f"Could not enqueue error for {doc_path}: {dlq_error}"
+                        )
 
             # Flush all pending nodes and relationships
             try:
@@ -351,12 +367,12 @@ class DocumentGraphUpdater:
                 section_result = await asyncio.to_thread(
                     ingestor.fetch_all,
                     "MATCH (s:Section {workspace: $ws}) RETURN count(s) as count",
-                    {"ws": self.workspace}
+                    {"ws": self.workspace},
                 )
                 chunk_result = await asyncio.to_thread(
                     ingestor.fetch_all,
                     "MATCH (c:Chunk {workspace: $ws}) RETURN count(c) as count",
-                    {"ws": self.workspace}
+                    {"ws": self.workspace},
                 )
                 if section_result and len(section_result) > 0:
                     stats["sections_created"] = section_result[0].get("count", 0)
@@ -413,7 +429,9 @@ class DocumentGraphUpdater:
 
         try:
             ingestor.execute_write(cypher, {})
-            logger.info(f"Created vector index '{index_name}' for Chunk nodes (dim={dimension}, capacity={capacity})")
+            logger.info(
+                f"Created vector index '{index_name}' for Chunk nodes (dim={dimension}, capacity={capacity})"
+            )
         except Exception as e:
             error_str = str(e).lower()
             if "already exists" in error_str or "duplicate" in error_str:
@@ -470,9 +488,13 @@ class DocumentGraphUpdater:
             except Exception as e:
                 error_str = str(e).lower()
                 if "already exists" in error_str or "duplicate" in error_str:
-                    logger.debug(f"Composite index on :{label}({props_str}) already exists")
+                    logger.debug(
+                        f"Composite index on :{label}({props_str}) already exists"
+                    )
                 else:
-                    logger.warning(f"Failed to create composite index on :{label}({props_str}): {e}")
+                    logger.warning(
+                        f"Failed to create composite index on :{label}({props_str}): {e}"
+                    )
                     # Non-fatal: indexing can proceed without these indexes
 
         logger.info("Document graph indexes ensured")
@@ -500,7 +522,9 @@ class DocumentGraphUpdater:
             if self.repo_path.is_symlink():
                 resolved = self.repo_path.resolve()
                 if not self._is_path_within_boundary(resolved):
-                    logger.debug(f"Skipping symlink pointing outside repo: {self.repo_path}")
+                    logger.debug(
+                        f"Skipping symlink pointing outside repo: {self.repo_path}"
+                    )
                     return documents
 
             documents.append(self.repo_path)
@@ -521,7 +545,9 @@ class DocumentGraphUpdater:
                 if doc_path.is_symlink():
                     resolved = doc_path.resolve()
                     if not self._is_path_within_boundary(resolved):
-                        logger.debug(f"Skipping symlink pointing outside repo: {doc_path}")
+                        logger.debug(
+                            f"Skipping symlink pointing outside repo: {doc_path}"
+                        )
                         continue
 
                 documents.append(doc_path)
@@ -571,7 +597,9 @@ class DocumentGraphUpdater:
         store_stats, section_info, indexed_at = self._store_document(doc, ingestor)
 
         # Store pre-computed chunks with embeddings and section relationships
-        chunk_count = self._store_chunks_with_embeddings(doc, embeddings_data, section_info, ingestor, indexed_at)
+        chunk_count = self._store_chunks_with_embeddings(
+            doc, embeddings_data, section_info, ingestor, indexed_at
+        )
 
         # Update version cache
         version = self.version_tracker.create_version(doc)
@@ -676,9 +704,16 @@ class DocumentGraphUpdater:
         await asyncio.to_thread(self._delete_document_nodes, doc.path, ingestor)
 
         # Store document and sections (run in thread to avoid blocking)
-        store_stats, section_info, indexed_at = await asyncio.to_thread(self._store_document, doc, ingestor)
+        store_stats, section_info, indexed_at = await asyncio.to_thread(
+            self._store_document, doc, ingestor
+        )
         chunk_count = await asyncio.to_thread(
-            self._store_chunks_with_embeddings, doc, embeddings_data, section_info, ingestor, indexed_at
+            self._store_chunks_with_embeddings,
+            doc,
+            embeddings_data,
+            section_info,
+            ingestor,
+            indexed_at,
         )
 
         # Update version
@@ -690,7 +725,9 @@ class DocumentGraphUpdater:
         )
         return "indexed"
 
-    def _store_document(self, doc: ExtractedDocument, ingestor: MemgraphIngestor) -> tuple[dict, list[dict], str]:
+    def _store_document(
+        self, doc: ExtractedDocument, ingestor: MemgraphIngestor
+    ) -> tuple[dict, list[dict], str]:
         """Store document and sections in graph.
 
         Returns:
@@ -719,7 +756,12 @@ class DocumentGraphUpdater:
 
         # Track if we'll create a synthetic section (for documents without sections)
         # Note: Synthetic section and preamble are mutually exclusive
-        will_create_synthetic = not doc.sections and doc.content and doc.content.strip() and not has_preamble
+        will_create_synthetic = (
+            not doc.sections
+            and doc.content
+            and doc.content.strip()
+            and not has_preamble
+        )
 
         # Create Document node
         # Note: total_section_count includes synthetic sections for plain text files
@@ -734,7 +776,9 @@ class DocumentGraphUpdater:
                 cs.UniqueKeyType.PATH.value: doc.path,
                 "workspace": self.workspace,
                 "file_type": doc.file_type,
-                "total_section_count": doc.total_section_count() + (1 if will_create_synthetic else 0) + preamble_count,
+                "total_section_count": doc.total_section_count()
+                + (1 if will_create_synthetic else 0)
+                + preamble_count,
                 "code_block_count": len(doc.code_blocks),
                 "code_references": doc.code_references,
                 "word_count": doc.word_count,
@@ -747,7 +791,9 @@ class DocumentGraphUpdater:
         # Create preamble section if there's content before the first section
         if has_preamble:
             preamble_qn = f"{doc.path}#synthetic:Preamble"
-            logger.debug(f"Creating preamble section for {doc.path} ({preamble_line_count} lines)")
+            logger.debug(
+                f"Creating preamble section for {doc.path} ({preamble_line_count} lines)"
+            )
             ingestor.ensure_node_batch(
                 cs.NodeLabel.SECTION.value,
                 {
@@ -764,20 +810,28 @@ class DocumentGraphUpdater:
             ingestor.ensure_relationship_batch(
                 (cs.NodeLabel.DOCUMENT.value, cs.UniqueKeyType.PATH.value, doc.path),
                 cs.RelationshipType.CONTAINS_SECTION.value,
-                (cs.NodeLabel.SECTION.value, cs.UniqueKeyType.QUALIFIED_NAME.value, preamble_qn),
+                (
+                    cs.NodeLabel.SECTION.value,
+                    cs.UniqueKeyType.QUALIFIED_NAME.value,
+                    preamble_qn,
+                ),
             )
-            all_section_info.append({
-                "qualified_name": preamble_qn,
-                "title": "Preamble",
-                "start_line": 0,
-                "end_line": max(0, preamble_line_count - 1),
-                "level": 0,
-            })
+            all_section_info.append(
+                {
+                    "qualified_name": preamble_qn,
+                    "title": "Preamble",
+                    "start_line": 0,
+                    "end_line": max(0, preamble_line_count - 1),
+                    "level": 0,
+                }
+            )
             stats["sections"] += 1
 
         # Create Section nodes and relationships, collect section info
         for section in doc.sections:
-            section_infos = self._store_section(doc.path, section, doc.path, None, ingestor, stats, indexed_at)
+            section_infos = self._store_section(
+                doc.path, section, doc.path, None, ingestor, stats, indexed_at
+            )
             all_section_info.extend(section_infos)
 
         # For documents without sections (e.g., plain text files),
@@ -803,15 +857,21 @@ class DocumentGraphUpdater:
             ingestor.ensure_relationship_batch(
                 (cs.NodeLabel.DOCUMENT.value, cs.UniqueKeyType.PATH.value, doc.path),
                 cs.RelationshipType.CONTAINS_SECTION.value,
-                (cs.NodeLabel.SECTION.value, cs.UniqueKeyType.QUALIFIED_NAME.value, synthetic_qn),
+                (
+                    cs.NodeLabel.SECTION.value,
+                    cs.UniqueKeyType.QUALIFIED_NAME.value,
+                    synthetic_qn,
+                ),
             )
-            all_section_info.append({
-                "qualified_name": synthetic_qn,
-                "title": "Document Content",
-                "start_line": 0,
-                "end_line": doc.content.count("\n"),
-                "level": 1,
-            })
+            all_section_info.append(
+                {
+                    "qualified_name": synthetic_qn,
+                    "title": "Document Content",
+                    "start_line": 0,
+                    "end_line": doc.content.count("\n"),
+                    "level": 1,
+                }
+            )
             stats["sections"] = 1
 
         return stats, all_section_info, indexed_at
@@ -864,30 +924,50 @@ class DocumentGraphUpdater:
             ingestor.ensure_relationship_batch(
                 (cs.NodeLabel.DOCUMENT.value, cs.UniqueKeyType.PATH.value, doc_path),
                 cs.RelationshipType.CONTAINS_SECTION.value,
-                (cs.NodeLabel.SECTION.value, cs.UniqueKeyType.QUALIFIED_NAME.value, section_qn),
+                (
+                    cs.NodeLabel.SECTION.value,
+                    cs.UniqueKeyType.QUALIFIED_NAME.value,
+                    section_qn,
+                ),
             )
         else:
             # Subsection: Section -> Section
             ingestor.ensure_relationship_batch(
-                (cs.NodeLabel.SECTION.value, cs.UniqueKeyType.QUALIFIED_NAME.value, parent_qn),
+                (
+                    cs.NodeLabel.SECTION.value,
+                    cs.UniqueKeyType.QUALIFIED_NAME.value,
+                    parent_qn,
+                ),
                 cs.RelationshipType.HAS_SUBSECTION.value,
-                (cs.NodeLabel.SECTION.value, cs.UniqueKeyType.QUALIFIED_NAME.value, section_qn),
+                (
+                    cs.NodeLabel.SECTION.value,
+                    cs.UniqueKeyType.QUALIFIED_NAME.value,
+                    section_qn,
+                ),
             )
         stats["sections"] += 1
 
         # Collect section info for chunk-to-section matching
-        section_info: list[dict] = [{
-            "qualified_name": section_qn,
-            "title": section.title,
-            "start_line": section.start_line,
-            "end_line": section.end_line,
-            "level": section.level,
-        }]
+        section_info: list[dict] = [
+            {
+                "qualified_name": section_qn,
+                "title": section.title,
+                "start_line": section.start_line,
+                "end_line": section.end_line,
+                "level": section.level,
+            }
+        ]
 
         # Recursively process subsections
         for subsection in section.subsections:
             subsection_infos = self._store_section(
-                doc_path, subsection, section_qn, section_qn, ingestor, stats, indexed_at
+                doc_path,
+                subsection,
+                section_qn,
+                section_qn,
+                ingestor,
+                stats,
+                indexed_at,
             )
             section_info.extend(subsection_infos)
 
@@ -917,7 +997,9 @@ class DocumentGraphUpdater:
         if not chunks:
             # Fallback for empty documents
             if not doc.content or not doc.content.strip():
-                logger.warning(f"Document {doc.path} has no content, skipping embedding")
+                logger.warning(
+                    f"Document {doc.path} has no content, skipping embedding"
+                )
                 return ([], [])
             try:
                 doc_embedding = provider.embed(doc.content[:1000])
@@ -943,13 +1025,15 @@ class DocumentGraphUpdater:
         # Tiny chunks (<10 tokens) like "```" or "```python" provide no semantic value
         MIN_CHUNK_TOKENS = 10
         non_empty_chunks = [
-            (i, c) for i, c in enumerate(chunks)
+            (i, c)
+            for i, c in enumerate(chunks)
             if c.content.strip() and c.token_count >= MIN_CHUNK_TOKENS
         ]
         if not non_empty_chunks:
             logger.warning(
                 f"All chunks in {doc.path} are empty or too small (<{MIN_CHUNK_TOKENS} tokens), "
-                "skipping embedding"
+                "skipping embedding. Possible causes: missing poppler-utils for PDF text extraction, "
+                "or scanned/image-based PDF that requires OCR to extract text."
             )
             return ([], [])
 
@@ -992,7 +1076,10 @@ class DocumentGraphUpdater:
                     f"Check that EMBEDDING_MODEL matches the vector index configuration.",
                 )
             # Check for NaN or infinity values (invalid for vector operations)
-            if any(isinstance(v, float) and (math.isnan(v) or math.isinf(v)) for v in embedding):
+            if any(
+                isinstance(v, float) and (math.isnan(v) or math.isinf(v))
+                for v in embedding
+            ):
                 raise ExtractionException(
                     path=doc.path,
                     error_type=ErrorType.EMBEDDING_ERROR,
@@ -1000,7 +1087,9 @@ class DocumentGraphUpdater:
                 )
             # Check for all-zero embedding (indicates failure)
             if all(v == 0.0 for v in embedding):
-                logger.warning(f"Embedding for chunk {i} is all zeros, may indicate embedding failure")
+                logger.warning(
+                    f"Embedding for chunk {i} is all zeros, may indicate embedding failure"
+                )
             validated_embeddings.append(embedding)
 
         # Return chunks and validated embeddings (without original indices)
@@ -1067,7 +1156,11 @@ class DocumentGraphUpdater:
             ingestor.ensure_relationship_batch(
                 (cs.NodeLabel.DOCUMENT.value, cs.UniqueKeyType.PATH.value, doc.path),
                 cs.RelationshipType.CONTAINS_CHUNK.value,
-                (cs.NodeLabel.CHUNK.value, cs.UniqueKeyType.QUALIFIED_NAME.value, chunk.qualified_name),
+                (
+                    cs.NodeLabel.CHUNK.value,
+                    cs.UniqueKeyType.QUALIFIED_NAME.value,
+                    chunk.qualified_name,
+                ),
             )
 
             # Find matching section for this chunk and create relationship
@@ -1075,9 +1168,17 @@ class DocumentGraphUpdater:
             matching_section = self._find_section_for_chunk(chunk, section_info)
             if matching_section:
                 ingestor.ensure_relationship_batch(
-                    (cs.NodeLabel.CHUNK.value, cs.UniqueKeyType.QUALIFIED_NAME.value, chunk.qualified_name),
+                    (
+                        cs.NodeLabel.CHUNK.value,
+                        cs.UniqueKeyType.QUALIFIED_NAME.value,
+                        chunk.qualified_name,
+                    ),
                     cs.RelationshipType.BELONGS_TO_SECTION.value,
-                    (cs.NodeLabel.SECTION.value, cs.UniqueKeyType.QUALIFIED_NAME.value, matching_section["qualified_name"]),
+                    (
+                        cs.NodeLabel.SECTION.value,
+                        cs.UniqueKeyType.QUALIFIED_NAME.value,
+                        matching_section["qualified_name"],
+                    ),
                 )
             else:
                 # Fallback: Use first section (typically synthetic section for plain text)
@@ -1087,9 +1188,17 @@ class DocumentGraphUpdater:
                     f"using fallback section: {fallback_section['qualified_name']}"
                 )
                 ingestor.ensure_relationship_batch(
-                    (cs.NodeLabel.CHUNK.value, cs.UniqueKeyType.QUALIFIED_NAME.value, chunk.qualified_name),
+                    (
+                        cs.NodeLabel.CHUNK.value,
+                        cs.UniqueKeyType.QUALIFIED_NAME.value,
+                        chunk.qualified_name,
+                    ),
                     cs.RelationshipType.BELONGS_TO_SECTION.value,
-                    (cs.NodeLabel.SECTION.value, cs.UniqueKeyType.QUALIFIED_NAME.value, fallback_section["qualified_name"]),
+                    (
+                        cs.NodeLabel.SECTION.value,
+                        cs.UniqueKeyType.QUALIFIED_NAME.value,
+                        fallback_section["qualified_name"],
+                    ),
                 )
 
         return len(non_empty_chunks)
@@ -1121,7 +1230,9 @@ class DocumentGraphUpdater:
             # Calculate line overlap (inclusive ranges)
             overlap_start = max(chunk.start_line, section["start_line"])
             overlap_end = min(chunk.end_line, section["end_line"])
-            overlap_lines = overlap_end - overlap_start + 1 if overlap_start <= overlap_end else 0
+            overlap_lines = (
+                overlap_end - overlap_start + 1 if overlap_start <= overlap_end else 0
+            )
 
             if overlap_lines > 0:
                 candidates.append((section, overlap_lines))
@@ -1173,7 +1284,9 @@ class DocumentGraphUpdater:
         # Use base_path for check (handles both file and directory repo paths)
         resolved_path = file_path.resolve()
         if not self._is_path_within_boundary(resolved_path):
-            logger.error(f"Path traversal attempt: {file_path} is outside repo {self.base_path}")
+            logger.error(
+                f"Path traversal attempt: {file_path} is outside repo {self.base_path}"
+            )
             self.dead_letter_queue.enqueue(
                 ExtractionError(
                     path=str(file_path),
@@ -1264,7 +1377,9 @@ def migrate_section_count_property(
             result = ingestor.fetch_all(query1, params1)
             if result:
                 stats["migrated"] = result[0].get("migrated", 0)
-            logger.info(f"Migrated {stats['migrated']} Document nodes from section_count to total_section_count")
+            logger.info(
+                f"Migrated {stats['migrated']} Document nodes from section_count to total_section_count"
+            )
         except Exception as e:
             logger.error(f"Migration (case 1) failed: {e}")
             stats["errors"] += 1
@@ -1293,7 +1408,9 @@ def migrate_section_count_property(
             if result:
                 stats["cleaned"] = result[0].get("cleaned", 0)
             if stats["cleaned"] > 0:
-                logger.info(f"Cleaned {stats['cleaned']} Document nodes with duplicate property")
+                logger.info(
+                    f"Cleaned {stats['cleaned']} Document nodes with duplicate property"
+                )
         except Exception as e:
             logger.error(f"Migration (case 2) failed: {e}")
             stats["errors"] += 1

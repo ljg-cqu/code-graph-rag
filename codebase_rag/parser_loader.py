@@ -283,7 +283,19 @@ def _process_language(
         return False
 
     try:
-        language = Language(lang_lib())
+        # Handle both cases: lang_lib is a callable returning the language object,
+        # or already the language object/PyCapsule itself
+        if callable(lang_lib):
+            lang_obj = lang_lib()
+        else:
+            lang_obj = lang_lib
+
+        # Check if already a Language instance
+        if isinstance(lang_obj, Language):
+            language = lang_obj
+        else:
+            language = Language(lang_obj)
+
         parser = Parser(language)
         parsers[lang_name] = parser
         queries[lang_name] = _create_language_queries(
@@ -309,7 +321,19 @@ def load_queries_for_language(lang: cs.SupportedLanguage) -> LanguageQueries | N
         return None
 
     try:
-        language = Language(lang_lib())
+        # Handle both cases: lang_lib is a callable returning the language object,
+        # or already the language object/PyCapsule itself
+        if callable(lang_lib):
+            lang_obj = lang_lib()
+        else:
+            lang_obj = lang_lib
+
+        # Check if already a Language instance
+        if isinstance(lang_obj, Language):
+            language = lang_obj
+        else:
+            language = Language(lang_obj)
+
         parser = Parser(language)
         return _create_language_queries(language, parser, lang_config, lang)
     except Exception:
