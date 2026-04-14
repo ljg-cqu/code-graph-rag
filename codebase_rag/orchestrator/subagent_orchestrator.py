@@ -12,7 +12,7 @@ from typing import Any
 
 from loguru import logger
 
-from codebase_rag.config import settings
+from codebase_rag.config import settings, ModelConfig
 
 from .dynamic_concurrency_controller import DynamicConcurrencyController
 from .result_aggregator import ResultAggregator
@@ -38,6 +38,7 @@ class SubAgentOrchestrator:
         self.agent_pool: queue.Queue[Any] = queue.Queue()
         self.running = False
         self._shutdown_called = False
+        self._llm_assignment_index = 0  # Counter for round-robin LLM assignment
 
         # Validate scheduling strategy
         valid_strategies = {"fifo", "round-robin"}
@@ -76,48 +77,73 @@ class SubAgentOrchestrator:
                 # Ignore signals that aren't supported on the current platform
                 pass
 
-    def _default_agent_factory(self) -> Any:
+    def _default_agent_factory(self, llm_config: ModelConfig | None = None) -> Any:
         """
         Default factory for creating sub-agent instances.
-        TODO: Replace with actual RAG agent initialization once integrated.
-
+        
+        Args:
+            llm_config: Optional custom LLM config to use for this sub-agent instead of default orchestrator LLM
+        
         Returns:
-            New sub-agent instance
+            New sub-agent instance with specified LLM configuration
         """
-
+        worker_llm_config = llm_config or settings.active_orchestrator_config
+        
         # For MVP, this is a placeholder that returns a simple callable
         # In real implementation, this would create an instance of the core RAG agent
         # with isolated state, inherited config, and read-only permissions by default
         class SimpleSubAgent:
-            def __init__(self):
+            def __init__(self, llm_config: ModelConfig):
                 self.config = settings
+                self.llm_config = llm_config
                 self.allow_write = settings.CGR_SUBAGENT_ALLOW_WRITE
+                # Cypher LLM remains shared global config, unchanged
+                self.cypher_llm_config = settings.active_cypher_config
 
             def execute(self, subtask: dict) -> str:
                 # Placeholder execution logic
                 prompt = subtask.get("prompt", "")
                 time.sleep(0.1)  # Simulate work
-                return f"Processed prompt: {prompt[:50]}..."
+                return f"Processed prompt with {self.llm_config.provider}:{self.llm_config.model_id}: {prompt[:50]}..."
 
             def reset(self):
                 # Reset any mutable state between tasks
                 pass
 
-        return SimpleSubAgent()
+        return SimpleSubAgent(worker_llm_config)
 
     def initialize_agents(self):
-        """Initialize the pool of sub-agents."""
+        """Initialize the pool of sub-agents with round-robin LLM assignment."""
         logger.info(f"Initializing {self.worker_count} sub-agents")
+        worker_llms = settings.active_worker_llms
+        num_worker_llms = len(worker_llms)
+        
         # Clear existing queue first
         while not self.agent_pool.empty():
             try:
                 self.agent_pool.get_nowait()
             except queue.Empty:
                 break
-        # Add new agents to queue
+        
+        # Reset LLM assignment index for new pool initialization
+        self._llm_assignment_index = 0
+        
+        # Add new agents to queue with round-robin LLM assignment
         for _ in range(self.worker_count):
-            self.agent_pool.put(self.agent_factory())
-        logger.info("Sub-agent pool initialized successfully")
+            if num_worker_llms > 0:
+                # Get next LLM in round-robin sequence
+                llm_config = worker_llms[self._llm_assignment_index % num_worker_llms]
+                self._llm_assignment_index += 1
+                agent = self.agent_factory(llm_config=llm_config)
+            else:
+                # No worker LLMs configured, use default orchestrator LLM
+                agent = self.agent_factory()
+            self.agent_pool.put(agent)
+        
+        if num_worker_llms > 0:
+            logger.info(f"Sub-agent pool initialized with {num_worker_llms} worker LLMs (round-robin assignment)")
+        else:
+            logger.info("Sub-agent pool initialized successfully using orchestrator LLM as default")
 
     def execute_tasks(
         self,
@@ -296,6 +322,7 @@ class SubAgentOrchestrator:
     def adjust_worker_count(self, adjustment: int):
         """
         Adjust the number of workers dynamically during execution.
+        New workers are assigned LLMs continuing the round-robin sequence.
 
         Args:
             adjustment: Number of workers to add (positive) or remove (negative)
@@ -305,9 +332,21 @@ class SubAgentOrchestrator:
         )
 
         if new_count > self.worker_count:
-            # Add new workers
-            for _ in range(new_count - self.worker_count):
-                self.agent_pool.put(self.agent_factory())
+            # Add new workers with continued round-robin LLM assignment
+            worker_llms = settings.active_worker_llms
+            num_worker_llms = len(worker_llms)
+            add_count = new_count - self.worker_count
+            
+            for _ in range(add_count):
+                if num_worker_llms > 0:
+                    llm_config = worker_llms[self._llm_assignment_index % num_worker_llms]
+                    self._llm_assignment_index += 1
+                    agent = self.agent_factory(llm_config=llm_config)
+                else:
+                    agent = self.agent_factory()
+                self.agent_pool.put(agent)
+            
+            logger.info(f"Added {add_count} new sub-agents to pool")
         elif new_count < self.worker_count:
             # Remove excess workers
             remove_count = self.worker_count - new_count
@@ -317,5 +356,6 @@ class SubAgentOrchestrator:
                         self.agent_pool.get_nowait()
                     except queue.Empty:
                         pass
+            logger.info(f"Removed {remove_count} sub-agents from pool")
 
         self.worker_count = new_count

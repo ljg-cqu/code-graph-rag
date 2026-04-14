@@ -975,6 +975,36 @@ Configuration is managed through environment variables in `.env` file:
 - `CYPHER_THINKING_BUDGET`: Thinking budget for reasoning models
 - `CYPHER_SERVICE_ACCOUNT_FILE`: Path to service account file (for Vertex AI)
 
+#### Parallel Sub-Agent Worker LLM Configuration
+Configure dedicated LLMs for parallel sub-agent workers to optimize cost/performance for parallel workloads:
+- `CGR_WORKER_LLMS`: Comma-separated list of model strings (e.g., `openai:gpt-4o-mini,anthropic:claude-3-haiku`) or JSON array of full model configurations for sub-agent workers
+- `CGR_WORKER_LLM_ASSIGNMENT_STRATEGY`: LLM assignment strategy for sub-agents. Only `round-robin` is supported currently, which evenly distributes configured LLMs across workers.
+
+**Key Behavior**:
+- If no worker LLMs are configured, sub-agents automatically use the orchestrator LLM as default
+- The dedicated Cypher LLM remains unchanged and is shared by all workers for graph query generation
+- All worker LLM configurations are validated before starting parallel execution, with clear error messages for missing API keys or invalid model identifiers
+
+**Example Static Configuration**:
+```bash
+# Simple comma-separated config (reuses orchestrator provider credentials)
+CGR_WORKER_LLMS="openai:Doubao-Seed-2.0-Code,openai:MiniMax-M2.5,openai:Kimi-K2.5,openai:GLM-4.7,openai:DeepSeek-V3.2,openai:Doubao-Seed-2.0-pro"
+
+# Full JSON config with custom credentials/endpoints
+CGR_WORKER_LLMS='[
+  {"provider": "openai", "model_id": "Doubao-Seed-2.0-Code", "api_key": "your-api-key", "endpoint": "https://ark.cn-beijing.volces.com/api/coding/v3"},
+  {"provider": "openai", "model_id": "MiniMax-M2.5", "api_key": "your-api-key", "endpoint": "https://ark.cn-beijing.volces.com/api/coding/v3"}
+]'
+```
+
+**Dynamic Prompt Configuration**:
+You can also specify worker LLMs directly in your natural language prompts without modifying config files:
+```
+"Review all Python files with 10 parallel workers using Doubao-Seed-2.0-Code and MiniMax-M2.5"
+"Use Kimi-K2.5 and GLM-4.7 as worker LLMs for this parallel code generation task"
+```
+The system automatically detects the requested worker LLMs, validates them, and configures the parallel sub-agent pool accordingly.
+
 #### Embedding Provider Configuration
 
 Code-Graph-RAG supports multiple embedding providers for semantic search:

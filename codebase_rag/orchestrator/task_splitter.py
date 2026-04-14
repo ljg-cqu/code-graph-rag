@@ -4,6 +4,7 @@ Handles splitting user requests into independent subtasks.
 """
 
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -143,6 +144,46 @@ class TaskSplitter:
         TODO: Implement in Phase 2
         """
         raise NotImplementedError("Manual splitting will be implemented in Phase 2")
+
+    def extract_worker_llms_from_prompt(self, prompt: str) -> list[str] | None:
+        """
+        Extract worker LLM configurations from user prompt if present.
+        
+        Args:
+            prompt: User's original request
+        
+        Returns:
+            List of extracted LLM model strings if found, None otherwise
+        """
+        lower_prompt = prompt.lower()
+        
+        # Regex patterns to match worker LLM configuration
+        patterns = [
+            r"using\s+((?:[a-zA-Z0-9_-]+:)?[a-zA-Z0-9_-]+(?:\s+and\s+|,\s+|,|\s+)+(?:[a-zA-Z0-9_-]+:)?[a-zA-Z0-9_-]+)\s+(?:as\s+)?(?:worker|llm|model)",
+            r"(?:worker|llm|model)s?\s+(?:to use|are|used?)\s+((?:[a-zA-Z0-9_-]+:)?[a-zA-Z0-9_-]+(?:\s+and\s+|,\s+|,|\s+)+(?:[a-zA-Z0-9_-]+:)?[a-zA-Z0-9_-]+)",
+            r"with\s+((?:[a-zA-Z0-9_-]+:)?[a-zA-Z0-9_-]+(?:\s+and\s+|,\s+|,|\s+)+(?:[a-zA-Z0-9_-]+:)?[a-zA-Z0-9_-]+)\s+(?:as\s+)?(?:worker|llm|model)",
+        ]
+        
+        for pattern in patterns:
+            matches = re.search(pattern, lower_prompt)
+            if matches:
+                llm_str = matches.group(1).strip()
+                # Split by commas and "and"
+                llm_str = re.sub(r'\s+and\s+', ',', llm_str)
+                llms = [llm.strip() for llm in llm_str.split(',') if llm.strip()]
+                
+                # Filter out non-model strings
+                valid_llms = []
+                for llm in llms:
+                    # Check if it looks like a model (contains no spaces, optional provider prefix)
+                    if ' ' not in llm and (':' in llm or len(llm) > 2):
+                        valid_llms.append(llm)
+                
+                if valid_llms:
+                    logger.info(f"Extracted {len(valid_llms)} worker LLMs from prompt: {valid_llms}")
+                    return valid_llms
+        
+        return None
 
     def validate_subtasks(
         self, subtasks: list[dict[str, Any]], original_prompt: str

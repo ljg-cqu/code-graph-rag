@@ -419,6 +419,7 @@ class AppConfig(BaseSettings):
     _active_orchestrator: ModelConfig | None = None
     _active_cypher: ModelConfig | None = None
     _active_embedding: EmbeddingConfig | None = None
+    _active_worker_llms: list[ModelConfig] | None = None
 
     QUIET: bool = Field(False, validation_alias="CGR_QUIET")
 
@@ -442,6 +443,10 @@ class AppConfig(BaseSettings):
     CGR_SUBAGENT_ALLOW_WRITE: bool = False
     CGR_AUTO_SPLIT_ENABLED: bool = True
     CGR_SUBAGENT_RETRY_ATTEMPTS: int = 2
+
+    # Worker LLM Configuration for Sub-Agents
+    CGR_WORKER_LLMS: str | list[str | dict] = Field(default_factory=list)
+    CGR_WORKER_LLM_ASSIGNMENT_STRATEGY: Literal["round-robin"] = "round-robin"
 
     def _get_default_config(self, role: str) -> ModelConfig:
         role_upper = role.upper()
@@ -476,6 +481,125 @@ class AppConfig(BaseSettings):
 
     def _get_default_cypher_config(self) -> ModelConfig:
         return self._get_default_config(cs.ModelRole.CYPHER)
+
+    def _get_model_config_for_provider(self, provider: str, model: str) -> ModelConfig:
+        """
+        Get a ModelConfig instance for a given provider and model, using default settings for the provider.
+        
+        Args:
+            provider: LLM provider name
+            model: Model ID
+        
+        Returns:
+            Populated ModelConfig object
+        """
+        provider_lower = provider.lower()
+        
+        # Look for provider-specific default configs
+        api_key = None
+        endpoint = None
+        project_id = None
+        region = cs.DEFAULT_REGION
+        provider_type = None
+        thinking_budget = None
+        service_account_file = None
+        
+        # Check for provider-specific API keys from environment
+        if provider_lower == "openai":
+            api_key = os.environ.get("OPENAI_API_KEY", cs.DEFAULT_API_KEY)
+        elif provider_lower == "anthropic":
+            api_key = os.environ.get("ANTHROPIC_API_KEY", cs.DEFAULT_API_KEY)
+        elif provider_lower == "google":
+            api_key = os.environ.get("GOOGLE_API_KEY", cs.DEFAULT_API_KEY)
+        elif provider_lower == "azure":
+            api_key = os.environ.get("AZURE_API_KEY", cs.DEFAULT_API_KEY)
+        elif provider_lower == "ollama":
+            endpoint = self.ollama_endpoint
+            api_key = cs.DEFAULT_API_KEY
+        
+        return ModelConfig(
+            provider=provider_lower,
+            model_id=model,
+            api_key=api_key,
+            endpoint=endpoint,
+            project_id=project_id,
+            region=region,
+            provider_type=provider_type,
+            thinking_budget=thinking_budget,
+            service_account_file=service_account_file
+        )
+
+    @property
+    def active_worker_llms(self) -> list[ModelConfig]:
+        """Get the list of validated active worker LLMs for sub-agents."""
+        if self._active_worker_llms is not None:
+            return self._active_worker_llms
+        
+        # Parse from CGR_WORKER_LLMS config
+        worker_llms_config = self.CGR_WORKER_LLMS
+        parsed_llms: list[ModelConfig] = []
+        
+        if isinstance(worker_llms_config, str):
+            if worker_llms_config.strip():
+                # Split comma-separated list
+                entries = [entry.strip() for entry in worker_llms_config.split(',') if entry.strip()]
+                for entry in entries:
+                    provider, model = self.parse_model_string(entry)
+                    parsed_llms.append(self._get_model_config_for_provider(provider, model))
+        elif isinstance(worker_llms_config, list):
+            for entry in worker_llms_config:
+                if isinstance(entry, str):
+                    provider, model = self.parse_model_string(entry)
+                    parsed_llms.append(self._get_model_config_for_provider(provider, model))
+                elif isinstance(entry, dict):
+                    # Full ModelConfig dict
+                    parsed_llms.append(ModelConfig(**entry))
+        
+        # Validate all parsed LLMs
+        valid_llms = []
+        for llm_config in parsed_llms:
+            try:
+                llm_config.validate_api_key(role="worker")
+                valid_llms.append(llm_config)
+            except ValueError as e:
+                logger.warning(f"Skipping invalid worker LLM config: {str(e)}")
+        
+        self._active_worker_llms = valid_llms
+        return valid_llms
+
+    def set_worker_llms(self, llms: list[str | ModelConfig | dict]) -> None:
+        """
+        Dynamically set the list of worker LLMs for sub-agents.
+        
+        Args:
+            llms: List of LLM configurations, either in provider:model string format,
+                  ModelConfig objects, or ModelConfig dictionaries
+        """
+        parsed_llms: list[ModelConfig] = []
+        
+        for llm_entry in llms:
+            if isinstance(llm_entry, str):
+                provider, model = self.parse_model_string(llm_entry)
+                parsed_llms.append(self._get_model_config_for_provider(provider, model))
+            elif isinstance(llm_entry, dict):
+                parsed_llms.append(ModelConfig(**llm_entry))
+            elif isinstance(llm_entry, ModelConfig):
+                parsed_llms.append(llm_entry)
+        
+        # Validate all configs
+        valid_llms = []
+        for llm_config in parsed_llms:
+            try:
+                llm_config.validate_api_key(role="worker")
+                valid_llms.append(llm_config)
+            except ValueError as e:
+                logger.warning(f"Skipping invalid worker LLM config: {str(e)}")
+        
+        self._active_worker_llms = valid_llms if valid_llms else None
+        if valid_llms:
+            logger.info(f"Set {len(valid_llms)} worker LLMs successfully")
+        else:
+            logger.info("No valid worker LLMs configured, falling back to orchestrator LLM")
 
     @property
     def active_orchestrator_config(self) -> ModelConfig:
