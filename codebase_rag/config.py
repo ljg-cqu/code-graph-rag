@@ -379,6 +379,24 @@ class AppConfig(BaseSettings):
     DOC_MEMGRAPH_VECTOR_CAPACITY: int = 100000
     DOC_VECTOR_SEARCH_TOP_K: int = 5
 
+    # ─────────────────────────────────────────────────────────
+    # JSON GRAPHRAG (NEW)
+    # ─────────────────────────────────────────────────────────
+    JSON_MEMGRAPH_HOST: str = "localhost"
+    JSON_MEMGRAPH_PORT: int = 7689
+    JSON_MEMGRAPH_USERNAME: str | None = None
+    JSON_MEMGRAPH_PASSWORD: str | None = None
+    JSON_MEMGRAPH_MEMORY_LIMIT: str = "2GB"  # Memory limit for JSON graph container
+    JSON_LAB_PORT: int = 3002  # Memgraph Lab for JSON graph
+    JSON_VECTOR_STORE_BACKEND: str = "memgraph"
+
+    # JSON vector settings
+    JSON_MEMGRAPH_VECTOR_INDEX_NAME: str = "json_embeddings"
+    JSON_MEMGRAPH_VECTOR_CAPACITY: int = 100000
+    JSON_VECTOR_SEARCH_TOP_K: int = 5
+    # JSON ingestion parallel worker count (round-robin connection pool)
+    JSON_PARALLEL_WORKERS: int = 10
+
     # Real-time updater (extended)
     REALTIME_DEBOUNCE_SECONDS: int = Field(default=2, gt=0)
     REALTIME_BATCH_SIZE: int = Field(default=100, gt=0)

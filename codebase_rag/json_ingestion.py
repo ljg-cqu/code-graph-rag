@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Tuple, Set
 from tqdm import tqdm
 from loguru import logger
 import jsonschema
+import threading
 
 from .config import settings
 from .cypher_queries import build_merge_node_query, build_merge_relationship_query
@@ -36,9 +37,32 @@ with open(SCHEMA_PATH, "r") as f:
 embedding_provider = get_embedding_provider_instance()
 embedding_cache = EmbeddingCache()
 vector_store = get_vector_store_instance()
-graph_service = MemgraphIngestor(
-    host=settings.DOC_MEMGRAPH_HOST, port=settings.DOC_MEMGRAPH_PORT
+# Round-robin Memgraph connection pool for parallel workers (thread-safe)
+class MemgraphConnectionPool:
+    def __init__(self, host: str, port: int, pool_size: int = 10):
+        self.pool_size = pool_size
+        self.connections = [
+            MemgraphIngestor(host=host, port=port)
+            for _ in range(pool_size)
+        ]
+        self._lock = threading.Lock()
+        self._counter = 0
+
+    def get(self) -> MemgraphIngestor:
+        """Get next connection in round-robin fashion (thread-safe)"""
+        with self._lock:
+            conn = self.connections[self._counter % self.pool_size]
+            self._counter += 1
+            return conn
+
+# Initialize pool with connection count matching configured parallel worker count
+graph_pool = MemgraphConnectionPool(
+    host=settings.JSON_MEMGRAPH_HOST,
+    port=settings.JSON_MEMGRAPH_PORT,
+    pool_size=settings.JSON_PARALLEL_WORKERS
 )
+# Backward compatibility: single connection for existing non-parallel code
+graph_service = graph_pool.get()
 
 
 def validate_json_input(
@@ -227,21 +251,24 @@ def ingest_entities(
     incremental: bool = False,
     conflict_resolution: str = "last-write-wins",
     last_updated_threshold: str | None = None,
+    graph_connection: MemgraphIngestor | None = None,
 ) -> tuple[int, int, int, int, list[str]]:
     """
     Ingest entities directly from ingestion schema format into Memgraph.
+    Uses thread-local connection from round-robin pool for parallel processing.
     """
     ingested = 0
     updated = 0
     skipped = 0
     failed = 0
     errors = []
+    graph_conn = graph_connection or graph_pool.get()
 
     # Get existing entity IDs for skip_existing check
     existing_nodes: dict[str, str] = {}
     if skip_existing:
         try:
-            result = graph_service._execute_query(
+            result = graph_conn._execute_query(
                 "MATCH (n {dataset_id: $dataset_id}) RETURN n.unique_id AS id, n.last_updated AS last_updated",
                 {"dataset_id": dataset_id},
             )
@@ -292,7 +319,7 @@ def ingest_entities(
             params = {"unique_id": unique_id, "properties": properties}
 
             try:
-                result = graph_service._execute_query(query, params)
+                result = graph_conn._execute_query(query, params)
                 # Check if node was created or updated
                 if result and len(result) > 0 and "n" in result[0]:
                     # MERGE succeeded, count as ingested/updated
@@ -340,16 +367,19 @@ def ingest_relationships(
     incremental: bool = False,
     conflict_resolution: str = "last-write-wins",
     last_updated_threshold: str | None = None,
+    graph_connection: MemgraphIngestor | None = None,
 ) -> tuple[int, int, int, int, list[str]]:
     """
     Ingest relationships directly from ingestion schema format.
     Resolves source/target references that can be either ID or name.
+    Uses thread-local connection from round-robin pool for parallel processing.
     """
     ingested = 0
     updated = 0
     skipped = 0
     failed = 0
     errors = []
+    graph_conn = graph_connection or graph_pool.get()
 
     # Build full ID map (original ID -> unique dataset ID)
     full_id_map = {}
@@ -360,7 +390,7 @@ def ingest_relationships(
     existing_rels: set[tuple[str, str, str]] = set()
     if skip_existing:
         try:
-            result = graph_service._execute_query(
+            result = graph_conn._execute_query(
                 """
                 MATCH (s {dataset_id: $dataset_id})-[r {dataset_id: $dataset_id}]->(t {dataset_id: $dataset_id})
                 RETURN s.unique_id AS source, type(r) AS rel_type, t.unique_id AS target
@@ -436,7 +466,7 @@ def ingest_relationships(
                     "target_id": full_target_id,
                     "properties": properties,
                 }
-                result = graph_service._execute_query(query, params)
+                result = graph_conn._execute_query(query, params)
                 if result and len(result) > 0 and "r" in result[0]:
                     # MERGE succeeded, count as ingested/updated
                     ingested += 1
@@ -516,7 +546,7 @@ def ingest_json_data(
     conflict_resolution: str = "last-write-wins",
     pre_loaded_data: list[tuple[Path, dict[str, Any]]] | None = None,
     # New parameters (backward compatible defaults)
-    parallel_workers: int = 1,
+    parallel_workers: int = settings.JSON_PARALLEL_WORKERS,
     metadata_override: dict[str, Any] | None = None,
 ) -> IngestionResult:
     """
@@ -531,6 +561,8 @@ def ingest_json_data(
         """Process a single JSON file, returns partial result and success flag"""
         file_path, data = file_data
         partial_result = IngestionResult(dataset_id=dataset_id or "", dry_run=dry_run)
+        # Get round-robin connection from pool for this worker thread
+        graph_conn = graph_pool.get()
         
         # Validate input against official schema
         valid, validated_data, validation_errors = validate_json_input(data)
@@ -583,7 +615,7 @@ def ingest_json_data(
         rel_embeddings, rel_embed_errors = generate_embeddings_for_relationships(relationships)
         partial_result.errors.extend(rel_embed_errors)
         
-        # Ingest entities
+        # Ingest entities with thread-local connection
         e_ingested, e_updated, e_skipped, e_failed, e_errors = ingest_entities(
             current_dataset_id,
             entities,
@@ -593,6 +625,7 @@ def ingest_json_data(
             incremental=incremental,
             conflict_resolution=conflict_resolution,
             last_updated_threshold=validated_data["metadata"].get("last_updated"),
+            graph_connection=graph_conn
         )
         partial_result.entities_ingested += e_ingested
         partial_result.entities_updated += e_updated
@@ -600,7 +633,7 @@ def ingest_json_data(
         partial_result.entities_failed += e_failed
         partial_result.errors.extend(e_errors)
         
-        # Ingest relationships
+        # Ingest relationships with thread-local connection
         r_ingested, r_updated, r_skipped, r_failed, r_errors = ingest_relationships(
             current_dataset_id,
             relationships,
@@ -611,6 +644,7 @@ def ingest_json_data(
             incremental=incremental,
             conflict_resolution=conflict_resolution,
             last_updated_threshold=validated_data["metadata"].get("last_updated"),
+            graph_connection=graph_conn
         )
         partial_result.relationships_ingested += r_ingested
         partial_result.relationships_updated += r_updated

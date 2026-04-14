@@ -16,6 +16,7 @@ wheels/
 .claude/
 .embedding_cache/
 .cgr/
+.cgr-hash-cache.json
 .qdrant_code_embeddings/
 CLAUDE.md
 AGENTS.md

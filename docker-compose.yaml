@@ -54,6 +54,34 @@ services:
     depends_on:
       - memgraph-doc
 
+  # ============================================
+  # JSON Graph (NEW)
+  # ============================================
+  memgraph-json:
+    image: memgraph/memgraph:latest
+    ports:
+      - "${JSON_MEMGRAPH_PORT:-7689}:7687"
+    command: ["--schema-info-enabled", "--also-log-to-stderr"]
+    environment:
+      - MEMGRAPH_MEMORY_LIMIT=${JSON_MEMGRAPH_MEMORY_LIMIT:-2GB}
+    volumes:
+      - memgraph_json_data:/var/lib/memgraph
+    healthcheck:
+      test: ["CMD-SHELL", "echo 'RETURN 1;' | mgconsole"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  lab-json:
+    image: memgraph/lab:latest
+    ports:
+      - "${JSON_LAB_PORT:-3002}:3000"
+    environment:
+      QUICK_CONNECT_MG_HOST: memgraph-json
+    depends_on:
+      - memgraph-json
+
 volumes:
   memgraph_code_data:
   memgraph_doc_data:
+  memgraph_json_data: # NEW JSON Graph Volume
