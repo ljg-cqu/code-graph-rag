@@ -8,6 +8,7 @@ from collections import defaultdict
 from typing import Any
 
 from loguru import logger
+from codebase_rag.config import settings
 
 
 class ResultAggregator:
@@ -85,18 +86,20 @@ class ResultAggregator:
 
     def _deduplicate_results(self) -> list[dict[str, Any]]:
         """
-        Deduplicate results to remove duplicate findings across subtasks.
+        Deduplicate results to remove duplicate findings across subtasks if enabled.
 
         Returns:
-            Deduplicated list of results
+            Deduplicated list of results if enabled, otherwise full list
         """
-        # For MVP, simple deduplication based on result content hash
+        if not settings.CGR_AGGREGATION_DEDUPLICATION_ENABLED:
+            return self.results
+
+        # Deduplicate based on result content hash
         unique_results = []
         seen_contents = set()
 
         for result_entry in self.results:
             result = result_entry["result"]
-            # Convert result to string for hashing (works for simple types)
             content_hash = hash(str(result))
             if content_hash not in seen_contents:
                 seen_contents.add(content_hash)
@@ -107,6 +110,79 @@ class ResultAggregator:
             logger.info(f"Removed {duplicates_removed} duplicate results")
 
         return unique_results
+
+    def _resolve_conflicts(
+        self, results: list[dict[str, Any]]
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        """
+        Resolve conflicting results using priority rules:
+        1. Higher confidence results > lower confidence results
+        2. Source priority: code > docs > LLM generation > other
+        3. Flag unresolved conflicts for further processing
+
+        Args:
+            results: List of deduplicated results
+
+        Returns:
+            Tuple of (resolved results, list of unresolved conflicts)
+        """
+        # Source priority score mapping
+        source_priority = {
+            "code": 4,
+            "doc": 3,
+            "documentation": 3,
+            "llm": 2,
+            "generated": 2,
+        }
+
+        # Group results by content topic/entity for conflict detection
+        grouped = defaultdict(list)
+        for entry in results:
+            # Extract target entity from subtask if available
+            target = entry["subtask"].get(
+                "target_entity", entry["subtask"].get("relative_path", "unknown")
+            )
+            grouped[target].append(entry)
+
+        resolved = []
+        unresolved = []
+
+        for target, entries in grouped.items():
+            if len(entries) == 1:
+                resolved.append(entries[0])
+                continue
+
+            # Sort entries by priority (highest first)
+            def entry_priority(entry):
+                confidence = entry.get("confidence", 0.5)
+                source = entry.get("source_type", "llm").lower()
+                source_score = source_priority.get(source, 1)
+                return (confidence, source_score)
+
+            entries_sorted = sorted(entries, key=entry_priority, reverse=True)
+            top = entries_sorted[0]
+            next_top = entries_sorted[1]
+
+            # Check if top result is clearly better
+            if top.get("confidence", 0.5) >= next_top.get(
+                "confidence", 0.5
+            ) + 0.2 or source_priority.get(
+                top.get("source_type", "llm").lower(), 1
+            ) > source_priority.get(next_top.get("source_type", "llm").lower(), 1):
+                resolved.append(top)
+                if settings.CGR_PARALLEL_METRICS_ENABLED:
+                    logger.debug(
+                        f"Resolved conflict for {target}: selected {top.get('source_type', 'llm')} result with confidence {top.get('confidence', 0.5)}"
+                    )
+            else:
+                # Unresolved conflict, flag it
+                conflict_msg = f"Unresolved conflict for {target}: multiple conflicting results with similar confidence/source priority"
+                unresolved.append(conflict_msg)
+                resolved.append(top)
+                if settings.CGR_PARALLEL_METRICS_ENABLED:
+                    logger.warning(conflict_msg)
+
+        return resolved, unresolved
 
     def consolidate(self, output_format: str = "markdown") -> Any:
         """
@@ -119,20 +195,25 @@ class ResultAggregator:
             Consolidated output in the requested format
         """
         deduplicated = self._deduplicate_results()
+        resolved_results, unresolved_conflicts = self._resolve_conflicts(deduplicated)
+        self.metadata["unresolved_conflicts"] = len(unresolved_conflicts)
 
         if output_format == "json":
-            return self._format_json(deduplicated)
+            return self._format_json(resolved_results, unresolved_conflicts)
         elif output_format == "markdown":
-            return self._format_markdown(deduplicated)
+            return self._format_markdown(resolved_results, unresolved_conflicts)
         else:
-            return self._format_text(deduplicated)
+            return self._format_text(resolved_results, unresolved_conflicts)
 
-    def _format_json(self, deduplicated: list[dict[str, Any]]) -> dict[str, Any]:
+    def _format_json(
+        self, resolved_results: list[dict[str, Any]], unresolved_conflicts: list[str]
+    ) -> dict[str, Any]:
         """
         Format results as structured JSON.
 
         Args:
-            deduplicated: List of deduplicated result entries
+            resolved_results: List of resolved deduplicated result entries
+            unresolved_conflicts: List of unresolved conflict messages
 
         Returns:
             JSON-serializable result structure
@@ -145,8 +226,10 @@ class ResultAggregator:
                     "file_path": entry["subtask"].get("relative_path"),
                     "result": entry["result"],
                     "execution_time": entry["execution_time"],
+                    "confidence": entry.get("confidence", 1.0),
+                    "source_type": entry.get("source_type", "llm"),
                 }
-                for entry in deduplicated
+                for entry in resolved_results
             ],
             "errors": [
                 {
@@ -157,14 +240,18 @@ class ResultAggregator:
                 }
                 for entry in self.errors
             ],
+            "unresolved_conflicts": unresolved_conflicts,
         }
 
-    def _format_markdown(self, deduplicated: list[dict[str, Any]]) -> str:
+    def _format_markdown(
+        self, resolved_results: list[dict[str, Any]], unresolved_conflicts: list[str]
+    ) -> str:
         """
         Format results as markdown report.
 
         Args:
-            deduplicated: List of deduplicated result entries
+            resolved_results: List of resolved deduplicated result entries
+            unresolved_conflicts: List of unresolved conflict messages
 
         Returns:
             Markdown-formatted report
@@ -177,19 +264,28 @@ class ResultAggregator:
         lines.append(f"Total subtasks: {self.metadata['total_subtasks']}")
         lines.append(f"Completed: {self.metadata['completed_subtasks']}")
         lines.append(f"Failed: {self.metadata['failed_subtasks']}")
+        lines.append(f"Unresolved conflicts: {self.metadata['unresolved_conflicts']}")
         lines.append(
             f"Total execution time: {self.metadata['total_execution_time']:.2f}s"
         )
         lines.append("")
 
+        # Unresolved conflicts section
+        if unresolved_conflicts:
+            lines.append("## ⚠️ Unresolved Conflicts")
+            lines.append("")
+            for conflict in unresolved_conflicts:
+                lines.append(f"- {conflict}")
+            lines.append("")
+
         # Results section
-        if deduplicated:
+        if resolved_results:
             lines.append("## Results")
             lines.append("")
 
             # Group results by file for file-based tasks
             results_by_file = defaultdict(list)
-            for entry in deduplicated:
+            for entry in resolved_results:
                 file_path = entry["subtask"].get("relative_path", "Unknown file")
                 results_by_file[file_path].append(entry)
 
@@ -215,12 +311,15 @@ class ResultAggregator:
 
         return "\n".join(lines)
 
-    def _format_text(self, deduplicated: list[dict[str, Any]]) -> str:
+    def _format_text(
+        self, resolved_results: list[dict[str, Any]], unresolved_conflicts: list[str]
+    ) -> str:
         """
         Format results as plain text.
 
         Args:
-            deduplicated: List of deduplicated result entries
+            resolved_results: List of resolved deduplicated result entries
+            unresolved_conflicts: List of unresolved conflict messages
 
         Returns:
             Plain text output
@@ -231,12 +330,19 @@ class ResultAggregator:
         lines.append(f"Total subtasks: {self.metadata['total_subtasks']}")
         lines.append(f"Completed: {self.metadata['completed_subtasks']}")
         lines.append(f"Failed: {self.metadata['failed_subtasks']}")
+        lines.append(f"Unresolved conflicts: {self.metadata['unresolved_conflicts']}")
         lines.append(f"Total time: {self.metadata['total_execution_time']:.2f}s")
         lines.append("")
 
-        if deduplicated:
+        if unresolved_conflicts:
+            lines.append("=== WARNING: UNRESOLVED CONFLICTS ===")
+            for conflict in unresolved_conflicts:
+                lines.append(f"- {conflict}")
+            lines.append("")
+
+        if resolved_results:
             lines.append("=== RESULTS ===")
-            for entry in deduplicated:
+            for entry in resolved_results:
                 file_path = entry["subtask"].get("relative_path", "Unknown file")
                 lines.append(f"\n--- {file_path} ---")
                 lines.append(str(entry["result"]))

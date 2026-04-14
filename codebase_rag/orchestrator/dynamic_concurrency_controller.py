@@ -2,13 +2,17 @@
 Dynamic Concurrency Controller module for parallel sub-agent execution.
 Implements 10 permanent base workers, 10 burst workers, round-robin assignment, and auto-scaling.
 """
+
+from __future__ import annotations
 import re
 import math
 import psutil
-from typing import List, Optional, Any
+from typing import List, Optional, Any, TYPE_CHECKING
 from loguru import logger
 from codebase_rag.config import settings
-from codebase_rag.orchestrator.subagent_orchestrator import SubAgentWorker
+
+if TYPE_CHECKING:
+    from codebase_rag.orchestrator.subagent_orchestrator import SubAgentWorker
 
 
 class DynamicConcurrencyController:
@@ -35,7 +39,9 @@ class DynamicConcurrencyController:
 
     def _initialize_permanent_workers(self) -> None:
         """Initialize 10 permanent base workers that run continuously for zero cold start overhead."""
-        logger.info(f"Initializing {self.PERMANENT_BASE_WORKERS} permanent base workers")
+        logger.info(
+            f"Initializing {self.PERMANENT_BASE_WORKERS} permanent base workers"
+        )
         for i in range(self.PERMANENT_BASE_WORKERS):
             worker = SubAgentWorker(worker_id=f"base-{i}")
             self.permanent_workers.append(worker)
@@ -106,7 +112,9 @@ class DynamicConcurrencyController:
 
         # Ensure minimum 1 worker
         effective = max(1, effective)
-        logger.info(f"Effective worker count: {effective} (base workers: {self.PERMANENT_BASE_WORKERS}, burst workers allowed: {max(0, effective - self.PERMANENT_BASE_WORKERS)})")
+        logger.info(
+            f"Effective worker count: {effective} (base workers: {self.PERMANENT_BASE_WORKERS}, burst workers allowed: {max(0, effective - self.PERMANENT_BASE_WORKERS)})"
+        )
         return effective
 
     def scale_workers(self, target_count: int) -> List[SubAgentWorker]:
@@ -135,7 +143,9 @@ class DynamicConcurrencyController:
         active_workers.extend(self.burst_workers[:required_burst])
         return active_workers[:target_count]
 
-    def get_next_worker_round_robin(self, active_workers: List[SubAgentWorker]) -> SubAgentWorker:
+    def get_next_worker_round_robin(
+        self, active_workers: List[SubAgentWorker]
+    ) -> SubAgentWorker:
         """
         Get next available worker in strict round-robin order for even load distribution.
 
@@ -147,13 +157,15 @@ class DynamicConcurrencyController:
         """
         if not active_workers:
             raise ValueError("No active workers available")
-        
+
         # Get next worker index, wrap around as needed
         worker = active_workers[self._next_worker_index % len(active_workers)]
         self._next_worker_index += 1
         return worker
 
-    def reassign_failed_subtask(self, active_workers: List[SubAgentWorker], failed_worker_id: str) -> SubAgentWorker:
+    def reassign_failed_subtask(
+        self, active_workers: List[SubAgentWorker], failed_worker_id: str
+    ) -> SubAgentWorker:
         """
         Reassign a failed subtask to the next available worker in the round-robin queue, skipping the failed worker.
 
@@ -167,13 +179,15 @@ class DynamicConcurrencyController:
         # Skip the failed worker by incrementing index once
         self._next_worker_index += 1
         next_worker = self.get_next_worker_round_robin(active_workers)
-        
+
         # If we got the same failed worker, increment again to get a different one
         while next_worker.worker_id == failed_worker_id and len(active_workers) > 1:
             self._next_worker_index += 1
             next_worker = self.get_next_worker_round_robin(active_workers)
-        
-        logger.info(f"Reassigning failed subtask from worker {failed_worker_id} to worker {next_worker.worker_id}")
+
+        logger.info(
+            f"Reassigning failed subtask from worker {failed_worker_id} to worker {next_worker.worker_id}"
+        )
         return next_worker
 
     def shutdown_burst_workers(self) -> None:

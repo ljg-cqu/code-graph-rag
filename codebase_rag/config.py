@@ -563,7 +563,10 @@ class AppConfig(BaseSettings):
 
     # Automatic Concurrency Detection (no explicit user request needed)
     CGR_AUTO_PARALLEL_ENABLED: bool = True
-    CGR_PARALLEL_ELIGIBILITY_THRESHOLD: float = 0.8
+    CGR_PARALLEL_ELIGIBILITY_THRESHOLD: float = 0.7
+    CGR_SIMPLE_TASK_MODEL: str | None = None
+    CGR_AGGREGATION_DEDUPLICATION_ENABLED: bool = True
+    CGR_PARALLEL_METRICS_ENABLED: bool = True
     CGR_PARALLEL_MAX_QUEUE_SIZE: int = 100
 
     # Worker LLM Configuration for Sub-Agents

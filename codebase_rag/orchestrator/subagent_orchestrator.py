@@ -278,6 +278,7 @@ class SubAgentOrchestrator:
     ) -> tuple[Any, float]:
         """
         Execute a single subtask with a given agent.
+        Uses simple task model for low complexity subtasks if configured.
 
         Args:
             agent: Sub-agent instance to use
@@ -288,6 +289,15 @@ class SubAgentOrchestrator:
         """
         start_time = time.time()
         timeout = settings.CGR_SUBAGENT_TIMEOUT
+
+        # Use simple task model for simple tasks if configured
+        complexity = subtask.get("complexity", 2)
+        if complexity <= 1 and settings.CGR_SIMPLE_TASK_MODEL:
+            # Create simple task agent on demand
+            simple_agent = self._default_agent_factory(
+                llm_config=settings.CGR_SIMPLE_TASK_MODEL
+            )
+            agent = simple_agent
 
         try:
             # Execute the task with PREEMPTIVE timeout using single-threaded executor
