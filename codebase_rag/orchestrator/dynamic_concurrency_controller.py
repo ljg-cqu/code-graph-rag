@@ -1,26 +1,49 @@
 """
 Dynamic Concurrency Controller module for parallel sub-agent execution.
-Handles worker count validation, auto-scaling, and dynamic adjustments.
+Implements 10 permanent base workers, 10 burst workers, round-robin assignment, and auto-scaling.
 """
-
 import re
-
+import math
+import psutil
+from typing import List, Optional, Any
 from loguru import logger
-
 from codebase_rag.config import settings
+from codebase_rag.orchestrator.subagent_orchestrator import SubAgentWorker
 
 
 class DynamicConcurrencyController:
     """
     Controls concurrency levels for parallel sub-agent execution.
-    Enforces safety limits, handles auto-scaling, and dynamic adjustments.
+    Implements round-robin assignment, permanent base workers + burst workers architecture,
+    and dynamic auto-scaling per specification.
     """
 
+    # Fixed architecture parameters per spec
+    PERMANENT_BASE_WORKERS = 10
+    MAX_BURST_WORKERS = 10
+    MAX_TOTAL_WORKERS = PERMANENT_BASE_WORKERS + MAX_BURST_WORKERS
+
     def __init__(self):
-        self.max_workers = settings.CGR_MAX_PARALLEL_WORKERS
-        self.default_workers = settings.CGR_DEFAULT_PARALLEL_WORKERS
-        self.allow_override = settings.CGR_ALLOW_DYNAMIC_MAX_OVERRIDE
         self.auto_scale = settings.CGR_AUTO_SCALE_WORKERS
+        # Round-robin assignment state
+        self._next_worker_index = 0
+        # Worker pools
+        self.permanent_workers: List[SubAgentWorker] = []
+        self.burst_workers: List[SubAgentWorker] = []
+        # Initialize permanent base workers on startup (zero cold start)
+        self._initialize_permanent_workers()
+
+    def _initialize_permanent_workers(self) -> None:
+        """Initialize 10 permanent base workers that run continuously for zero cold start overhead."""
+        logger.info(f"Initializing {self.PERMANENT_BASE_WORKERS} permanent base workers")
+        for i in range(self.PERMANENT_BASE_WORKERS):
+            worker = SubAgentWorker(worker_id=f"base-{i}")
+            self.permanent_workers.append(worker)
+
+    def _get_cpu_core_limit(self) -> int:
+        """Get maximum allowed workers based on available physical CPU cores (never exceed cores - 1)."""
+        physical_cores = psutil.cpu_count(logical=False) or 4
+        return max(1, physical_cores - 1)
 
     def extract_worker_count_from_prompt(self, prompt: str) -> int | None:
         """
@@ -32,7 +55,6 @@ class DynamicConcurrencyController:
         Returns:
             Extracted worker count if present, None otherwise
         """
-        # Pattern matching for worker count requests
         patterns = [
             r"(\d+)\s*(?:parallel)?\s*(?:worker|subagent|thread|process)",
             r"use\s+(\d+)\s+workers",
@@ -48,7 +70,7 @@ class DynamicConcurrencyController:
                     count = int(match.group(1))
                     if count > 0:
                         logger.info(f"Extracted worker count: {count} from prompt")
-                        return count
+                        return min(count, self.MAX_TOTAL_WORKERS)
                 except ValueError:
                     pass
 
@@ -58,7 +80,9 @@ class DynamicConcurrencyController:
         self, requested_count: int | None = None, subtask_count: int | None = None
     ) -> int:
         """
-        Calculate the effective worker count considering limits and auto-scaling.
+        Calculate the effective worker count following the spec scaling formula:
+        worker_count = min(max(ceil(subtask_count / 2), 1), max_workers)
+        Also enforces CPU core limit safeguard.
 
         Args:
             requested_count: User-requested worker count (if any)
@@ -67,53 +91,97 @@ class DynamicConcurrencyController:
         Returns:
             Effective worker count to use
         """
-        # Start with requested count or default
-        effective = requested_count or self.default_workers
+        # Apply CPU core limit first (safety safeguard)
+        max_allowed_workers = min(self.MAX_TOTAL_WORKERS, self._get_cpu_core_limit())
 
-        # Enforce max limit unless override is allowed
-        if effective > self.max_workers:
-            if self.allow_override:
-                logger.warning(
-                    f"Requested worker count {effective} exceeds max limit {self.max_workers}. "
-                    "Override allowed, using requested count."
-                )
-            else:
-                logger.warning(
-                    f"Requested worker count {effective} exceeds max limit {self.max_workers}. "
-                    f"Limiting to {self.max_workers}."
-                )
-                effective = self.max_workers
-
-        # Auto-scale to match subtask count if enabled
-        if self.auto_scale and subtask_count is not None:
-            if effective > subtask_count:
-                logger.info(
-                    f"Auto-scaling workers from {effective} to {subtask_count} "
-                    f"to match number of subtasks"
-                )
-                effective = subtask_count
+        # 1. Use user requested count if provided
+        if requested_count is not None:
+            effective = min(requested_count, max_allowed_workers)
+        # 2. Auto-scale based on subtask count if enabled
+        elif self.auto_scale and subtask_count is not None:
+            effective = min(max(math.ceil(subtask_count / 2), 1), max_allowed_workers)
+        # 3. Fall back to permanent base worker count
+        else:
+            effective = min(self.PERMANENT_BASE_WORKERS, max_allowed_workers)
 
         # Ensure minimum 1 worker
         effective = max(1, effective)
-        logger.info(f"Effective worker count: {effective}")
-
+        logger.info(f"Effective worker count: {effective} (base workers: {self.PERMANENT_BASE_WORKERS}, burst workers allowed: {max(0, effective - self.PERMANENT_BASE_WORKERS)})")
         return effective
 
-    def adjust_worker_count(self, current_count: int, adjustment: int) -> int:
+    def scale_workers(self, target_count: int) -> List[SubAgentWorker]:
         """
-        Adjust worker count dynamically during execution.
+        Scale worker pool to target count: use permanent base workers first, then spin up burst workers as needed.
 
         Args:
-            current_count: Current number of active workers
-            adjustment: Number of workers to add (positive) or remove (negative)
+            target_count: Target number of active workers
 
         Returns:
-            New worker count
+            List of active workers ready for assignment
         """
-        new_count = max(1, current_count + adjustment)
-        new_count = (
-            min(new_count, self.max_workers) if not self.allow_override else new_count
-        )
+        active_workers = self.permanent_workers.copy()
+        required_burst = max(0, target_count - self.PERMANENT_BASE_WORKERS)
 
-        logger.info(f"Adjusted worker count from {current_count} to {new_count}")
-        return new_count
+        # Spin up additional burst workers if needed
+        current_burst_count = len(self.burst_workers)
+        if required_burst > current_burst_count:
+            add_count = required_burst - current_burst_count
+            logger.info(f"Spinning up {add_count} additional burst workers")
+            for i in range(current_burst_count, current_burst_count + add_count):
+                worker = SubAgentWorker(worker_id=f"burst-{i}")
+                self.burst_workers.append(worker)
+
+        # Return exactly target count of workers
+        active_workers.extend(self.burst_workers[:required_burst])
+        return active_workers[:target_count]
+
+    def get_next_worker_round_robin(self, active_workers: List[SubAgentWorker]) -> SubAgentWorker:
+        """
+        Get next available worker in strict round-robin order for even load distribution.
+
+        Args:
+            active_workers: List of currently active workers
+
+        Returns:
+            Next worker to assign subtask to
+        """
+        if not active_workers:
+            raise ValueError("No active workers available")
+        
+        # Get next worker index, wrap around as needed
+        worker = active_workers[self._next_worker_index % len(active_workers)]
+        self._next_worker_index += 1
+        return worker
+
+    def reassign_failed_subtask(self, active_workers: List[SubAgentWorker], failed_worker_id: str) -> SubAgentWorker:
+        """
+        Reassign a failed subtask to the next available worker in the round-robin queue, skipping the failed worker.
+
+        Args:
+            active_workers: List of currently active workers
+            failed_worker_id: ID of the worker that failed to execute the subtask
+
+        Returns:
+            Next worker to retry the subtask on
+        """
+        # Skip the failed worker by incrementing index once
+        self._next_worker_index += 1
+        next_worker = self.get_next_worker_round_robin(active_workers)
+        
+        # If we got the same failed worker, increment again to get a different one
+        while next_worker.worker_id == failed_worker_id and len(active_workers) > 1:
+            self._next_worker_index += 1
+            next_worker = self.get_next_worker_round_robin(active_workers)
+        
+        logger.info(f"Reassigning failed subtask from worker {failed_worker_id} to worker {next_worker.worker_id}")
+        return next_worker
+
+    def shutdown_burst_workers(self) -> None:
+        """Shut down all burst workers to free resources when not needed."""
+        if self.burst_workers:
+            logger.info(f"Shutting down {len(self.burst_workers)} burst workers")
+            for worker in self.burst_workers:
+                worker.shutdown()
+            self.burst_workers = []
+        # Reset round-robin index
+        self._next_worker_index = 0
