@@ -105,8 +105,7 @@ class ImportProcessor:
         self.import_mapping[module_qn] = {}
 
         try:
-            cursor = get_query_cursor(imports_query)
-            captures = cursor.captures(root_node)
+            captures = imports_query.captures(root_node)
 
             match language:
                 case cs.SupportedLanguage.PYTHON:

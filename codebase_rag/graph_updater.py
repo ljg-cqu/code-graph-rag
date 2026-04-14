@@ -668,7 +668,7 @@ class GraphUpdater:
             try:
                 lang_spec = LANGUAGE_SPECS[lang]
                 parser = Parser()
-                parser.set_language(lang_spec.language_module)
+                parser.language = lang_spec.language_module
                 parsers[lang] = parser
             except Exception as e:
                 logger.debug(f"Skipping parser for {lang.value}: {str(e)}")

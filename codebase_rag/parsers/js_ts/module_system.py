@@ -61,8 +61,7 @@ class JsTsModuleSystemMixin:
         try:
             try:
                 query = Query(language_obj, cs.JS_COMMONJS_DESTRUCTURE_QUERY)
-                cursor = QueryCursor(query)
-                captures = cursor.captures(root_node)
+                captures = query.captures(root_node)
 
                 variable_declarators = captures.get(cs.CAPTURE_VARIABLE_DECLARATOR, [])
 
