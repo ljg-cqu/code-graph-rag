@@ -191,71 +191,114 @@ class MemgraphBackend(VectorBackend):
         query_embedding: list[float],
         top_k: int = 5,
         filters: dict | None = None,
-    ) -> list[tuple[int, float]]:
-        """Search using native vector_search.search procedure.
+        include_context: bool = False,
+        max_context_depth: int = 2,
+    ) -> list[tuple[int, float]] | list[dict]:
+        """Hybrid vector + graph retrieval using Memgraph native capabilities.
 
-        Searches across all label-specific indexes (function_embedding_index,
-        method_embedding_index, etc.) and combines results.
+        Implements atomic retrieval pipeline:
+        1. Vector similarity search
+        2. BFS context expansion to get related nodes
+        3. Ranking by combined similarity + PageRank score
+        4. Optional context inclusion for richer results
 
-        Note: Parameter order for vector_search.search is (index_name, limit, query_vector)
+        Args:
+            query_embedding: Query vector
+            top_k: Number of primary results to return
+            filters: Optional filters (e.g., {"project_prefix": "myproject."})
+            include_context: If True, returns full node details + context paths
+            max_context_depth: Maximum BFS depth for context expansion
+
         Returns:
-            List of (node_id, similarity) tuples sorted by similarity descending.
+            List of (node_id, similarity) tuples if include_context=False,
+            or list of full result dicts if include_context=True
         """
-        # Use per-label index search directly (avoids fallback overhead)
         effective_top_k = top_k if top_k > 0 else settings.VECTOR_SEARCH_TOP_K
-        return self._search_with_fallback(query_embedding, effective_top_k, filters)
-
-    def _search_with_fallback(
-        self,
-        query_embedding: list[float],
-        top_k: int,
-        filters: dict | None = None,
-    ) -> list[tuple[int, float]]:
-        """Search across individual label indexes and combine results."""
-        results: list[tuple[int, float]] = []
         project_prefix = filters.get("project_prefix") if filters else None
 
+        # Atomic hybrid retrieval pipeline (single Cypher query)
+        if include_context:
+            cypher = """
+            WITH $embedding AS query_vec, $top_k AS top_k, $project_prefix AS project_prefix, $max_depth AS max_depth
+            // Step 1: Vector search to get top matching nodes
+            CALL vector_search.search($index_name, top_k * 3, query_vec)
+            YIELD node AS start_node, similarity AS sim
+            WHERE ($project_prefix IS NULL OR start_node.qualified_name STARTS WITH $project_prefix)
+            
+            // Step 2: BFS expansion to get related context (fixed Memgraph BFS syntax with parentheses)
+            MATCH path = (start_node)-[:CALLS|:DEFINES|:IMPORTS *BFS (1..max_depth)]-(related)
+            WHERE related:Function OR related:Class OR related:Module
+            
+            // Step 3: Rank by combined similarity + PageRank score
+            WITH
+                DISTINCT related,
+                sim,
+                COALESCE(related.pagerank_score, 0.1) AS pr_score,
+                collect(DISTINCT [n IN nodes(path) | n.qualified_name]) AS context_paths
+            ORDER BY (sim * 0.7) + (pr_score * 0.3) DESC
+            LIMIT top_k
+            
+            // Step 4: Return full result details
+            RETURN
+                id(related) AS node_id,
+                related.name AS name,
+                related.qualified_name AS qualified_name,
+                related.path AS file_path,
+                related.docstring AS docstring,
+                related.start_line AS start_line,
+                related.end_line AS end_line,
+                sim AS similarity,
+                pr_score AS pagerank_score,
+                context_paths
+            """
+        else:
+            # Lightweight search without context for speed
+            cypher = """
+            WITH $embedding AS query_vec, $top_k AS top_k, $project_prefix AS project_prefix
+            CALL vector_search.search($index_name, top_k * 2, query_vec)
+            YIELD node AS n, similarity AS sim
+            WHERE ($project_prefix IS NULL OR n.qualified_name STARTS WITH $project_prefix)
+            WITH n, sim, COALESCE(n.pagerank_score, 0.1) AS pr_score
+            ORDER BY (sim * 0.7) + (pr_score * 0.3) DESC
+            LIMIT top_k
+            RETURN id(n) AS node_id, sim AS similarity
+            """
+
+        all_results = []
+        seen_node_ids = set()
+
+        # Search across all label indexes
         for label in self.LABELS_TO_INDEX:
             index_name = f"{label.lower()}_embedding_index"
-
-            # Fetch more results if filtering by project prefix
-            fetch_count = top_k * 3 if project_prefix else top_k
-
-            if project_prefix:
-                cypher = """
-                CALL vector_search.search($index_name, $fetch_count, $embedding)
-                YIELD node, distance, similarity
-                WITH node, distance, similarity
-                WHERE node.qualified_name STARTS WITH $project_prefix
-                RETURN id(node) AS node_id, similarity
-                ORDER BY similarity DESC;
-                """
-            else:
-                cypher = """
-                CALL vector_search.search($index_name, $top_k, $embedding)
-                YIELD node, distance, similarity
-                RETURN id(node) AS node_id, similarity
-                ORDER BY similarity DESC;
-                """
-
             params = {
                 "index_name": index_name,
                 "embedding": query_embedding,
-                "top_k": top_k,
-                "fetch_count": fetch_count,
+                "top_k": effective_top_k,
                 "project_prefix": project_prefix,
+                "max_depth": max_context_depth
             }
 
             try:
                 label_results = self._execute_query(cypher, params)
-                for r in label_results:
-                    results.append((int(r["node_id"]), float(r.get("similarity", 0.0))))
-            except Exception:
-                continue  # Skip if index doesn't exist
+                for res in label_results:
+                    node_id = int(res["node_id"])
+                    if node_id not in seen_node_ids:
+                        seen_node_ids.add(node_id)
+                        if include_context:
+                            all_results.append(res)
+                        else:
+                            all_results.append((node_id, float(res["similarity"])))
+            except Exception as e:
+                logger.debug(f"Search failed for index {index_name}: {e}")
+                continue
 
-        # Sort by similarity and return top_k
-        results.sort(key=lambda x: x[1], reverse=True)
-        return results[:top_k]
+        # Sort final results and return top_k
+        if include_context:
+            all_results.sort(key=lambda x: (x["similarity"] * 0.7) + (x["pagerank_score"] * 0.3), reverse=True)
+            return all_results[:effective_top_k]
+        else:
+            all_results.sort(key=lambda x: x[1], reverse=True)
+            return all_results[:effective_top_k]
 
     def delete_batch(self, node_ids: Sequence[int]) -> int:
         """Remove embeddings from nodes (set to NULL)."""

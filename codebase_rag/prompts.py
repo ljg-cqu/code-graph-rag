@@ -40,7 +40,21 @@ CYPHER_QUERY_RULES = """**2. Critical Cypher Query Rules**
 - **Use `STARTS WITH` for Paths**: When matching paths, always use `STARTS WITH` for robustness (e.g., `WHERE n.path STARTS WITH 'workflows/src'`). Do not use `=`.
 - **Use `ENDS WITH` for qualified_name**: The `qualified_name` property contains full paths like `'Project.folder.subfolder.ClassName'`. When users mention a class, function, or method by its short name (e.g., "VatManager"), use `ENDS WITH` to match: `WHERE c.qualified_name ENDS WITH '.VatManager'`. Do NOT use `{name: 'VatManager'}` equality matching.
 - **Use `toLower()` for Searches**: For case-insensitive searching on string properties, use `toLower()`.
-- **Querying Lists**: To check if a list property (like `decorators`) contains an item, use the `ANY` or `IN` clause (e.g., `WHERE 'flow' IN n.decorators`)."""
+- **Querying Lists**: To check if a list property (like `decorators`) contains an item, use the `ANY` or `IN` clause (e.g., `WHERE 'flow' IN n.decorators`).
+
+**3. Memgraph-Specific Optimization Rules**
+- Use Memgraph MAGE procedures instead of Neo4j APOC procedures
+- **Avoid unsupported constructs**: Never use atom expressions like `size((n)-->())`. Replace with `OPTIONAL MATCH (n)-[r:CALLS]->() RETURN count(r)`
+- **Index syntax**: Use Memgraph index syntax: `CREATE INDEX ON :Label(property)` not Neo4j's `CREATE INDEX ... FOR (n:Label) ON (n.property)`
+- **Traversal optimization**: Use built-in traversal syntax `*BFS`, `*DFS`, `*KSHORTEST` instead of Neo4j's `shortestPath()`/`kShortestPaths()` functions
+- **Type checking**: Use `valueType()` function instead of `IS :: TYPE` type predicate expressions
+- **Query hints**: Add index hints to complex queries to improve performance: e.g., `USING INDEX :Function(qualified_name)`
+- **Parallel execution**: Add `USING PARALLEL EXECUTION` to large analytical queries to leverage multiple CPU cores
+- **Performance best practices**:
+  - Use explicit relationship types in matches to reduce scan scope
+  - Limit path traversal depth with range patterns `*1..3` to avoid full graph scans
+  - Project only required properties in results to reduce roundtrip time
+  - For `OR` filters on the same property, use `IN []` instead of multiple `OR` clauses to leverage label-property indexes"""
 
 
 def build_graph_schema_and_rules() -> str:

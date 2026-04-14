@@ -105,32 +105,14 @@ class VectorBackend(Protocol):
 def get_vector_backend() -> VectorBackend:
     """Factory function to get configured vector backend.
 
-    Reads VECTOR_STORE_BACKEND from settings and returns appropriate backend.
-    Default is 'memgraph' for native vector storage.
+    Only Memgraph native vector storage is supported. Qdrant is deprecated and removed.
 
     Returns:
-        VectorBackend instance (MemgraphBackend or QdrantBackend)
-
-    Raises:
-        ValueError: If backend name is unknown
+        VectorBackend instance (MemgraphBackend)
     """
-    from .config import settings
-
-    backend_name = settings.VECTOR_STORE_BACKEND.lower()
-
-    if backend_name == "qdrant":
-        from .vector_store_qdrant import QdrantBackend
-        logger.info("Using Qdrant vector backend")
-        return QdrantBackend()
-    elif backend_name == "memgraph":
-        from .vector_store_memgraph import MemgraphBackend
-        logger.info("Using Memgraph native vector backend")
-        return MemgraphBackend()
-    else:
-        raise ValueError(
-            f"Unknown vector backend: {backend_name}. "
-            "Supported: 'memgraph' (default), 'qdrant'"
-        )
+    from .vector_store_memgraph import MemgraphBackend
+    logger.info("Using Memgraph native vector backend")
+    return MemgraphBackend()
 
 
 # Global backend instance (lazy initialization)

@@ -1,19 +1,20 @@
 from __future__ import annotations
+
 import json
 import os
-from pathlib import Path
-from typing import Any, Dict, List, Tuple, Set
-from tqdm import tqdm
-from loguru import logger
-import jsonschema
 import threading
+from pathlib import Path
+from typing import Any
+
+import jsonschema
+from loguru import logger
+from tqdm import tqdm
 
 from .config import settings
-from .cypher_queries import build_merge_node_query, build_merge_relationship_query
 from .embedder import EmbeddingCache, get_embedding_provider_instance
+from .schemas import IngestionResult, UpdateResult
 from .services.graph_service import MemgraphIngestor
 from .vector_store import _get_backend as get_vector_store_instance
-from .schemas import IngestionResult, UpdateResult
 
 __all__ = [
     "ingest_json_data",
@@ -31,7 +32,7 @@ config = settings
 SCHEMA_PATH = os.path.join(
     os.path.dirname(os.path.dirname(__file__)), "ingestion_schema.json"
 )
-with open(SCHEMA_PATH, "r") as f:
+with open(SCHEMA_PATH) as f:
     INGESTION_SCHEMA = json.load(f)
 
 embedding_provider = get_embedding_provider_instance()
@@ -556,48 +557,48 @@ def ingest_json_data(
     """
     import concurrent.futures
     result = IngestionResult(dataset_id=dataset_id or "", dry_run=dry_run)
-    
+
     def process_single_file(file_data: tuple[Path, dict[str, Any]]) -> tuple[IngestionResult, bool]:
         """Process a single JSON file, returns partial result and success flag"""
         file_path, data = file_data
         partial_result = IngestionResult(dataset_id=dataset_id or "", dry_run=dry_run)
         # Get round-robin connection from pool for this worker thread
         graph_conn = graph_pool.get()
-        
+
         # Validate input against official schema
         valid, validated_data, validation_errors = validate_json_input(data)
         if not valid or not validated_data:
             partial_result.errors.extend(validation_errors)
             logger.error(f"Validation failed for {file_path}: {validation_errors}")
             return partial_result, False
-        
+
         # Apply metadata overrides if provided (e.g. workspace ID)
         if metadata_override:
             if "metadata" not in validated_data:
                 validated_data["metadata"] = {}
             validated_data["metadata"].update(metadata_override)
-        
+
         # Auto-generate missing IDs for entities (use name as base)
         for entity in validated_data.get("entities", []):
             if "id" not in entity:
                 # Generate deterministic ID from name
                 entity_id = entity["name"].replace(" ", "_").replace("/", "_").lower()
                 entity["id"] = entity_id
-        
+
         # Override dataset ID if provided
         current_dataset_id = dataset_id or validated_data["metadata"].get("dataset_id")
         if not current_dataset_id:
             partial_result.errors.append("Missing required 'dataset_id' in metadata")
             return partial_result, False
         partial_result.dataset_id = current_dataset_id
-        
+
         entities = validated_data.get("entities", [])
         relationships = validated_data.get("relationships", [])
-        
+
         # Count entities and relationships to process
         partial_result.entities_processed += len(entities)
         partial_result.relationships_processed += len(relationships)
-        
+
         # Build name-to-ID map for relationship resolution
         entity_name_to_id: dict[str, str] = {}
         for entity in entities:
@@ -607,14 +608,14 @@ def ingest_json_data(
                 entity_name_to_id[name] = entity_id
             # Also add ID as a reference
             entity_name_to_id[entity_id] = entity_id
-        
+
         # Generate embeddings
         entity_embeddings, embed_errors = generate_embeddings_for_entities(entities)
         partial_result.errors.extend(embed_errors)
-        
+
         rel_embeddings, rel_embed_errors = generate_embeddings_for_relationships(relationships)
         partial_result.errors.extend(rel_embed_errors)
-        
+
         # Ingest entities with thread-local connection
         e_ingested, e_updated, e_skipped, e_failed, e_errors = ingest_entities(
             current_dataset_id,
@@ -632,7 +633,7 @@ def ingest_json_data(
         partial_result.entities_skipped += e_skipped
         partial_result.entities_failed += e_failed
         partial_result.errors.extend(e_errors)
-        
+
         # Ingest relationships with thread-local connection
         r_ingested, r_updated, r_skipped, r_failed, r_errors = ingest_relationships(
             current_dataset_id,
@@ -651,7 +652,7 @@ def ingest_json_data(
         partial_result.relationships_skipped += r_skipped
         partial_result.relationships_failed += r_failed
         partial_result.errors.extend(r_errors)
-        
+
         return partial_result, True
 
     try:
@@ -662,14 +663,14 @@ def ingest_json_data(
             else:
                 json_files = load_json_files(input_path)
             logger.info(f"Loaded {len(json_files)} JSON file(s) for ingestion")
-            
+
             # Process files in parallel if workers > 1
             if parallel_workers > 1 and len(json_files) > 1:
                 logger.info(f"Processing files with {parallel_workers} parallel workers")
                 with concurrent.futures.ThreadPoolExecutor(max_workers=parallel_workers) as executor:
                     # Submit all files for processing
                     future_to_file = {executor.submit(process_single_file, file_data): file_data for file_data in json_files}
-                    
+
                     # Aggregate results as they complete
                     for future in concurrent.futures.as_completed(future_to_file):
                         partial_result, success = future.result()
@@ -677,7 +678,7 @@ def ingest_json_data(
                             result.files_processed += 1
                         else:
                             result.files_skipped += 1
-                        
+
                         # Merge partial results into main result
                         result.entities_processed += partial_result.entities_processed
                         result.entities_ingested += partial_result.entities_ingested
@@ -701,7 +702,7 @@ def ingest_json_data(
                         result.files_processed += 1
                     else:
                         result.files_skipped += 1
-                    
+
                     # Merge partial result
                     result.entities_processed += partial_result.entities_processed
                     result.entities_ingested += partial_result.entities_ingested

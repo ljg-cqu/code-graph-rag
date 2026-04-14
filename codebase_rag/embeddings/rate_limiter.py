@@ -7,8 +7,8 @@ and prevent overwhelming external embedding services.
 from __future__ import annotations
 
 import random
-import time
 import threading
+import time
 
 
 class TokenBucket:

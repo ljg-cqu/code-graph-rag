@@ -1,12 +1,11 @@
 import hashlib
 import json
-import sys
 import os
+import sys
 from collections import OrderedDict, defaultdict
 from collections.abc import Callable, ItemsView, KeysView
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-import itertools
 
 from loguru import logger
 from rich.progress import Progress, SpinnerColumn, TextColumn
@@ -338,6 +337,32 @@ class GraphUpdater:
 
         self._generate_semantic_embeddings()
 
+        # Run post-ingestion graph algorithms (Memgraph MAGE integration)
+        from .graph_algorithms import get_shared_algorithms
+        from .config import settings
+
+        logger.info("Running post-ingestion graph algorithms to improve retrieval quality...")
+        algo = get_shared_algorithms()
+        
+        # Run ANALYZE GRAPH first to update query planner statistics
+        algo.analyze_graph()
+        logger.debug("ANALYZE GRAPH completed, query planner optimized")
+        
+        # Run PageRank for result ranking
+        pagerank_updated = algo.run_pagerank()
+        if pagerank_updated > 0:
+            logger.info(f"PageRank computed for {pagerank_updated} nodes, retrieval ranking improved")
+        
+        # Run community detection (only if there are enough nodes)
+        if pagerank_updated >= 10:  # Minimum 10 nodes for meaningful communities
+            community_updated = algo.run_community_detection()
+            if community_updated > 0:
+                logger.info(f"Community detection completed, {community_updated} nodes assigned to communities")
+        
+        # Close algorithm connection
+        algo.close()
+        logger.info("Post-ingestion graph algorithm processing complete")
+
     def remove_file_from_state(self, file_path: Path) -> None:
         logger.debug(ls.REMOVING_STATE, path=file_path)
 
@@ -619,10 +644,11 @@ class GraphUpdater:
         Returns:
             Tuple of (definition results list, call edges list)
         """
+        from tree_sitter import Parser
+
+        from .language_spec import get_language_spec, get_supported_languages
         from .parsers.factory import ProcessorFactory
         from .services.memory_ingestor import MemoryIngestor
-        from .language_spec import get_language_spec, get_supported_languages
-        from tree_sitter import Parser
 
         # Initialize parsers INSIDE worker (avoids unpickleable parser issue)
         parsers: dict[cs.SupportedLanguage, Parser] = {}

@@ -33,13 +33,17 @@ from . import exceptions as ex
 from . import logs as ls
 from .config import ModelConfig, load_cgrignore_patterns, settings
 from .models import AppContext
+from .orchestrator import (
+    ConcurrencyEligibilityClassifier,
+    SubAgentOrchestrator,
+    TaskSplitter,
+)
 from .prompts import OPTIMIZATION_PROMPT, OPTIMIZATION_PROMPT_WITH_REFERENCE
 from .providers.base import get_provider_from_config
 from .services import QueryProtocol
 from .services.graph_service import MemgraphIngestor
 from .services.llm import CypherGenerator, create_rag_orchestrator
 from .shared.query_router import QueryMode, QueryRouter
-from .orchestrator import ConcurrencyEligibilityClassifier, SubAgentOrchestrator, TaskSplitter, ResultAggregator
 from .tools.code_retrieval import CodeRetriever, create_code_retrieval_tool
 from .tools.codebase_query import create_query_tool
 from .tools.directory_lister import DirectoryLister, create_directory_lister_tool
@@ -903,12 +907,12 @@ async def _run_interactive_loop(
                     app_context.console.print(
                         style(f"\n✅ Auto-activating parallel execution: {task_type} (confidence: {confidence:.2f})", cs.Color.GREEN)
                     )
-                    app_context.console.print(style(f"🔄 Using 10 workers with round-robin scheduling", cs.Color.CYAN))
-                    
+                    app_context.console.print(style("🔄 Using 10 workers with round-robin scheduling", cs.Color.CYAN))
+
                     # Split the task into independent subtasks
                     subtasks = task_splitter.split_task(question_with_context, max_subtasks=10)
                     app_context.console.print(style(f"📋 Split into {len(subtasks)} independent subtasks", cs.Color.CYAN))
-                    
+
                     if len(subtasks) >= 2:
                         # Execute subtasks in parallel with round-robin workers
                         aggregator = subagent_orchestrator.execute_tasks(subtasks)
@@ -920,7 +924,7 @@ async def _run_interactive_loop(
                         question_with_context += f"\n\n### Parallel Execution Results:\n{parallel_result}"
                     else:
                         app_context.console.print(
-                            style(f"⚠️ Not enough subtasks for parallel execution, falling back to sequential", cs.Color.YELLOW)
+                            style("⚠️ Not enough subtasks for parallel execution, falling back to sequential", cs.Color.YELLOW)
                         )
                         use_parallel = False
 

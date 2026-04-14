@@ -217,15 +217,15 @@ def _handle_indexing(
                 table.add_row(key.replace("_", " ").title(), str(value))
 
             app_context.console.print(table)
-            
+
             # === Optional JSON Ingestion (10 Parallel Workers by Default) ===
             if ingest_json:
                 from codebase_rag.json_ingestion import ingest_json_data
                 _info(style(f"Running JSON ingestion with {json_parallel_workers} parallel workers...", cs.Color.CYAN))
-                
+
                 # Resolve target JSON path (user-provided or repo root)
                 target_json_path = json_path or str(repo_path)
-                
+
                 try:
                     ingest_result = ingest_json_data(
                         input_path=target_json_path,
@@ -237,7 +237,7 @@ def _handle_indexing(
                         # Link ingested data to active document workspace for isolation
                         metadata_override={"workspace": doc_workspace}
                     )
-                    
+
                     # Display ingestion results
                     json_table = Table(
                         title=style("JSON Ingestion Results", cs.Color.GREEN),
@@ -246,14 +246,14 @@ def _handle_indexing(
                     )
                     json_table.add_column("Metric", style=cs.Color.CYAN)
                     json_table.add_column("Count", style=cs.Color.YELLOW, justify="right")
-                    
+
                     json_table.add_row("JSON files processed", str(getattr(ingest_result, 'files_processed', 0)))
                     json_table.add_row("Invalid JSON files skipped", str(getattr(ingest_result, 'files_skipped', 0)))
                     json_table.add_row("Entities ingested", str(ingest_result.entities_ingested))
                     json_table.add_row("Relationships ingested", str(ingest_result.relationships_ingested))
-                    
+
                     app_context.console.print(json_table)
-                    
+
                     # Handle errors if fail-on-invalid is enabled
                     if ingest_result.errors:
                         _info(style(f"Ingestion completed with {len(ingest_result.errors)} errors:", cs.Color.YELLOW))
@@ -261,15 +261,15 @@ def _handle_indexing(
                             _info(style(f"  - {error}", cs.Color.RED))
                         if len(ingest_result.errors) > 15:
                             _info(style(f"  ... and {len(ingest_result.errors) - 15} more errors", cs.Color.RED))
-                            
+
                         if not json_skip_invalid:
-                            raise ValueError(f"JSON ingestion failed (--json-fail-on-invalid enabled)")
-                            
+                            raise ValueError("JSON ingestion failed (--json-fail-on-invalid enabled)")
+
                 except Exception as e:
                     _info(style(f"JSON ingestion failed: {e}", cs.Color.RED))
                     if not json_skip_invalid:
                         raise typer.Exit(1) from e
-            
+
             docs_indexed = True
 
         except Exception as e:

@@ -314,6 +314,12 @@ class AppConfig(BaseSettings):
     MEMGRAPH_VECTOR_METRIC: str = "cos"  # Options: l2sq, cos, ip, pearson
     MEMGRAPH_VECTOR_SCALAR_KIND: str = "f32"  # Options: f32, f64, f16, bf16, f8
 
+    # Graph Algorithm Configuration
+    ALGORITHM_RUN_POST_INGESTION: bool = True
+    ALGORITHM_ENABLE_PAGERANK: bool = True
+    ALGORITHM_ENABLE_COMMUNITY_DETECTION: bool = True
+    ALGORITHM_COMMUNITY_ALGORITHM: str = "leiden"
+
     # Unified vector settings
     VECTOR_SEARCH_TOP_K: int = 5
     VECTOR_EMBEDDING_BATCH_SIZE: int = 50
@@ -505,7 +511,7 @@ class AppConfig(BaseSettings):
             Populated ModelConfig object
         """
         provider_lower = provider.lower()
-        
+
         # Look for provider-specific default configs
         api_key = None
         endpoint = None
@@ -514,7 +520,7 @@ class AppConfig(BaseSettings):
         provider_type = None
         thinking_budget = None
         service_account_file = None
-        
+
         # Check for provider-specific API keys from environment
         if provider_lower == "openai":
             api_key = os.environ.get("OPENAI_API_KEY", cs.DEFAULT_API_KEY)
@@ -527,7 +533,7 @@ class AppConfig(BaseSettings):
         elif provider_lower == "ollama":
             endpoint = self.ollama_endpoint
             api_key = cs.DEFAULT_API_KEY
-        
+
         return ModelConfig(
             provider=provider_lower,
             model_id=model,
@@ -545,11 +551,11 @@ class AppConfig(BaseSettings):
         """Get the list of validated active worker LLMs for sub-agents."""
         if self._active_worker_llms is not None:
             return self._active_worker_llms
-        
+
         # Parse from CGR_WORKER_LLMS config
         worker_llms_config = self.CGR_WORKER_LLMS
         parsed_llms: list[ModelConfig] = []
-        
+
         if isinstance(worker_llms_config, str):
             if worker_llms_config.strip():
                 # Split comma-separated list
@@ -565,7 +571,7 @@ class AppConfig(BaseSettings):
                 elif isinstance(entry, dict):
                     # Full ModelConfig dict
                     parsed_llms.append(ModelConfig(**entry))
-        
+
         # Validate all parsed LLMs
         valid_llms = []
         for llm_config in parsed_llms:
@@ -574,7 +580,7 @@ class AppConfig(BaseSettings):
                 valid_llms.append(llm_config)
             except ValueError as e:
                 logger.warning(f"Skipping invalid worker LLM config: {str(e)}")
-        
+
         self._active_worker_llms = valid_llms
         return valid_llms
 
@@ -587,7 +593,7 @@ class AppConfig(BaseSettings):
                   ModelConfig objects, or ModelConfig dictionaries
         """
         parsed_llms: list[ModelConfig] = []
-        
+
         for llm_entry in llms:
             if isinstance(llm_entry, str):
                 provider, model = self.parse_model_string(llm_entry)
@@ -596,7 +602,7 @@ class AppConfig(BaseSettings):
                 parsed_llms.append(ModelConfig(**llm_entry))
             elif isinstance(llm_entry, ModelConfig):
                 parsed_llms.append(llm_entry)
-        
+
         # Validate all configs
         valid_llms = []
         for llm_config in parsed_llms:
@@ -605,7 +611,7 @@ class AppConfig(BaseSettings):
                 valid_llms.append(llm_config)
             except ValueError as e:
                 logger.warning(f"Skipping invalid worker LLM config: {str(e)}")
-        
+
         self._active_worker_llms = valid_llms if valid_llms else None
         if valid_llms:
             logger.info(f"Set {len(valid_llms)} worker LLMs successfully")
