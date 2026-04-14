@@ -80,10 +80,10 @@ class SubAgentOrchestrator:
     def _default_agent_factory(self, llm_config: ModelConfig | None = None) -> Any:
         """
         Default factory for creating sub-agent instances.
-        
+
         Args:
             llm_config: Optional custom LLM config to use for this sub-agent instead of default orchestrator LLM
-        
+
         Returns:
             New sub-agent instance with specified LLM configuration
         """
@@ -281,15 +281,17 @@ class SubAgentOrchestrator:
         timeout = settings.CGR_SUBAGENT_TIMEOUT
 
         try:
-            # Execute the task with timeout
-            result = agent.execute(subtask)
+            # Execute the task with PREEMPTIVE timeout using single-threaded executor
+            with ThreadPoolExecutor(max_workers=1) as task_executor:
+                future = task_executor.submit(agent.execute, subtask)
+                result = future.result(timeout=timeout)
+
             execution_time = time.time() - start_time
-
-            if execution_time > timeout:
-                raise TimeoutError(f"Subtask exceeded timeout of {timeout}s")
-
             return result, execution_time
 
+        except TimeoutError:
+            execution_time = time.time() - start_time
+            raise TimeoutError(f"Subtask exceeded timeout of {timeout}s")
         except Exception as e:
             execution_time = time.time() - start_time
             raise e
