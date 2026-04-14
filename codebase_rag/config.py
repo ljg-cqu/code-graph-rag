@@ -570,6 +570,12 @@ class AppConfig(BaseSettings):
     CGR_WORKER_LLMS: str | list[str | dict] = Field(default_factory=list)
     CGR_WORKER_LLM_ASSIGNMENT_STRATEGY: Literal["round-robin"] = "round-robin"
 
+    # Context Window Management Configuration
+    CONTEXT_WINDOW_DEFAULT: int = 256000
+    DEFAULT_CONTEXT_WINDOW: int = Field(default=256000, gt=0)
+    ORCHESTRATOR_CONTEXT_WINDOW: int | None = Field(default=None, gt=0)
+    CYPHER_CONTEXT_WINDOW: int | None = Field(default=None, gt=0)
+
     # Context Window Compression Configuration
     CONTEXT_COMPRESSION_AUTO_TRIGGER_PCT: float = Field(default=85.0, gt=0, lt=100)
     CONTEXT_COMPRESSION_HYSTERESIS_PCT: float = Field(default=5.0, gt=0, lt=20)

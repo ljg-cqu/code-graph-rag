@@ -104,12 +104,14 @@ class ContextCompressor:
     def __init__(
         self,
         context: list[dict[str, Any]],
+        max_context: int,
         aggressive_mode: bool = False,
         preserve_pattern: str | None = None,
         min_retention_score: float | None = None,
         worker_count: int | None = None,
     ):
         self.context = context
+        self.max_context = max_context
         self.aggressive_mode = aggressive_mode
         self.preserve_pattern: Pattern | None = (
             re.compile(preserve_pattern, re.IGNORECASE) if preserve_pattern else None

@@ -512,10 +512,13 @@ async def _run_agent_response_loop(
                     ),
                 )
             )
-            # Get max context window from model config (default to 128k if not specified)
-            max_context = 128000
+            # Get max context window from model config (default to 256k if not specified)
+            max_context = settings.DEFAULT_CONTEXT_WINDOW
             try:
-                if model_override_config:
+                # Check for role-specific override first (highest precedence)
+                if settings.ORCHESTRATOR_CONTEXT_WINDOW:
+                    max_context = settings.ORCHESTRATOR_CONTEXT_WINDOW
+                elif model_override_config:
                     # Get from override if set
                     provider = get_provider_from_config(model_override_config)
                     max_context = provider.get_model_context_window(
@@ -530,9 +533,9 @@ async def _run_agent_response_loop(
                         settings.active_orchestrator_config.model_id
                     )
             except Exception as e:
-                # Fallback to default 128k
+                # Fallback to default
                 logger.debug(
-                    f"Failed to retrieve model context window, using default 128k: {e}"
+                    f"Failed to retrieve model context window, using default {settings.CONTEXT_WINDOW_DEFAULT:,}: {e}"
                 )
 
             trigger_threshold = int(
@@ -556,6 +559,7 @@ async def _run_agent_response_loop(
 
                 compressor = ContextCompressor(
                     context=context,
+                    max_context=max_context,
                     aggressive_mode=False,
                     worker_count=settings.CONTEXT_COMPRESSION_PARALLEL_WORKERS,
                 )
@@ -1016,8 +1020,28 @@ async def _run_interactive_loop(
                         if hasattr(msg, "content")
                     ]
 
+                    # Get max context window for current model
+                    max_context = settings.DEFAULT_CONTEXT_WINDOW
+                    try:
+                        # Check for role-specific override first (highest precedence)
+                        if settings.ORCHESTRATOR_CONTEXT_WINDOW:
+                            max_context = settings.ORCHESTRATOR_CONTEXT_WINDOW
+                        else:
+                            # Get from active orchestrator config
+                            provider = get_provider_from_config(
+                                settings.active_orchestrator_config
+                            )
+                            max_context = provider.get_model_context_window(
+                                settings.active_orchestrator_config.model_id
+                            )
+                    except Exception as e:
+                        logger.debug(
+                            f"Failed to retrieve model context window for /compress command, using default {settings.DEFAULT_CONTEXT_WINDOW:,}: {e}"
+                        )
+
                     compressor = ContextCompressor(
                         context=context,
+                        max_context=max_context,
                         aggressive_mode=aggressive,
                         preserve_pattern=preserve_pattern,
                         worker_count=workers,

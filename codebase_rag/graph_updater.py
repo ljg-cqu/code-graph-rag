@@ -659,6 +659,7 @@ class GraphUpdater:
             queries[lang] = load_queries_for_language(lang)
         from .parsers.factory import ProcessorFactory
         from .services.memory_ingestor import MemoryIngestor
+        from .parser_loader import LANGUAGE_LIBRARIES
 
         from .language_spec import LANGUAGE_SPECS
 
@@ -666,9 +667,12 @@ class GraphUpdater:
         parsers: dict[cs.SupportedLanguage, Parser] = {}
         for lang in get_supported_languages():
             try:
+                lang_lib = LANGUAGE_LIBRARIES.get(lang)
+                if not lang_lib:
+                    continue
                 lang_spec = LANGUAGE_SPECS[lang]
                 parser = Parser()
-                parser.language = lang_spec.language_module
+                parser.language = lang_lib()
                 parsers[lang] = parser
             except Exception as e:
                 logger.debug(f"Skipping parser for {lang.value}: {str(e)}")

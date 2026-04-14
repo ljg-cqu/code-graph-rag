@@ -46,9 +46,43 @@ class ModelProvider(ABC):
     def get_model_context_window(self, model_id: str) -> int:
         """Get the context window size for a given model ID.
 
-        Defaults to 128k tokens, override in provider subclasses for specific model sizes.
+        Precedence order:
+        1. Provider/model-specific environment variable override: {PROVIDER}_{MODEL}_CONTEXT_WINDOW
+        2. Pre-defined model context window map for the provider
+        3. Global default context window (256k)
         """
-        return 128000
+        import re
+
+        # Normalize model ID: convert to uppercase, replace spaces, hyphens, periods with underscores
+        normalized_model = re.sub(r"[\s\-\.]", "_", model_id).upper()
+        # Check for provider/model-specific env var
+        env_var_name = (
+            f"{self.provider_name.value.upper()}_{normalized_model}_CONTEXT_WINDOW"
+        )
+        env_value = os.environ.get(env_var_name)
+        if env_value:
+            try:
+                return int(env_value)
+            except ValueError:
+                logger.warning(
+                    f"Invalid value for {env_var_name}, falling back to default"
+                )
+
+        # Check provider-specific model map
+        if hasattr(self, "MODEL_CONTEXT_WINDOWS"):
+            # Check exact match first
+            if model_id in self.MODEL_CONTEXT_WINDOWS:
+                return self.MODEL_CONTEXT_WINDOWS[model_id]
+            # Check normalized match
+            if normalized_model in self.MODEL_CONTEXT_WINDOWS:
+                return self.MODEL_CONTEXT_WINDOWS[normalized_model]
+            # Check prefix matches for model families
+            for model_prefix, window_size in self.MODEL_CONTEXT_WINDOWS.items():
+                if normalized_model.startswith(model_prefix.rstrip("*").upper()):
+                    return window_size
+
+        # Fall back to global default
+        return settings.DEFAULT_CONTEXT_WINDOW
 
 
 def _resolve_api_key(api_key: str | None, env_var: str) -> str | None:
@@ -69,6 +103,13 @@ class GoogleProvider(ModelProvider):
         "service_account_file",
         "thinking_budget",
     )
+
+    MODEL_CONTEXT_WINDOWS = {
+        "gemini-2.5-pro*": 1048576,
+        "gemini-2.5-flash*": 1048576,
+        "gemini-1.5-pro*": 2097152,
+        "gemini-1.5-flash*": 1048576,
+    }
 
     def __init__(
         self,
@@ -132,6 +173,14 @@ class GoogleProvider(ModelProvider):
 class OpenAIProvider(ModelProvider):
     __slots__ = ("api_key", "endpoint")
 
+    MODEL_CONTEXT_WINDOWS = {
+        "gpt-4o": 128000,
+        "gpt-4o-mini": 128000,
+        "gpt-4-turbo": 128000,
+        "gpt-4": 8192,
+        "gpt-3.5-turbo": 128000,
+    }
+
     def __init__(
         self,
         api_key: str | None = None,
@@ -161,6 +210,15 @@ class OpenAIProvider(ModelProvider):
 
 class OllamaProvider(ModelProvider):
     __slots__ = ("endpoint", "api_key")
+
+    MODEL_CONTEXT_WINDOWS = {
+        "llama3.1*": 128000,
+        "llama3*": 8192,
+        "mistral-nemo*": 128000,
+        "gemma2*": 128000,
+        "qwen2*": 128000,
+        "phi3*": 128000,
+    }
 
     def __init__(
         self,
@@ -194,6 +252,15 @@ class OllamaProvider(ModelProvider):
 class AnthropicProvider(ModelProvider):
     __slots__ = ("api_key",)
 
+    MODEL_CONTEXT_WINDOWS = {
+        "claude-3-5-sonnet*": 200000,
+        "claude-3-opus*": 200000,
+        "claude-3-sonnet*": 200000,
+        "claude-3-haiku*": 200000,
+        "claude-2.1*": 200000,
+        "claude-2.0*": 100000,
+    }
+
     def __init__(
         self,
         api_key: str | None = None,
@@ -220,6 +287,9 @@ class AnthropicProvider(ModelProvider):
 
 class AzureOpenAIProvider(ModelProvider):
     __slots__ = ("api_key", "endpoint", "api_version")
+
+    # Azure OpenAI uses same model context windows as regular OpenAI
+    MODEL_CONTEXT_WINDOWS = OpenAIProvider.MODEL_CONTEXT_WINDOWS
 
     def __init__(
         self,

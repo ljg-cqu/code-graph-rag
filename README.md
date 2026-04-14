@@ -68,6 +68,13 @@ An accurate Retrieval-Augmented Generation (RAG) system that analyzes multi-lang
 - **⚡ Automatic Parallel Execution**: No explicit user request needed! The system automatically detects parallelizable tasks (multi-file search, bulk validation, large repo ingestion, multi-tool workflows, etc.) and spawns 10 round-robin parallel workers to speed up execution by up to 10x. Fully transparent, with graceful fallback to sequential execution for non-parallel tasks.
 - **⚡ Blazing Fast Parallel Indexing**: Up to 20x faster codebase ingestion with perfect round-robin load distribution across parallel workers, auto-optimized at runtime to match your CPU core count and workload size (never uses more workers than needed, no wasted overhead). Fully backward compatible with sequential mode, no configuration required out of the box.
 - **🧠 Intelligent Context Window Compression**: Automatically prevents LLM context window overflow with zero semantic loss for critical content, no manual intervention required. Uses 10 parallel round-robin workers (supports up to 20 for high throughput workloads) to evaluate 5 compression strategies and select the optimal one per scenario using weighted scoring (60% semantic retention, 30% token reduction, 10% execution speed). Features include: automatic 85% usage trigger with 5% hysteresis buffer, manual `/compress` CLI command with aggressive mode and custom preserve patterns, 24h context archive for restore capability, automatic rollback if retention falls below 70% threshold, and guaranteed preservation of latest 2 user turns, all system prompts, and tool call history. Delivers average 40% token reduction with >88% semantic retention in <200ms per compression run.
+- **🧠 Context Window Management System**: Flexible, multi-level context window configuration with automatic model detection:
+  - Default context window increased to 256k tokens to align with modern LLM capabilities
+  - Support for role-specific overrides (orchestrator, cypher) with highest precedence
+  - Support for provider/model-specific overrides via environment variables
+  - Automatic context window detection for all common LLM models across supported providers
+  - Graceful fallback to global default value when detection fails
+  - Fully backwards compatible with existing configurations
 - **🔍 Hybrid Retrieval Pipeline**: Combines semantic vector search, graph traversal, and PageRank ranking in a single atomic Memgraph query for more relevant results and lower latency. No separate vector search and graph query steps needed.
 - **🌐 Global Filesystem Access**: Access files anywhere on your host system (enabled by default), with optional write approval requirements and built-in protection against path traversal attacks.
 - **📚 Document GraphRAG**: Index and query documentation (Markdown, PDF, DOCX) alongside code. Supports bidirectional validation between code and specs, merged queries across both graphs, and automated documentation audits.
@@ -236,6 +243,29 @@ CYPHER_ENDPOINT=http://localhost:11434/v1
 ```
 
 Get your Google API key from [Google AI Studio](https://aistudio.google.com/app/apikey).
+
+#### Context Window Configuration Options
+The system provides flexible context window management with multiple configuration levels (highest to lowest precedence):
+1. **Role-specific overrides**: Set custom context window sizes for orchestrator and cypher models:
+   ```bash
+   ORCHESTRATOR_CONTEXT_WINDOW=256000
+   CYPHER_CONTEXT_WINDOW=128000
+   ```
+2. **Provider/model-specific overrides**: Set context window for specific models. Model ID is normalized to uppercase with spaces/hyphens/periods replaced with underscores:
+   ```bash
+   # Examples:
+   OPENAI_GPT_4O_CONTEXT_WINDOW=128000
+   ANTHROPIC_CLAUDE_3_5_SONNET_CONTEXT_WINDOW=200000
+   GOOGLE_GEMINI_2_5_PRO_CONTEXT_WINDOW=1048576
+   OLLAMA_LLAMA3_1_CONTEXT_WINDOW=128000
+   ```
+3. **Automatic detection**: The system automatically detects context window sizes for all common LLM models across supported providers
+4. **Global default**: Fallback value when no other configuration is found (default: 256000 tokens):
+   ```bash
+   DEFAULT_CONTEXT_WINDOW=256000
+   ```
+
+All new configuration options are fully backwards compatible. To keep the old 128k default, set `DEFAULT_CONTEXT_WINDOW=128000` in your `.env` file.
 
 **Install and run Ollama**:
 ```bash

@@ -12,7 +12,8 @@
 
 ## 1. Purpose
 This document specifies the design for version 2 of the Parallel Task Orchestration System, which addresses critical limitations in the current implementation:
-1. Fix low-confidence parallel task execution (current threshold of 0.8 is rarely met, leading to underutilization of parallel processing)
+1. Fix low-confidence parallel task execution caused by rigid rule-based pattern matching that fails to handle dynamic natural language user inputs (existing implementation frequently returns 0.0 confidence for valid parallel-eligible tasks)
+2. Prioritize explicit user control over parallel/sequential execution via natural language prompts, with no requirement for users to follow rigid syntax patterns
 2. Improve task splitting accuracy to eliminate overlapping or missing subtasks
 3. Add dynamic worker scaling to optimize resource usage based on workload size
 4. Implement better result aggregation and deduplication to reduce redundant work
@@ -101,7 +102,12 @@ The v2 Parallel Task Orchestration System consists of 5 new/updated components:
 ```
 
 ### 4.2 Workflow
-1. **Eligibility Check**: Classifier analyzes incoming request, calculates confidence score for parallel execution
+1. **Eligibility Check (priority order enforced)**:
+   - First check for explicit user requests to force parallel/sequential execution (highest priority)
+   - Run safety rule checks to block parallel execution for write operations or explicit sequential requests
+   - Run LLM intent analysis to calculate confidence score for parallel execution (primary detection method for natural language inputs)
+   - (Optional, based on configured mode) Run legacy rule-based pattern matching for backwards compatibility
+   - Final eligibility determined by comparing confidence score against configured threshold
 2. **Task Splitting**: If eligible, request is split into atomic subtasks using code graph structure
 3. **Worker Pool Scaling**: Number of workers is dynamically adjusted based on subtask count and system load
 4. **Subtask Execution**: Each subtask is assigned to a worker, with optional smaller model for simple tasks
@@ -110,18 +116,27 @@ The v2 Parallel Task Orchestration System consists of 5 new/updated components:
 
 ## 5. Implementation Details
 ### 5.1 Eligibility Classifier Enhancements
-**File**: `codebase_rag/orchestrator/concurrency_classifier.py`
-1. Lower default confidence threshold from 0.8 to 0.7:
-   ```python
-   DEFAULT_CONFIDENCE_THRESHOLD = 0.7
-   ```
-2. Add dynamic confidence calibration:
+**File**: `codebase_rag/orchestrator/concurrency_eligibility_classifier.py`
+1. **Priority Hierarchy for Eligibility Detection (Top → Bottom)**:
+   - **Explicit user request overrides all**:
+     - If user prompt contains keywords like `parallel`, `run in parallel`, `split into subtasks` → automatically enable parallel execution (confidence 1.0)
+     - If user prompt contains keywords like `sequential`, `no parallel`, `run one at a time` → automatically disable parallel execution (confidence 0.0)
+   - **Safety rule checks (retained from original design)**:
+     - Write operations (modify/delete/create code/files) are always ineligible for parallel execution
+     - Tasks explicitly referencing single files/entities are ineligible by default
+2. **LLM Intent Analysis for Eligibility (Primary Detection Method)**:
+   - Replace rigid rule-based regex pattern matching with lightweight LLM intent analysis for natural language requests
+   - LLM evaluates if a request can be split into independent, non-overlapping subtasks, returning a confidence score 0.0-1.0
+   - Default confidence threshold remains lowered to 0.7 to maximize parallel utilization
+3. **Dynamic confidence calibration (retained from original design)**:
    - Maintain a running success rate for each task type
    - Adjust threshold automatically if success rate for a task type is above 90% (lower threshold) or below 60% (higher threshold)
-3. Add additional eligibility signals:
-   - Request length (longer requests are more eligible for parallelization)
-   - Number of distinct code entities referenced in the request
-   - Presence of keywords indicating multi-part requests ("list all", "find all", "compare", "analyze")
+4. **Rule-based approach fully removed**:
+   - All legacy regex-based eligible task pattern matching is completely eliminated
+   - Only minimal safety-focused non-eligible rule checks are retained (critical for system stability):
+     - Write operations (modify/delete/create code/files) always block parallel execution
+     - Explicit user requests for sequential execution always block parallel execution
+   - No legacy rule-based eligibility detection remains in the system
 
 ### 5.2 Code Graph-Aware Task Splitting
 **File**: `codebase_rag/orchestrator/task_splitter.py`
@@ -136,12 +151,18 @@ The v2 Parallel Task Orchestration System consists of 5 new/updated components:
 
 ### 5.3 Dynamic Worker Pool
 **File**: `codebase_rag/orchestrator/worker_pool.py`
-1. Implement dynamic scaling logic:
-   - Minimum workers: 1
-   - Maximum workers: `CGR_MAX_PARALLEL_WORKERS` (default: 20)
-   - Scaling formula: `worker_count = min(max(ceil(subtask_count / 2), 1), max_workers)`
-   - Adjust for available CPU cores: never exceed number of physical cores - 1
-2. Add worker reuse to reduce initialization overhead
+1. Worker Count & Scaling Configuration:
+   - Permanent base workers: 10 always-running workers to eliminate cold start initialization overhead
+   - Additional burst workers: 10 on-demand workers, bringing total maximum parallel workers to 20 (matches `CGR_MAX_PARALLEL_WORKERS` default value)
+   - Dynamic scaling logic:
+     - Minimum active workers: 1
+     - Scaling formula: `worker_count = min(max(ceil(subtask_count / 2), 1), CGR_MAX_PARALLEL_WORKERS)`
+     - CPU core safeguard: Worker count never exceeds number of physical cores - 1 to avoid resource contention
+2. Round-Robin Assignment Strategy:
+   - All subtasks are assigned to available workers in strict round-robin order to ensure perfectly even load distribution
+   - Permanent base workers are prioritized for assignment first; burst workers are only spun up when all base workers are fully occupied
+   - Worker state is tracked to ensure no worker receives overlapping subtasks
+   - Failed subtasks are automatically re-assigned to the next available worker in the round-robin queue up to the configured retry limit
 3. Implement worker timeout per subtask (default: 300s, configurable via `CGR_SUBTASK_TIMEOUT`)
 
 ### 5.4 Per-Subtask Model Selection
@@ -310,17 +331,24 @@ class AggregatedResult:
 ## 8. Testing Plan
 ### 8.1 Unit Tests
 1. **Eligibility Classifier Tests**:
-   - Test confidence thresholding works correctly
-   - Test dynamic calibration adjusts thresholds based on success rates
-   - Test eligibility detection for common request types
+   - Test user override priority: explicit parallel/sequential requests override all other detection logic
+   - Test LLM intent analysis correctly identifies parallel-eligible natural language requests with appropriate confidence scores for all types of phrasing, not just predefined patterns
+   - Test safety rule enforcement: write operations and explicit sequential requests are always ineligible for parallel execution
+   - Test confidence thresholding works correctly with LLM-generated scores
+   - Test dynamic calibration adjusts thresholds based on past execution success rates
+   - Test eligibility detection works correctly for all common request types
 2. **Task Splitter Tests**:
    - Test split tasks are non-overlapping and atomic
    - Test split results respect context window limits
    - Test code graph integration produces optimal splits
 3. **Worker Pool Tests**:
-   - Test dynamic scaling adjusts worker count correctly based on subtask count
+   - Test 10 permanent base workers initialize correctly on system startup with zero cold start overhead
+   - Test additional 10 burst workers spin up only when all base workers are fully occupied
+   - Test dynamic scaling adjusts active worker count correctly based on subtask count, respecting the 20 worker maximum limit
+   - Test round-robin assignment strategy distributes subtasks evenly across all available workers
+   - Test failed subtasks are re-assigned to the next available worker in the round-robin queue automatically
    - Test worker timeout works correctly
-   - Test error handling for failed subtasks
+   - Test CPU core safeguard prevents worker count from exceeding available system resources
 4. **Result Aggregator Tests**:
    - Test deduplication removes overlapping results
    - Test conflict resolution works according to priority rules
@@ -339,14 +367,11 @@ class AggregatedResult:
 4. Test with very simple requests to verify they fall back to sequential execution
 
 ## 9. Migration Guide
-This release is fully backwards compatible:
-- Existing parallel execution configuration continues to work without modification
-- Default threshold is lowered from 0.8 to 0.7 to enable more parallel execution by default
-- Users who want to keep the old 0.8 threshold can set:
-  ```env
-  CGR_PARALLEL_ELIGIBILITY_THRESHOLD=0.8
-  ```
-- All new features are disabled by default unless explicitly configured
+### Migration Notes:
+- Legacy rule-based eligible task detection is completely removed, no configuration option to revert remains
+- Default parallel eligibility threshold is lowered from 0.8 to 0.7 to maximize parallel utilization
+- Existing parallel execution configuration (worker counts, timeouts, etc.) continues to work without modification
+- No breaking changes to existing user workflows; parallel execution will work for more natural language inputs than the previous implementation
 
 ## 10. Documentation Updates
 1. Update `.env.example` with all new parallel execution configuration options

@@ -66,6 +66,7 @@ class LanguageSpec:
     function_node_types: tuple[str, ...]
     class_node_types: tuple[str, ...]
     module_node_types: tuple[str, ...]
+    language_module: str | None = None
     call_node_types: tuple[str, ...] = ()
     import_node_types: tuple[str, ...] = ()
     import_from_node_types: tuple[str, ...] = ()
@@ -118,7 +119,9 @@ class CodeChunk:
     content: str
     start_line: int
     end_line: int
-    chunk_type: Literal["class", "function", "method", "block", "statement", "truncated"]
+    chunk_type: Literal[
+        "class", "function", "method", "block", "statement", "truncated"
+    ]
     parent_scope: str | None = None
     parent_fqn: str | None = None
     chunk_index: int = 0
