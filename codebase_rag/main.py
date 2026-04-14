@@ -494,50 +494,85 @@ async def _run_agent_response_loop(
     while True:
         # === AUTOMATIC CONTEXT COMPRESSION HOOK ===
         if settings.CONTEXT_COMPRESSION_ENABLED and message_history:
+            import dataclasses
             from .utils.token_utils import count_tokens
+
             # Estimate total tokens (history + new question)
-            total_tokens = count_tokens(json.dumps([m.model_dump() for m in message_history] + [question_with_context]))
+            total_tokens = count_tokens(
+                json.dumps(
+                    [dataclasses.asdict(m) for m in message_history]
+                    + [question_with_context],
+                    default=lambda obj: (
+                        obj.isoformat() if hasattr(obj, "isoformat") else obj
+                    ),
+                )
+            )
             # Get max context window from model config (default to 128k if not specified)
             max_context = 128000
             try:
                 if model_override_config:
                     # Get from override if set
                     provider = get_provider_from_config(model_override_config)
-                    max_context = provider.get_model_context_window(model_override_config.model_id)
+                    max_context = provider.get_model_context_window(
+                        model_override_config.model_id
+                    )
                 else:
                     # Get from default orchestrator config
-                    provider = get_provider_from_config(settings.active_orchestrator_config)
-                    max_context = provider.get_model_context_window(settings.active_orchestrator_config.model_id)
-            except:
+                    provider = get_provider_from_config(
+                        settings.active_orchestrator_config
+                    )
+                    max_context = provider.get_model_context_window(
+                        settings.active_orchestrator_config.model_id
+                    )
+            except Exception as e:
                 # Fallback to default 128k
-                pass
-            
-            trigger_threshold = int(max_context * settings.CONTEXT_COMPRESSION_AUTO_TRIGGER_PCT / 100)
-            
+                logger.debug(
+                    f"Failed to retrieve model context window, using default 128k: {e}"
+                )
+
+            trigger_threshold = int(
+                max_context * settings.CONTEXT_COMPRESSION_AUTO_TRIGGER_PCT / 100
+            )
+
             if total_tokens >= trigger_threshold:
-                app_context.console.print(style(f"⚠️ Context approaching limit: {total_tokens}/{max_context} tokens, running automatic compression...", cs.Color.YELLOW))
-                
+                app_context.console.print(
+                    style(
+                        f"⚠️ Context approaching limit: {total_tokens}/{max_context} tokens, running automatic compression...",
+                        cs.Color.YELLOW,
+                    )
+                )
+
                 # Convert history to compressor format
                 context = [
                     {"role": msg.role.value, "content": msg.content}
                     for msg in message_history
-                    if hasattr(msg, 'content')
+                    if hasattr(msg, "content")
                 ]
-                
+
                 compressor = ContextCompressor(
                     context=context,
                     aggressive_mode=False,
-                    worker_count=settings.CONTEXT_COMPRESSION_PARALLEL_WORKERS
+                    worker_count=settings.CONTEXT_COMPRESSION_PARALLEL_WORKERS,
                 )
                 result = compressor.compress_sync()
-                
+
                 if not result.was_rolled_back:
                     # Replace message history with compressed version
                     message_history = result.compressed_context
-                    app_context.console.print(style(f"✅ Compressed to {result.compressed_tokens:,} tokens ({result.reduction_pct:.1%} reduction, {result.retention_score:.1%} retention", cs.Color.GREEN))
+                    app_context.console.print(
+                        style(
+                            f"✅ Compressed to {result.compressed_tokens:,} tokens ({result.reduction_pct:.1%} reduction, {result.retention_score:.1%} retention",
+                            cs.Color.GREEN,
+                        )
+                    )
                 else:
-                    app_context.console.print(style("⚠️ Compression rolled back, proceeding with original context", cs.Color.YELLOW))
-        
+                    app_context.console.print(
+                        style(
+                            "⚠️ Compression rolled back, proceeding with original context",
+                            cs.Color.YELLOW,
+                        )
+                    )
+
         with app_context.console.status(config.status_message):
             response = await run_with_cancellation(
                 rag_agent.run(
@@ -932,34 +967,50 @@ async def _run_interactive_loop(
                 if command_parts[0] == cs.COMPRESS_COMMAND_PREFIX:
                     # Manual /compress command handler
                     from rich.table import Table
+
                     aggressive = "--aggressive" in stripped_lower
-                    preserve_match = re.search(r"--preserve\s*([^\s]*)", stripped_question)
-                    preserve_pattern = preserve_match.group(1).strip("'\"") if preserve_match else None
+                    preserve_match = re.search(
+                        r"--preserve\s*([^\s]*)", stripped_question
+                    )
+                    preserve_pattern = (
+                        preserve_match.group(1).strip("'\"") if preserve_match else None
+                    )
                     workers_match = re.search(r"--workers\s*(\d+)", stripped_question)
-                    workers = int(workers_match.group(1)) if workers_match else settings.CONTEXT_COMPRESSION_PARALLEL_WORKERS
-                    
+                    workers = (
+                        int(workers_match.group(1))
+                        if workers_match
+                        else settings.CONTEXT_COMPRESSION_PARALLEL_WORKERS
+                    )
+
                     if not app_context.session.history:
-                        app_context.console.print(style("⚠️ No existing context to compress", cs.Color.YELLOW))
+                        app_context.console.print(
+                            style("⚠️ No existing context to compress", cs.Color.YELLOW)
+                        )
                         initial_question = None
                         continue
-                    
-                    app_context.console.print(style(f"🔄 Running context compression with {workers} parallel round-robin workers...", cs.Color.CYAN))
-                    
+
+                    app_context.console.print(
+                        style(
+                            f"🔄 Running context compression with {workers} parallel round-robin workers...",
+                            cs.Color.CYAN,
+                        )
+                    )
+
                     # Convert session history to format expected by compressor
                     context = [
                         {"role": msg.role.value, "content": msg.content}
                         for msg in app_context.session.history
-                        if hasattr(msg, 'content')
+                        if hasattr(msg, "content")
                     ]
-                    
+
                     compressor = ContextCompressor(
                         context=context,
                         aggressive_mode=aggressive,
                         preserve_pattern=preserve_pattern,
-                        worker_count=workers
+                        worker_count=workers,
                     )
                     result = compressor.compress_sync()
-                    
+
                     # Display results
                     table = Table(
                         title=style("Context Compression Results", cs.Color.GREEN),
@@ -968,25 +1019,39 @@ async def _run_interactive_loop(
                     )
                     table.add_column("Metric", style=cs.Color.CYAN)
                     table.add_column("Value", style=cs.Color.YELLOW)
-                    
+
                     table.add_row("Original tokens", f"{result.original_tokens:,}")
                     table.add_row("Compressed tokens", f"{result.compressed_tokens:,}")
                     table.add_row("Reduction", f"{result.reduction_pct:.1%}")
                     table.add_row("Semantic retention", f"{result.retention_score:.1%}")
                     table.add_row("Strategy used", result.strategy_used)
-                    table.add_row("Execution time", f"{result.execution_time*1000:.0f}ms")
+                    table.add_row(
+                        "Execution time", f"{result.execution_time * 1000:.0f}ms"
+                    )
                     if result.archive_id:
-                        table.add_row("Archive ID (restore available)", result.archive_id)
-                    
+                        table.add_row(
+                            "Archive ID (restore available)", result.archive_id
+                        )
+
                     app_context.console.print(table)
-                    
+
                     if result.was_rolled_back:
-                        app_context.console.print(style("⚠️ Compression rolled back: retention too low, no changes made", cs.Color.YELLOW))
+                        app_context.console.print(
+                            style(
+                                "⚠️ Compression rolled back: retention too low, no changes made",
+                                cs.Color.YELLOW,
+                            )
+                        )
                     else:
                         # Update session history with compressed version
                         app_context.session.history = result.compressed_context
-                        app_context.console.print(style("✅ Context compressed successfully! Session continues with reduced token usage", cs.Color.GREEN))
-                    
+                        app_context.console.print(
+                            style(
+                                "✅ Context compressed successfully! Session continues with reduced token usage",
+                                cs.Color.GREEN,
+                            )
+                        )
+
                     initial_question = None
                     continue
 
@@ -1012,26 +1077,49 @@ async def _run_interactive_loop(
 
                 if use_parallel:
                     app_context.console.print(
-                        style(f"\n✅ Auto-activating parallel execution: {task_type} (confidence: {confidence:.2f})", cs.Color.GREEN)
+                        style(
+                            f"\n✅ Auto-activating parallel execution: {task_type} (confidence: {confidence:.2f})",
+                            cs.Color.GREEN,
+                        )
                     )
-                    app_context.console.print(style("🔄 Using 10 workers with round-robin scheduling", cs.Color.CYAN))
+                    app_context.console.print(
+                        style(
+                            "🔄 Using 10 workers with round-robin scheduling",
+                            cs.Color.CYAN,
+                        )
+                    )
 
                     # Split the task into independent subtasks
-                    subtasks = task_splitter.split_task(question_with_context, max_subtasks=10)
-                    app_context.console.print(style(f"📋 Split into {len(subtasks)} independent subtasks", cs.Color.CYAN))
+                    subtasks = task_splitter.split_task(
+                        question_with_context, max_subtasks=10
+                    )
+                    app_context.console.print(
+                        style(
+                            f"📋 Split into {len(subtasks)} independent subtasks",
+                            cs.Color.CYAN,
+                        )
+                    )
 
                     if len(subtasks) >= 2:
                         # Execute subtasks in parallel with round-robin workers
                         aggregator = subagent_orchestrator.execute_tasks(subtasks)
                         parallel_result = aggregator.final_result
                         app_context.console.print(
-                            style(f"⚡ Parallel execution completed in {aggregator.metadata['total_execution_time']:.2f}s", cs.Color.GREEN)
+                            style(
+                                f"⚡ Parallel execution completed in {aggregator.metadata['total_execution_time']:.2f}s",
+                                cs.Color.GREEN,
+                            )
                         )
                         # Add parallel result to context for final response
-                        question_with_context += f"\n\n### Parallel Execution Results:\n{parallel_result}"
+                        question_with_context += (
+                            f"\n\n### Parallel Execution Results:\n{parallel_result}"
+                        )
                     else:
                         app_context.console.print(
-                            style("⚠️ Not enough subtasks for parallel execution, falling back to sequential", cs.Color.YELLOW)
+                            style(
+                                "⚠️ Not enough subtasks for parallel execution, falling back to sequential",
+                                cs.Color.YELLOW,
+                            )
                         )
                         use_parallel = False
 

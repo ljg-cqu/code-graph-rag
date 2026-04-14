@@ -179,6 +179,36 @@ class EmbeddingConfig:
         return EmbeddingConfigKwargs(**result)
 
 
+@dataclass
+class HybridRetrievalConfig:
+    """Configuration for hybrid retrieval."""
+
+    vector_weight: float = 0.6
+    text_weight: float = 0.2
+    pagerank_weight: float = 0.15
+    community_weight: float = 0.05
+    top_k: int = 10
+    max_context_depth: int = 2
+
+
+@dataclass
+class PathAnalysisConfig:
+    """Configuration for path analysis."""
+
+    max_paths: int = 3
+    max_path_length: int = 10
+    bottleneck_threshold: float = 0.01
+
+
+@dataclass
+class QFSConfig:
+    """Configuration for query-focused summarization."""
+
+    top_communities: int = 3
+    min_community_size: int = 5
+    summary_max_tokens: int = 500
+
+
 class AppConfig(BaseSettings):
     """
     (H) All settings are loaded from environment variables or a .env file.
@@ -197,8 +227,48 @@ class AppConfig(BaseSettings):
     MEMGRAPH_PASSWORD: str | None = None
     LAB_PORT: int = 3000
     MEMGRAPH_BATCH_SIZE: int = 1000
+    MEMGRAPH_USE_DYNAMIC_ALGORITHMS: bool | None = None
     AGENT_RETRIES: int = 3
     ORCHESTRATOR_OUTPUT_RETRIES: int = 100
+
+    @property
+    def memgraph(self) -> dict:
+        """Memgraph configuration as a dict for easy access."""
+        return {
+            "host": self.MEMGRAPH_HOST,
+            "port": self.MEMGRAPH_PORT,
+            "http_port": self.MEMGRAPH_HTTP_PORT,
+            "username": self.MEMGRAPH_USERNAME,
+            "password": self.MEMGRAPH_PASSWORD,
+            "batch_size": self.MEMGRAPH_BATCH_SIZE,
+            "use_dynamic_algorithms": self.MEMGRAPH_USE_DYNAMIC_ALGORITHMS,
+        }
+
+    # Advanced Memgraph retrieval/algorithm configurations
+    _hybrid_retrieval_config: HybridRetrievalConfig | None = None
+    _path_analysis_config: PathAnalysisConfig | None = None
+    _qfs_config: QFSConfig | None = None
+
+    @property
+    def hybrid_retrieval_config(self) -> HybridRetrievalConfig:
+        """Get hybrid retrieval configuration instance."""
+        if not self._hybrid_retrieval_config:
+            self._hybrid_retrieval_config = HybridRetrievalConfig()
+        return self._hybrid_retrieval_config
+
+    @property
+    def path_analysis_config(self) -> PathAnalysisConfig:
+        """Get path analysis configuration instance."""
+        if not self._path_analysis_config:
+            self._path_analysis_config = PathAnalysisConfig()
+        return self._path_analysis_config
+
+    @property
+    def qfs_config(self) -> QFSConfig:
+        """Get query-focused summarization configuration instance."""
+        if not self._qfs_config:
+            self._qfs_config = QFSConfig()
+        return self._qfs_config
 
     ORCHESTRATOR_PROVIDER: str = ""
     ORCHESTRATOR_MODEL: str = ""
@@ -372,11 +442,28 @@ class AppConfig(BaseSettings):
     # ─────────────────────────────────────────────────────────
     DOC_MEMGRAPH_HOST: str = "localhost"
     DOC_MEMGRAPH_PORT: int = 7688
+    DOC_MEMGRAPH_HTTP_PORT: int = 7445
     DOC_MEMGRAPH_USERNAME: str | None = None
     DOC_MEMGRAPH_PASSWORD: str | None = None
+    DOC_MEMGRAPH_BATCH_SIZE: int = 1000
+    DOC_MEMGRAPH_VECTOR_DIM: int = 768
+    DOC_MEMGRAPH_USE_DYNAMIC_ALGORITHMS: bool | None = None
     DOC_MEMGRAPH_MEMORY_LIMIT: str = "2GB"  # Memory limit for document graph container
     DOC_LAB_PORT: int = 3001  # Memgraph Lab for document graph
     DOC_VECTOR_STORE_BACKEND: str = "memgraph"
+
+    @property
+    def doc_memgraph(self) -> dict:
+        """Document Memgraph configuration as a dict for easy access."""
+        return {
+            "host": self.DOC_MEMGRAPH_HOST,
+            "port": self.DOC_MEMGRAPH_PORT,
+            "http_port": self.DOC_MEMGRAPH_HTTP_PORT,
+            "username": self.DOC_MEMGRAPH_USERNAME,
+            "password": self.DOC_MEMGRAPH_PASSWORD,
+            "batch_size": self.DOC_MEMGRAPH_BATCH_SIZE,
+            "use_dynamic_algorithms": self.DOC_MEMGRAPH_USE_DYNAMIC_ALGORITHMS,
+        }
 
     DOC_SUPPORTED_EXTENSIONS: list[str] = Field(
         default=[".md", ".rst", ".txt", ".pdf", ".docx"]
@@ -396,11 +483,29 @@ class AppConfig(BaseSettings):
     # ─────────────────────────────────────────────────────────
     JSON_MEMGRAPH_HOST: str = "localhost"
     JSON_MEMGRAPH_PORT: int = 7689
+    JSON_MEMGRAPH_HTTP_PORT: int = 7446
     JSON_MEMGRAPH_USERNAME: str | None = None
     JSON_MEMGRAPH_PASSWORD: str | None = None
+    JSON_MEMGRAPH_BATCH_SIZE: int = 1000
+    JSON_MEMGRAPH_VECTOR_DIM: int = 768
+    JSON_MEMGRAPH_USE_DYNAMIC_ALGORITHMS: bool | None = None
     JSON_MEMGRAPH_MEMORY_LIMIT: str = "2GB"  # Memory limit for JSON graph container
     JSON_LAB_PORT: int = 3002  # Memgraph Lab for JSON graph
     JSON_VECTOR_STORE_BACKEND: str = "memgraph"
+    JSON_ENABLED: bool = True  # Master switch for JSON features
+
+    @property
+    def json_memgraph(self) -> dict:
+        """JSON Memgraph configuration as a dict for easy access."""
+        return {
+            "host": self.JSON_MEMGRAPH_HOST,
+            "port": self.JSON_MEMGRAPH_PORT,
+            "http_port": self.JSON_MEMGRAPH_HTTP_PORT,
+            "username": self.JSON_MEMGRAPH_USERNAME,
+            "password": self.JSON_MEMGRAPH_PASSWORD,
+            "batch_size": self.JSON_MEMGRAPH_BATCH_SIZE,
+            "use_dynamic_algorithms": self.JSON_MEMGRAPH_USE_DYNAMIC_ALGORITHMS,
+        }
 
     # JSON vector settings
     JSON_MEMGRAPH_VECTOR_INDEX_NAME: str = "json_embeddings"
@@ -470,7 +575,9 @@ class AppConfig(BaseSettings):
     CONTEXT_COMPRESSION_HYSTERESIS_PCT: float = Field(default=5.0, gt=0, lt=20)
     CONTEXT_COMPRESSION_MIN_RETENTION_SCORE: float = Field(default=70.0, gt=0, lt=100)
     CONTEXT_COMPRESSION_PARALLEL_WORKERS: int = Field(default=10, gt=0)
-    CONTEXT_COMPRESSION_AGGRESSIVE_RETENTION_THRESHOLD: float = Field(default=50.0, gt=0, lt=100)
+    CONTEXT_COMPRESSION_AGGRESSIVE_RETENTION_THRESHOLD: float = Field(
+        default=50.0, gt=0, lt=100
+    )
     CONTEXT_COMPRESSION_ARCHIVE_TTL_HOURS: int = Field(default=24, gt=0)
     CONTEXT_COMPRESSION_ENABLED: bool = True
 
@@ -511,11 +618,11 @@ class AppConfig(BaseSettings):
     def _get_model_config_for_provider(self, provider: str, model: str) -> ModelConfig:
         """
         Get a ModelConfig instance for a given provider and model, using default settings for the provider.
-        
+
         Args:
             provider: LLM provider name
             model: Model ID
-        
+
         Returns:
             Populated ModelConfig object
         """
@@ -552,7 +659,7 @@ class AppConfig(BaseSettings):
             region=region,
             provider_type=provider_type,
             thinking_budget=thinking_budget,
-            service_account_file=service_account_file
+            service_account_file=service_account_file,
         )
 
     @property
@@ -568,15 +675,23 @@ class AppConfig(BaseSettings):
         if isinstance(worker_llms_config, str):
             if worker_llms_config.strip():
                 # Split comma-separated list
-                entries = [entry.strip() for entry in worker_llms_config.split(',') if entry.strip()]
+                entries = [
+                    entry.strip()
+                    for entry in worker_llms_config.split(",")
+                    if entry.strip()
+                ]
                 for entry in entries:
                     provider, model = self.parse_model_string(entry)
-                    parsed_llms.append(self._get_model_config_for_provider(provider, model))
+                    parsed_llms.append(
+                        self._get_model_config_for_provider(provider, model)
+                    )
         elif isinstance(worker_llms_config, list):
             for entry in worker_llms_config:
                 if isinstance(entry, str):
                     provider, model = self.parse_model_string(entry)
-                    parsed_llms.append(self._get_model_config_for_provider(provider, model))
+                    parsed_llms.append(
+                        self._get_model_config_for_provider(provider, model)
+                    )
                 elif isinstance(entry, dict):
                     # Full ModelConfig dict
                     parsed_llms.append(ModelConfig(**entry))
@@ -596,7 +711,7 @@ class AppConfig(BaseSettings):
     def set_worker_llms(self, llms: list[str | ModelConfig | dict]) -> None:
         """
         Dynamically set the list of worker LLMs for sub-agents.
-        
+
         Args:
             llms: List of LLM configurations, either in provider:model string format,
                   ModelConfig objects, or ModelConfig dictionaries
@@ -625,7 +740,9 @@ class AppConfig(BaseSettings):
         if valid_llms:
             logger.info(f"Set {len(valid_llms)} worker LLMs successfully")
         else:
-            logger.info("No valid worker LLMs configured, falling back to orchestrator LLM")
+            logger.info(
+                "No valid worker LLMs configured, falling back to orchestrator LLM"
+            )
 
     @property
     def active_orchestrator_config(self) -> ModelConfig:

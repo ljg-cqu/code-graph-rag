@@ -237,73 +237,66 @@ class QueryRouter:
                 warnings=["Code graph connection not configured"],
             )
 
+        # Lazy imports for optional dependencies
+        from ..config import settings
+        from ..embeddings import get_embedding_provider
+        from ..memgraph_advanced import HybridRetriever, HybridSearchResult
+
         logger.info(f"Querying code graph: {request.question}")
 
         # Query code graph using semantic search if vector backend available
         sources: list[Source] = []
         answer_parts: list[str] = []
+        warnings: list[str] = []
 
-        if self.code_vector and self.code_graph:
-            # Use vector similarity search for semantic queries
+        if self.code_vector:
+            # Use advanced hybrid retrieval (vector + text + graph) for better results
             try:
-                from ..config import settings
-                from ..embeddings import get_embedding_provider
-
                 config = settings.active_embedding_config
                 provider = get_embedding_provider(
                     provider=config.provider,
                     model_id=config.model_id,
                 )
-                query_embedding = provider.embed(request.question)
 
-                # VectorBackend.search() returns (node_id, similarity) tuples
-                backend_results = self.code_vector.search(
-                    query_embedding=query_embedding,
+                # Initialize hybrid retriever with weighted scoring
+                retriever = HybridRetriever(
+                    graph_ingestor=self.code_graph,
+                    vector_backend=self.code_vector,
+                    embedding_provider=provider,
+                    config=settings.hybrid_retrieval_config,
+                )
+
+                # Run hybrid search with automatic reranking
+                results: list[HybridSearchResult] = retriever.search(
+                    query=request.question,
                     top_k=request.top_k,
                 )
 
-                # Fetch node details from graph using node_ids
-                if backend_results:
-                    node_ids = [nid for nid, _ in backend_results]
-                    similarity_map = {nid: sim for nid, sim in backend_results}
-
-                    # Query to get function/method details by node IDs
-                    node_query = """
-                    MATCH (n)
-                    WHERE id(n) IN $node_ids AND (n:Function OR n:Method OR n:Class)
-                    OPTIONAL MATCH (m:Module)-[:DEFINES]->(n)
-                    RETURN
-                        id(n) as node_id,
-                        n.qualified_name as qualified_name,
-                        n.name as name,
-                        labels(n)[0] as node_type,
-                        coalesce(n.file_path, m.path) as file_path,
-                        n.start_line as start_line,
-                        n.end_line as end_line
-                    """
-                    results = self.code_graph.fetch_all(node_query, {"node_ids": node_ids})
-
-                    for result in results:
-                        result["similarity"] = similarity_map.get(result.get("node_id", 0), 0.0)
-                else:
-                    results = []
-
                 for result in results:
-                    sources.append(Source(
-                        type="code",
-                        path=result.get("file_path", "unknown"),
-                        node_type=result.get("node_type", "Function"),
-                        qualified_name=result.get("qualified_name"),
-                        line_range=(result.get("start_line", 0), result.get("end_line", 0)),
-                    ))
+                    sources.append(
+                        Source(
+                            type="code",
+                            path=result.file_path,
+                            node_type=result.node_type,
+                            qualified_name=result.qualified_name,
+                            line_range=(
+                                result.start_line,
+                                result.end_line,
+                            ),
+                        )
+                    )
                     answer_parts.append(
-                        f"- **{result.get('qualified_name', 'unknown')}** "
-                        f"({result.get('node_type', 'Function')}) in {result.get('file_path', 'unknown')} "
-                        f"[Similarity: {result.get('similarity', 0.0):.2f}]"
+                        f"- **{result.qualified_name}** "
+                        f"({result.node_type}) in {result.file_path} "
+                        f"[Score: {result.combined_score:.2f} (vector: {result.vector_score:.2f}, text: {result.text_score:.2f}, graph: {result.graph_score:.2f})]"
                     )
 
             except Exception as e:
-                logger.warning(f"Vector search failed, falling back to text search: {e}")
+                warning_msg = (
+                    f"Hybrid retrieval failed, falling back to basic search: {e}"
+                )
+                logger.warning(warning_msg)
+                warnings.append(warning_msg)
 
         if not sources and self.code_graph:
             # Fallback: Query code graph using keyword-based search
@@ -320,26 +313,34 @@ class QueryRouter:
             # Extract keyword from question (simple approach)
             keyword = request.question.split()[0] if request.question else ""
             try:
-                results = self.code_graph.fetch_all(keyword_query, {
-                    "keyword": keyword,
-                    "limit": request.top_k,
-                })
+                results = self.code_graph.fetch_all(
+                    keyword_query,
+                    {
+                        "keyword": keyword,
+                        "limit": request.top_k,
+                    },
+                )
 
                 # Ensure results is iterable
                 if results is None:
                     results = []
-                elif not hasattr(results, '__iter__'):
+                elif not hasattr(results, "__iter__"):
                     results = []
 
                 for result in results:
                     node_type = result.get("labels", ["Unknown"])[0]
-                    sources.append(Source(
-                        type="code",
-                        path=result.get("file_path", "unknown"),
-                        node_type=node_type,
-                        qualified_name=result.get("qualified_name"),
-                        line_range=(result.get("start_line", 0), result.get("end_line", 0)),
-                    ))
+                    sources.append(
+                        Source(
+                            type="code",
+                            path=result.get("file_path", "unknown"),
+                            node_type=node_type,
+                            qualified_name=result.get("qualified_name"),
+                            line_range=(
+                                result.get("start_line", 0),
+                                result.get("end_line", 0),
+                            ),
+                        )
+                    )
                     answer_parts.append(
                         f"- **{result.get('qualified_name', result.get('name', 'unknown'))}** "
                         f"({node_type}) in {result.get('file_path', 'unknown')}"
@@ -352,12 +353,14 @@ class QueryRouter:
                 answer=f"No relevant code found for: {request.question}",
                 sources=[],
                 mode=request.mode,
+                warnings=warnings,
             )
 
         return QueryResponse(
             answer="**Code Results:**\n\n" + "\n".join(answer_parts),
             sources=sources,
             mode=request.mode,
+            warnings=warnings,
         )
 
     def _query_document_only(self, request: QueryRequest) -> QueryResponse:
@@ -372,6 +375,14 @@ class QueryRouter:
                 sources=[],
                 mode=request.mode,
                 warnings=["Document graph connection not configured"],
+            )
+
+        if not self.doc_vector:
+            return QueryResponse(
+                answer="Document vector backend is not available.",
+                sources=[],
+                mode=request.mode,
+                warnings=["Document vector storage not configured"],
             )
 
         logger.info(f"Querying document graph: {request.question}")
@@ -408,20 +419,28 @@ class QueryRouter:
                 similarity = result.get("similarity", 0.0)
 
                 # Truncate content for display
-                content_preview = content[:200] + "..." if len(content) > 200 else content
+                content_preview = (
+                    content[:200] + "..." if len(content) > 200 else content
+                )
 
                 answer_parts.append(
                     f"\n{i}. **{section_title}** ({Path(doc_path).name}) [Similarity: {similarity:.2f}]"
                 )
                 answer_parts.append(f"   {content_preview}")
 
-                sources.append(Source(
-                    type="document",
-                    path=doc_path,
-                    node_type="Chunk",
-                    qualified_name=result.get("section_qn") or result.get("chunk_qn"),
-                    line_range=(result.get("chunk_start_line", 0), result.get("chunk_start_line", 0)),
-                ))
+                sources.append(
+                    Source(
+                        type="document",
+                        path=doc_path,
+                        node_type="Chunk",
+                        qualified_name=result.get("section_qn")
+                        or result.get("chunk_qn"),
+                        line_range=(
+                            result.get("chunk_start_line", 0),
+                            result.get("chunk_start_line", 0),
+                        ),
+                    )
+                )
 
         except Exception as e:
             logger.error(f"Document semantic search failed: {e}")

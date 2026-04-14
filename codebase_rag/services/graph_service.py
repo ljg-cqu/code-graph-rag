@@ -66,6 +66,7 @@ class MemgraphIngestor:
         "_use_merge",
         "_rel_count",
         "_rel_groups",
+        "_dynamic_algorithms_supported",
         "batch_size",
         "conn",
         "node_buffer",
@@ -98,11 +99,99 @@ class MemgraphIngestor:
         self._rel_groups: defaultdict[
             tuple[str, str, str, str, str], list[RelBatchRow]
         ] = defaultdict(list)
+        self._dynamic_algorithms_supported: bool | None = None
+
+    @property
+    def dynamic_algorithms_enabled(self) -> bool:
+        """
+        Get if dynamic algorithms should be used.
+        Auto-enables if running on Memgraph Enterprise, unless explicitly disabled via config.
+        """
+        # If explicitly disabled in config, never use
+        if settings.MEMGRAPH_USE_DYNAMIC_ALGORITHMS is False:
+            return False
+        # If explicitly enabled in config, always use
+        if settings.MEMGRAPH_USE_DYNAMIC_ALGORITHMS is True:
+            return True
+        # Auto-enable if supported (Enterprise detected)
+        return bool(self._dynamic_algorithms_supported)
+
+    def _detect_dynamic_algorithm_support(self) -> bool:
+        """
+        Detect if Memgraph supports dynamic incremental algorithms (Enterprise feature).
+        Returns True if Enterprise edition, False otherwise.
+        """
+        if not self.conn:
+            return False
+
+        # Silent execution without error logging for expected failure
+        try:
+            # Try to use a dynamic algorithm function to check support
+            # This will fail on Community edition with "Function not found" error
+            with self._get_cursor() as cursor:
+                cursor.execute(
+                    "RETURN dynamic_graph_update_is_supported() AS supported LIMIT 1"
+                )
+                return True
+        except Exception:
+            # Fallback: check version string for enterprise
+            try:
+                with self._get_cursor() as cursor:
+                    cursor.execute("SHOW VERSION AS version")
+                    results = self._cursor_to_results(cursor)
+                    if (
+                        results
+                        and "enterprise" in str(results[0].get("version", "")).lower()
+                    ):
+                        return True
+            except Exception:
+                pass
+            return False
+
+        try:
+            # Try to use a dynamic algorithm function to check support
+            # This will fail on Community edition with "Function not found" error
+            self._execute_query(
+                """
+                RETURN dynamic_graph_update_is_supported() AS supported
+                LIMIT 1
+                """
+            )
+            return True
+        except Exception:
+            # Fallback: check version string for enterprise
+            try:
+                results = self._execute_query("SHOW VERSION AS version")
+                if (
+                    results
+                    and "enterprise" in str(results[0].get("version", "")).lower()
+                ):
+                    return True
+            except Exception:
+                pass
+            return False
 
     def __enter__(self) -> MemgraphIngestor:
         logger.info(ls.MG_CONNECTING.format(host=self._host, port=self._port))
         self.conn = self._create_connection()
         self._executor = ThreadPoolExecutor(max_workers=settings.FLUSH_THREAD_POOL_SIZE)
+
+        # Auto-detect Enterprise edition and dynamic algorithm support
+        self._dynamic_algorithms_supported = self._detect_dynamic_algorithm_support()
+        if self._dynamic_algorithms_supported:
+            if settings.MEMGRAPH_USE_DYNAMIC_ALGORITHMS is False:
+                logger.info(
+                    "Memgraph Enterprise detected, but dynamic algorithms are explicitly disabled in config"
+                )
+            else:
+                logger.info(
+                    "Memgraph Enterprise detected: dynamic incremental algorithms automatically enabled"
+                )
+        else:
+            logger.debug(
+                "Memgraph Community detected: using full algorithm recalculations after updates"
+            )
+
         logger.info(ls.MG_CONNECTED)
         return self
 
@@ -134,6 +223,7 @@ class MemgraphIngestor:
 
     async def __aenter__(self) -> MemgraphIngestor:
         import asyncio
+
         return await asyncio.to_thread(self.__enter__)
 
     async def __aexit__(
@@ -143,6 +233,7 @@ class MemgraphIngestor:
         exc_tb: types.TracebackType | None,
     ) -> None:
         import asyncio
+
         await asyncio.to_thread(self.__exit__, exc_type, exc_val, exc_tb)
 
     @contextmanager

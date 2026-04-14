@@ -141,9 +141,13 @@ class SubAgentOrchestrator:
             self.agent_pool.put(agent)
 
         if num_worker_llms > 0:
-            logger.info(f"Sub-agent pool initialized with {num_worker_llms} worker LLMs (round-robin assignment)")
+            logger.info(
+                f"Sub-agent pool initialized with {num_worker_llms} worker LLMs (round-robin assignment)"
+            )
         else:
-            logger.info("Sub-agent pool initialized successfully using orchestrator LLM as default")
+            logger.info(
+                "Sub-agent pool initialized successfully using orchestrator LLM as default"
+            )
 
     def execute_tasks(
         self,
@@ -198,7 +202,9 @@ class SubAgentOrchestrator:
         logger.info(
             f"Starting parallel execution of {len(subtasks)} subtasks with {self.worker_count} workers (scheduling: {self.scheduling_strategy})"
         )
-        logger.info(f"✅ ACTIVE PARALLEL WORKERS: {self.worker_count} - running concurrently")
+        logger.info(
+            f"ACTIVE PARALLEL WORKERS: {self.worker_count} - running concurrently"
+        )
 
         # Track remaining tasks and retries
         remaining_tasks = subtasks.copy()
@@ -208,7 +214,11 @@ class SubAgentOrchestrator:
         try:
             # Single long-lived executor for all tasks (no per-batch recreation)
             with ThreadPoolExecutor(max_workers=self.worker_count) as executor:
-                while (remaining_tasks or active_futures) and self.running and not self._shutdown_called:
+                while (
+                    (remaining_tasks or active_futures)
+                    and self.running
+                    and not self._shutdown_called
+                ):
                     # Submit new tasks as agents become available (continuous parallelism)
                     while remaining_tasks and not self.agent_pool.empty():
                         # Round-robin: take next task from front of queue
@@ -220,8 +230,7 @@ class SubAgentOrchestrator:
                     # Process completed tasks as they finish
                     if active_futures:
                         done, _ = wait(
-                            active_futures.keys(),
-                            return_when='FIRST_COMPLETED'
+                            active_futures.keys(), return_when="FIRST_COMPLETED"
                         )
 
                         for future in done:
@@ -341,7 +350,9 @@ class SubAgentOrchestrator:
 
             for _ in range(add_count):
                 if num_worker_llms > 0:
-                    llm_config = worker_llms[self._llm_assignment_index % num_worker_llms]
+                    llm_config = worker_llms[
+                        self._llm_assignment_index % num_worker_llms
+                    ]
                     self._llm_assignment_index += 1
                     agent = self.agent_factory(llm_config=llm_config)
                 else:
