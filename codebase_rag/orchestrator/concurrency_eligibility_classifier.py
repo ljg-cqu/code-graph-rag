@@ -18,17 +18,17 @@ class ConcurrencyEligibilityClassifier:
 
     # Eligible task type patterns (rule-based)
     ELIGIBLE_PATTERNS: list[tuple[str, str, float]] = [
-        # Multi-file code search patterns
-        (r"find all (functions|classes|methods|files|occurrences)", "multi_file_search", 0.9),
-        (r"search across (all|the entire|multiple) (repository|codebase|files)", "multi_file_search", 0.95),
+        # Multi-file code search patterns (flexible matching)
+        (r"find all (?:.*)?(functions|classes|methods|files|occurrences)", "multi_file_search", 0.9),
+        (r"(search|find).* across (all|the entire|multiple) (repository|codebase|files|project|repo)", "multi_file_search", 0.95),
         (r"look for (.*) in (all|multiple) files", "multi_file_search", 0.85),
         (r"find where (.*) is used across the (codebase|repo|project)", "multi_file_search", 0.9),
 
-        # Bulk validation/analysis patterns
-        (r"check (all|multiple) (files|modules|functions) for (errors|bugs|vulnerabilities|issues|anti-patterns)", "bulk_validation", 0.95),
+        # Bulk validation/analysis patterns (flexible matching)
+        (r"(check|scan|audit) (all|multiple) (?:.*)?(files|modules|functions) for (errors|bugs|vulnerabilities|issues|anti-patterns|security risks)", "bulk_validation", 0.95),
         (r"validate (all|the entire) (codebase|repo|project)", "bulk_validation", 0.9),
-        (r"run (analysis|lint|audit) on (all|multiple) files", "bulk_validation", 0.9),
-        (r"scan for (security|performance|quality) issues across the project", "bulk_validation", 0.9),
+        (r"run (analysis|lint|audit|security scan) on (all|multiple) files", "bulk_validation", 0.9),
+        (r"scan for (security|performance|quality) issues across the (project|codebase|repo)", "bulk_validation", 0.9),
 
         # Large repository ingestion/indexing
         (r"(index|ingest|update|scan) (all|the entire|large|big) (repository|codebase|project|files)", "large_ingestion", 0.95),
