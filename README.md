@@ -60,6 +60,7 @@ An accurate Retrieval-Augmented Generation (RAG) system that analyzes multi-lang
 
 ## 🚀 Features
 
+- **⚡ Automatic Parallel Execution**: No explicit user request needed! The system automatically detects parallelizable tasks (multi-file search, bulk validation, large repo ingestion, multi-tool workflows, etc.) and spawns 10 round-robin parallel workers to speed up execution by up to 10x. Fully transparent, with graceful fallback to sequential execution for non-parallel tasks.
 - **🌐 Global Filesystem Access**: Access files anywhere on your host system (enabled by default), with optional write approval requirements and built-in protection against path traversal attacks.
 - **📚 Document GraphRAG**: Index and query documentation (Markdown, PDF, DOCX) alongside code. Supports bidirectional validation between code and specs, merged queries across both graphs, and automated documentation audits.
 - **Multi-Language Support**:
@@ -421,6 +422,19 @@ Example queries (works across all supported languages):
 - "Convert these Python functions to async/await pattern"
 - "Add error handling to authentication methods"
 - "Optimize this function for better performance"
+
+### Automatic Parallel Execution (No Explicit Request Needed!)
+For eligible parallelizable queries (multi-file search, bulk validation, large repo analysis, etc.), the system automatically:
+1. Shows a green notification: `✅ Auto-activating parallel execution: [task_type] (confidence: 0.xx)`
+2. Splits the task into independent subtasks distributed across 10 round-robin parallel workers
+3. Displays progress: `📋 Split into [X] independent subtasks`
+4. Aggregates results from all workers and includes them in the final answer
+5. Shows execution time: `⚡ Parallel execution completed in [X]s`
+
+If you want to disable automatic parallelism for a specific run, use the `--no-parallel` flag:
+```bash
+cgr start --repo-path /path/to/repo --no-parallel
+```
 
 ### Step 3: Export Graph Data
 
@@ -979,6 +993,22 @@ Configuration is managed through environment variables in `.env` file:
 Configure dedicated LLMs for parallel sub-agent workers to optimize cost/performance for parallel workloads:
 - `CGR_WORKER_LLMS`: Comma-separated list of model strings (e.g., `openai:gpt-4o-mini,anthropic:claude-3-haiku`) or JSON array of full model configurations for sub-agent workers
 - `CGR_WORKER_LLM_ASSIGNMENT_STRATEGY`: LLM assignment strategy for sub-agents. Only `round-robin` is supported currently, which evenly distributes configured LLMs across workers.
+
+#### Automatic Parallel Execution Configuration
+No explicit user request required! The system automatically detects parallelizable tasks and executes them with 10 round-robin parallel workers for up to 10x speedup:
+- `CGR_AUTO_PARALLEL_ENABLED`: Enable automatic parallel execution detection (default: `true`)
+- `CGR_DEFAULT_PARALLEL_WORKERS`: Default number of parallel workers (default: `10`, round-robin scheduling)
+- `CGR_MAX_PARALLEL_WORKERS`: Maximum allowed parallel workers (default: `20`)
+- `CGR_ALLOW_DYNAMIC_MAX_OVERRIDE`: Allow overriding the max worker limit for large workloads (default: `true`)
+- `CGR_AUTO_SCALE_WORKERS`: Automatically scale worker count to match number of subtasks (default: `true`)
+- `CGR_PARALLEL_ELIGIBILITY_THRESHOLD`: Confidence threshold for automatic parallel activation (default: `0.8`)
+- `CGR_PARALLEL_MAX_QUEUE_SIZE`: Maximum size of the parallel task queue, falls back to sequential when full (default: `100`)
+- `CGR_SUBAGENT_TIMEOUT`: Timeout per subtask execution in seconds (default: `300`)
+- `CGR_SUBAGENT_ALLOW_WRITE`: Allow sub-agents to perform write operations (default: `false`, writes are executed sequentially to prevent corruption)
+- `CGR_AUTO_SPLIT_ENABLED`: Enable automatic task splitting for parallel execution (default: `true`)
+- `CGR_SUBAGENT_RETRY_ATTEMPTS`: Number of retry attempts for failed subtasks (default: `2`)
+
+**Optional Override Flag**: You can disable automatic parallelism for a single run with `--no-parallel` CLI flag if needed.
 
 **Key Behavior**:
 - If no worker LLMs are configured, sub-agents automatically use the orchestrator LLM as default

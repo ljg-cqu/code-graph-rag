@@ -2,6 +2,7 @@
 Orchestrator module for parallel sub-agent execution.
 """
 
+from .concurrency_eligibility_classifier import ConcurrencyEligibilityClassifier
 from .dynamic_concurrency_controller import DynamicConcurrencyController
 from .result_aggregator import ResultAggregator
 from .subagent_orchestrator import SubAgentOrchestrator
@@ -12,4 +13,5 @@ __all__ = [
     "SubAgentOrchestrator",
     "ResultAggregator",
     "DynamicConcurrencyController",
+    "ConcurrencyEligibilityClassifier",
 ]

@@ -39,6 +39,7 @@ from .services import QueryProtocol
 from .services.graph_service import MemgraphIngestor
 from .services.llm import CypherGenerator, create_rag_orchestrator
 from .shared.query_router import QueryMode, QueryRouter
+from .orchestrator import ConcurrencyEligibilityClassifier, SubAgentOrchestrator, TaskSplitter, ResultAggregator
 from .tools.code_retrieval import CodeRetriever, create_code_retrieval_tool
 from .tools.codebase_query import create_query_tool
 from .tools.directory_lister import DirectoryLister, create_directory_lister_tool
@@ -779,6 +780,12 @@ async def _run_interactive_loop(
     if current_mode is None:
         current_mode = QueryMode.CODE_ONLY
 
+    # Initialize automatic concurrency classifier (no user input needed)
+    concurrency_classifier = ConcurrencyEligibilityClassifier()
+    # Initialize 10-worker round-robin subagent orchestrator (default config)
+    subagent_orchestrator = SubAgentOrchestrator()
+    task_splitter = TaskSplitter()
+
     # Set up signal handlers for graceful Ctrl+C handling
     # Note: We use a local flag and nested function because the processing task
     # changes dynamically per user input iteration.
@@ -883,6 +890,39 @@ async def _run_interactive_loop(
                 question_with_context = _handle_chat_images(
                     question_with_context, project_root
                 )
+
+                # === AUTOMATIC CONCURRENCY DETECTION (NO USER INPUT NEEDED) ===
+                # First check if task is eligible for parallel execution
+                eligible, task_type, confidence = concurrency_classifier.is_eligible(
+                    question_with_context
+                )
+                use_parallel = eligible
+                parallel_result = None
+
+                if use_parallel:
+                    app_context.console.print(
+                        style(f"\n✅ Auto-activating parallel execution: {task_type} (confidence: {confidence:.2f})", cs.Color.GREEN)
+                    )
+                    app_context.console.print(style(f"🔄 Using 10 workers with round-robin scheduling", cs.Color.CYAN))
+                    
+                    # Split the task into independent subtasks
+                    subtasks = task_splitter.split_task(question_with_context, max_subtasks=10)
+                    app_context.console.print(style(f"📋 Split into {len(subtasks)} independent subtasks", cs.Color.CYAN))
+                    
+                    if len(subtasks) >= 2:
+                        # Execute subtasks in parallel with round-robin workers
+                        aggregator = subagent_orchestrator.execute_tasks(subtasks)
+                        parallel_result = aggregator.final_result
+                        app_context.console.print(
+                            style(f"⚡ Parallel execution completed in {aggregator.metadata['total_execution_time']:.2f}s", cs.Color.GREEN)
+                        )
+                        # Add parallel result to context for final response
+                        question_with_context += f"\n\n### Parallel Execution Results:\n{parallel_result}"
+                    else:
+                        app_context.console.print(
+                            style(f"⚠️ Not enough subtasks for parallel execution, falling back to sequential", cs.Color.YELLOW)
+                        )
+                        use_parallel = False
 
                 # Create a task for the agent response loop so it can be cancelled
                 _current_processing_task = asyncio.create_task(

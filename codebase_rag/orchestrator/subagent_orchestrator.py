@@ -3,16 +3,16 @@ Sub-Agent Orchestrator module for parallel execution.
 Manages sub-agent pool, task distribution, lifecycle, and execution guarantees.
 """
 
+import queue
 import signal
 import time
-import queue
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed, wait
+from concurrent.futures import ThreadPoolExecutor, wait
 from typing import Any
 
 from loguru import logger
 
-from codebase_rag.config import settings, ModelConfig
+from codebase_rag.config import ModelConfig, settings
 
 from .dynamic_concurrency_controller import DynamicConcurrencyController
 from .result_aggregator import ResultAggregator
@@ -28,7 +28,7 @@ class SubAgentOrchestrator:
         self,
         worker_count: int | None = None,
         agent_factory: Callable | None = None,
-        scheduling_strategy: str = "fifo",  # Options: "fifo", "round-robin"
+        scheduling_strategy: str = "round-robin",  # Options: "fifo", "round-robin" (default: round-robin as per requirement)
     ):
         self.dynamic_controller = DynamicConcurrencyController()
         self.worker_count = self.dynamic_controller.get_effective_worker_count(
@@ -88,7 +88,7 @@ class SubAgentOrchestrator:
             New sub-agent instance with specified LLM configuration
         """
         worker_llm_config = llm_config or settings.active_orchestrator_config
-        
+
         # For MVP, this is a placeholder that returns a simple callable
         # In real implementation, this would create an instance of the core RAG agent
         # with isolated state, inherited config, and read-only permissions by default
@@ -117,17 +117,17 @@ class SubAgentOrchestrator:
         logger.info(f"Initializing {self.worker_count} sub-agents")
         worker_llms = settings.active_worker_llms
         num_worker_llms = len(worker_llms)
-        
+
         # Clear existing queue first
         while not self.agent_pool.empty():
             try:
                 self.agent_pool.get_nowait()
             except queue.Empty:
                 break
-        
+
         # Reset LLM assignment index for new pool initialization
         self._llm_assignment_index = 0
-        
+
         # Add new agents to queue with round-robin LLM assignment
         for _ in range(self.worker_count):
             if num_worker_llms > 0:
@@ -139,7 +139,7 @@ class SubAgentOrchestrator:
                 # No worker LLMs configured, use default orchestrator LLM
                 agent = self.agent_factory()
             self.agent_pool.put(agent)
-        
+
         if num_worker_llms > 0:
             logger.info(f"Sub-agent pool initialized with {num_worker_llms} worker LLMs (round-robin assignment)")
         else:
@@ -336,7 +336,7 @@ class SubAgentOrchestrator:
             worker_llms = settings.active_worker_llms
             num_worker_llms = len(worker_llms)
             add_count = new_count - self.worker_count
-            
+
             for _ in range(add_count):
                 if num_worker_llms > 0:
                     llm_config = worker_llms[self._llm_assignment_index % num_worker_llms]
@@ -345,7 +345,7 @@ class SubAgentOrchestrator:
                 else:
                     agent = self.agent_factory()
                 self.agent_pool.put(agent)
-            
+
             logger.info(f"Added {add_count} new sub-agents to pool")
         elif new_count < self.worker_count:
             # Remove excess workers

@@ -444,6 +444,11 @@ class AppConfig(BaseSettings):
     CGR_AUTO_SPLIT_ENABLED: bool = True
     CGR_SUBAGENT_RETRY_ATTEMPTS: int = 2
 
+    # Automatic Concurrency Detection (no explicit user request needed)
+    CGR_AUTO_PARALLEL_ENABLED: bool = True
+    CGR_PARALLEL_ELIGIBILITY_THRESHOLD: float = 0.8
+    CGR_PARALLEL_MAX_QUEUE_SIZE: int = 100
+
     # Worker LLM Configuration for Sub-Agents
     CGR_WORKER_LLMS: str | list[str | dict] = Field(default_factory=list)
     CGR_WORKER_LLM_ASSIGNMENT_STRATEGY: Literal["round-robin"] = "round-robin"
