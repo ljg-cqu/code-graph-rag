@@ -198,14 +198,18 @@ class TestValidationTriggerAPI:
     def test_generate_id_is_unique(self):
         """Generated IDs are unique for different inputs."""
         api = ValidationTriggerAPI()
-        id1 = api._generate_id(ValidationRequest(
-            document_path="/docs/a.md",
-            mode="CODE_VS_DOC",
-        ))
-        id2 = api._generate_id(ValidationRequest(
-            document_path="/docs/b.md",
-            mode="CODE_VS_DOC",
-        ))
+        id1 = api._generate_id(
+            ValidationRequest(
+                document_path="/docs/a.md",
+                mode="CODE_VS_DOC",
+            )
+        )
+        id2 = api._generate_id(
+            ValidationRequest(
+                document_path="/docs/b.md",
+                mode="CODE_VS_DOC",
+            )
+        )
         assert id1 != id2
 
     def test_estimate_cost(self):

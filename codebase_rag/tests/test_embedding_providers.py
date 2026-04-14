@@ -59,7 +59,9 @@ class TestLocalEmbeddingProvider:
 
     def test_custom_dimension(self) -> None:
         """Should accept custom dimension override."""
-        provider = get_embedding_provider("local", "microsoft/unixcoder-base", dimension=1024)
+        provider = get_embedding_provider(
+            "local", "microsoft/unixcoder-base", dimension=1024
+        )
         assert provider.dimension == 1024
 
     def test_known_model_dimensions(self) -> None:
@@ -106,19 +108,25 @@ class TestOpenAIEmbeddingProvider:
 
     def test_validate_config_missing_api_key_raises(self) -> None:
         """Missing API key should raise EmbeddingAuthenticationError."""
-        provider = get_embedding_provider("openai", "text-embedding-3-small", api_key=None)
+        provider = get_embedding_provider(
+            "openai", "text-embedding-3-small", api_key=None
+        )
         with pytest.raises(EmbeddingAuthenticationError):
             provider.validate_config()
 
     def test_validate_config_empty_api_key_raises(self) -> None:
         """Empty API key should raise EmbeddingAuthenticationError."""
-        provider = get_embedding_provider("openai", "text-embedding-3-small", api_key="")
+        provider = get_embedding_provider(
+            "openai", "text-embedding-3-small", api_key=""
+        )
         with pytest.raises(EmbeddingAuthenticationError):
             provider.validate_config()
 
     def test_validate_config_whitespace_api_key_raises(self) -> None:
         """Whitespace-only API key should raise EmbeddingAuthenticationError."""
-        provider = get_embedding_provider("openai", "text-embedding-3-small", api_key="   ")
+        provider = get_embedding_provider(
+            "openai", "text-embedding-3-small", api_key="   "
+        )
         with pytest.raises(EmbeddingAuthenticationError):
             provider.validate_config()
 

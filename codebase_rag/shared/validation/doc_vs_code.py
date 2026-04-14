@@ -119,13 +119,14 @@ class DocVsCodeValidator(BaseValidator):
 
             # Basic claim extraction: look for sentences with code references
             import re
+
             # Look for code-like references (function names, class names, API endpoints)
             code_patterns = [
-                r'`([^`]+)`',  # Inline code
-                r'`([^`]+)`',  # Function/class references
-                r'([A-Z][a-zA-Z]+(?:\.[a-zA-Z]+)+)',  # Qualified names
-                r'([a-z_]+\(.*?\))',  # Function calls
-                r'(/[a-z0-9/_-]+)',  # API endpoints
+                r"`([^`]+)`",  # Inline code
+                r"`([^`]+)`",  # Function/class references
+                r"([A-Z][a-zA-Z]+(?:\.[a-zA-Z]+)+)",  # Qualified names
+                r"([a-z_]+\(.*?\))",  # Function calls
+                r"(/[a-z0-9/_-]+)",  # API endpoints
             ]
 
             for pattern in code_patterns:
@@ -134,12 +135,14 @@ class DocVsCodeValidator(BaseValidator):
                     if isinstance(match, tuple):
                         match = match[0]
                     if match and len(match) > 2:
-                        claims.append({
-                            "description": f"Reference to '{match}' in {section_title}",
-                            "code_reference": match,
-                            "source_section": section_title,
-                            "source_document": document_path,
-                        })
+                        claims.append(
+                            {
+                                "description": f"Reference to '{match}' in {section_title}",
+                                "code_reference": match,
+                                "source_section": section_title,
+                                "source_document": document_path,
+                            }
+                        )
 
         # Deduplicate claims by code reference
         seen_refs: set[str] = set()

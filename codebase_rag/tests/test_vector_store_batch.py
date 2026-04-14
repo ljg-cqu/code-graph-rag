@@ -34,9 +34,7 @@ def qdrant_backend_env(reset_backend: None) -> None:
 
 
 class TestUpsertWithRetry:
-    def test_succeeds_on_first_attempt(
-        self, qdrant_backend_env: None
-    ) -> None:
+    def test_succeeds_on_first_attempt(self, qdrant_backend_env: None) -> None:
         import codebase_rag.vector_store as vs
         from codebase_rag.vector_store_qdrant import QdrantBackend
 
@@ -53,9 +51,7 @@ class TestUpsertWithRetry:
 
         mock_client.upsert.assert_called_once()
 
-    def test_retries_on_failure_then_succeeds(
-        self, qdrant_backend_env: None
-    ) -> None:
+    def test_retries_on_failure_then_succeeds(self, qdrant_backend_env: None) -> None:
         import codebase_rag.vector_store as vs
         from codebase_rag.vector_store_qdrant import QdrantBackend
 
@@ -76,9 +72,7 @@ class TestUpsertWithRetry:
         assert mock_client.upsert.call_count == 2
         mock_sleep.assert_called_once()
 
-    def test_raises_after_exhausting_retries(
-        self, qdrant_backend_env: None
-    ) -> None:
+    def test_raises_after_exhausting_retries(self, qdrant_backend_env: None) -> None:
         import codebase_rag.vector_store as vs
         from codebase_rag.vector_store_qdrant import QdrantBackend
 
@@ -96,9 +90,7 @@ class TestUpsertWithRetry:
         ):
             backend._upsert_with_retry([MagicMock()])
 
-    def test_exponential_backoff_delays(
-        self, qdrant_backend_env: None
-    ) -> None:
+    def test_exponential_backoff_delays(self, qdrant_backend_env: None) -> None:
         import codebase_rag.vector_store as vs
         from codebase_rag.vector_store_qdrant import QdrantBackend
 
@@ -122,9 +114,7 @@ class TestUpsertWithRetry:
 
 
 class TestStoreEmbeddingBatch:
-    def test_returns_count_on_success(
-        self, qdrant_backend_env: None
-    ) -> None:
+    def test_returns_count_on_success(self, qdrant_backend_env: None) -> None:
         import codebase_rag.vector_store as vs
         from codebase_rag.vector_store import store_embedding_batch
         from codebase_rag.vector_store_qdrant import QdrantBackend
@@ -149,9 +139,7 @@ class TestStoreEmbeddingBatch:
         result = store_embedding_batch([])
         assert result == 0
 
-    def test_returns_zero_on_failure(
-        self, qdrant_backend_env: None
-    ) -> None:
+    def test_returns_zero_on_failure(self, qdrant_backend_env: None) -> None:
         import codebase_rag.vector_store as vs
         from codebase_rag.vector_store import store_embedding_batch
         from codebase_rag.vector_store_qdrant import QdrantBackend
@@ -169,9 +157,7 @@ class TestStoreEmbeddingBatch:
 
         assert result == 0
 
-    def test_builds_correct_point_structs(
-        self, qdrant_backend_env: None
-    ) -> None:
+    def test_builds_correct_point_structs(self, qdrant_backend_env: None) -> None:
         import codebase_rag.vector_store as vs
         from codebase_rag.vector_store import store_embedding_batch
         from codebase_rag.vector_store_qdrant import QdrantBackend
@@ -197,9 +183,7 @@ class TestStoreEmbeddingBatch:
 
 
 class TestDeleteProjectEmbeddings:
-    def test_deletes_given_ids(
-        self, qdrant_backend_env: None
-    ) -> None:
+    def test_deletes_given_ids(self, qdrant_backend_env: None) -> None:
         import codebase_rag.vector_store as vs
         from codebase_rag.vector_store import delete_project_embeddings
         from codebase_rag.vector_store_qdrant import QdrantBackend
@@ -223,17 +207,13 @@ class TestDeleteProjectEmbeddings:
 
         MagicMock()
 
-        with patch(
-            "codebase_rag.vector_store._get_backend"
-        ) as mock_get_backend:
+        with patch("codebase_rag.vector_store._get_backend") as mock_get_backend:
             mock_get_backend.return_value.delete_batch = MagicMock()
             delete_project_embeddings("myproject", [])
 
         mock_get_backend.return_value.delete_batch.assert_not_called()
 
-    def test_handles_exception_gracefully(
-        self, qdrant_backend_env: None
-    ) -> None:
+    def test_handles_exception_gracefully(self, qdrant_backend_env: None) -> None:
         import codebase_rag.vector_store as vs
         from codebase_rag.vector_store import delete_project_embeddings
         from codebase_rag.vector_store_qdrant import QdrantBackend
@@ -250,9 +230,7 @@ class TestDeleteProjectEmbeddings:
 
 
 class TestVerifyStoredIds:
-    def test_returns_found_ids(
-        self, qdrant_backend_env: None
-    ) -> None:
+    def test_returns_found_ids(self, qdrant_backend_env: None) -> None:
         import codebase_rag.vector_store as vs
         from codebase_rag.vector_store import verify_stored_ids
         from codebase_rag.vector_store_qdrant import QdrantBackend
@@ -279,9 +257,7 @@ class TestVerifyStoredIds:
         result = verify_stored_ids(set())
         assert result == set()
 
-    def test_raises_on_exception(
-        self, qdrant_backend_env: None
-    ) -> None:
+    def test_raises_on_exception(self, qdrant_backend_env: None) -> None:
         import codebase_rag.vector_store as vs
         from codebase_rag.vector_store import verify_stored_ids
         from codebase_rag.vector_store_qdrant import QdrantBackend
@@ -297,9 +273,7 @@ class TestVerifyStoredIds:
         with pytest.raises(Exception, match="fail"):
             verify_stored_ids({1, 2})
 
-    def test_batches_large_id_sets(
-        self, qdrant_backend_env: None
-    ) -> None:
+    def test_batches_large_id_sets(self, qdrant_backend_env: None) -> None:
         import codebase_rag.vector_store as vs
         from codebase_rag.vector_store import _RETRIEVE_BATCH_SIZE, verify_stored_ids
         from codebase_rag.vector_store_qdrant import QdrantBackend

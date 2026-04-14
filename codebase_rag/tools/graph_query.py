@@ -41,7 +41,7 @@ def create_graph_query_tool(query_router: QueryRouter) -> Tool:
             Formatted query results with source attribution
         """
         # Parse mode override
-        effective_mode = getattr(query_router, 'current_mode', QueryMode.CODE_ONLY)
+        effective_mode = getattr(query_router, "current_mode", QueryMode.CODE_ONLY)
         if mode:
             try:
                 effective_mode = QueryMode(mode.lower())
@@ -69,16 +69,12 @@ def create_graph_query_tool(query_router: QueryRouter) -> Tool:
             if code_sources:
                 result_parts.append(f"\n\n**Code Sources ({len(code_sources)}):**")
                 for source in code_sources:
-                    result_parts.append(
-                        f"- `{source.qualified_name}` in {source.path}"
-                    )
+                    result_parts.append(f"- `{source.qualified_name}` in {source.path}")
 
             if doc_sources:
                 result_parts.append(f"\n\n**Document Sources ({len(doc_sources)}):**")
                 for source in doc_sources:
-                    result_parts.append(
-                        f"- `{source.qualified_name}` in {source.path}"
-                    )
+                    result_parts.append(f"- `{source.qualified_name}` in {source.path}")
 
         if response.warnings:
             result_parts.append(f"\n\n⚠️ **Warnings:** {', '.join(response.warnings)}")

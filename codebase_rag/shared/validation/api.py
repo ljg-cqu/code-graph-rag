@@ -67,7 +67,9 @@ class ValidationTriggerResult:
         """Convert to dictionary."""
         return {
             "accepted": self.accepted,
-            "cost_estimate": self.cost_estimate.to_dict() if self.cost_estimate else None,
+            "cost_estimate": self.cost_estimate.to_dict()
+            if self.cost_estimate
+            else None,
             "validation_id": self.validation_id,
             "message": self.message,
         }
@@ -229,6 +231,7 @@ class ValidationTriggerAPI:
 
         except Exception as e:
             from loguru import logger
+
             logger.warning(f"Could not get document stats: {e}")
 
         # Fallback to default estimates

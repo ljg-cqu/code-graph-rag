@@ -105,29 +105,33 @@ class ImportProcessor:
         self.import_mapping[module_qn] = {}
 
         try:
-            captures = imports_query.captures(root_node)
+            from tree_sitter import QueryCursor
+
+            from .utils import get_query_captures
+
+            captures_dict = get_query_captures(imports_query, root_node)
 
             match language:
                 case cs.SupportedLanguage.PYTHON:
-                    self._parse_python_imports(captures, module_qn)
+                    self._parse_python_imports(captures_dict, module_qn)
                 case cs.SupportedLanguage.JS | cs.SupportedLanguage.TS:
-                    self._parse_js_ts_imports(captures, module_qn)
+                    self._parse_js_ts_imports(captures_dict, module_qn)
                 case cs.SupportedLanguage.JAVA:
-                    self._parse_java_imports(captures, module_qn)
+                    self._parse_java_imports(captures_dict, module_qn)
                 case cs.SupportedLanguage.RUST:
-                    self._parse_rust_imports(captures, module_qn)
+                    self._parse_rust_imports(captures_dict, module_qn)
                 case cs.SupportedLanguage.GO:
-                    self._parse_go_imports(captures, module_qn)
+                    self._parse_go_imports(captures_dict, module_qn)
                 case cs.SupportedLanguage.CPP:
-                    self._parse_cpp_imports(captures, module_qn)
+                    self._parse_cpp_imports(captures_dict, module_qn)
                 case cs.SupportedLanguage.LUA:
-                    self._parse_lua_imports(captures, module_qn)
+                    self._parse_lua_imports(captures_dict, module_qn)
                 case cs.SupportedLanguage.PHP:
-                    self._parse_php_imports(captures, module_qn)
+                    self._parse_php_imports(captures_dict, module_qn)
                 case cs.SupportedLanguage.AUTOHOTKEY:
-                    self._parse_ahk_imports(captures, module_qn)
+                    self._parse_ahk_imports(captures_dict, module_qn)
                 case _:
-                    self._parse_generic_imports(captures, module_qn, lang_config)
+                    self._parse_generic_imports(captures_dict, module_qn, lang_config)
 
             logger.debug(
                 ls.IMP_PARSED_COUNT,

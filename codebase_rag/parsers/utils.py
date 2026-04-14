@@ -30,6 +30,24 @@ class FunctionCapturesResult(NamedTuple):
     captures: dict[str, list[ASTNode]]
 
 
+def query_captures_to_dict(matches_iterator) -> dict[str, list[ASTNode]]:
+    captures_dict: dict[str, list[ASTNode]] = {}
+    for match in matches_iterator:
+        for capture_name, capture_nodes in match[1].items():
+            if capture_name not in captures_dict:
+                captures_dict[capture_name] = []
+            if isinstance(capture_nodes, list):
+                captures_dict[capture_name].extend(capture_nodes)
+            else:
+                captures_dict[capture_name].append(capture_nodes)
+    return captures_dict
+
+
+def get_query_captures(query: Query, root_node: ASTNode) -> dict[str, list[ASTNode]]:
+    cursor = QueryCursor(query)
+    return cursor.captures(root_node)
+
+
 def get_function_captures(
     root_node: ASTNode,
     language: cs.SupportedLanguage,

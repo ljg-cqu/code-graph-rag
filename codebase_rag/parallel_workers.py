@@ -25,6 +25,7 @@ R = TypeVar("R")
 @dataclass
 class TaskResult(Generic[R]):
     """Result of a worker task execution."""
+
     task_id: str
     success: bool
     result: R | None = None
@@ -106,9 +107,15 @@ class ParallelWorkerPool:
     GLOBAL_MAX_CONCURRENT_QUERIES = 30
 
     def __init__(self, num_workers: int | None = None):
-        self.NUM_WORKERS = num_workers if num_workers is not None else self.__class__.NUM_WORKERS
-        self._executor = ThreadPoolExecutor(max_workers=self.NUM_WORKERS, thread_name_prefix="memgraph-worker")
-        self._workers: list[WorkerConnection] = [WorkerConnection(i) for i in range(self.NUM_WORKERS)]
+        self.NUM_WORKERS = (
+            num_workers if num_workers is not None else self.__class__.NUM_WORKERS
+        )
+        self._executor = ThreadPoolExecutor(
+            max_workers=self.NUM_WORKERS, thread_name_prefix="memgraph-worker"
+        )
+        self._workers: list[WorkerConnection] = [
+            WorkerConnection(i) for i in range(self.NUM_WORKERS)
+        ]
         self._round_robin_index = 0
         self._index_lock = Lock()
         self._global_query_semaphore = Lock()  # Simplified rate limiting for global max
@@ -139,13 +146,15 @@ class ParallelWorkerPool:
                 with self._global_query_semaphore:
                     result = func(worker, params)
                 execution_time = time.time() - start_time
-                logger.debug(f"Task {task_id} succeeded on worker {worker.worker_id} after {retries} retries in {execution_time:.3f}s")
+                logger.debug(
+                    f"Task {task_id} succeeded on worker {worker.worker_id} after {retries} retries in {execution_time:.3f}s"
+                )
                 return TaskResult(
                     task_id=task_id,
                     success=True,
                     result=result,
                     retries_used=retries,
-                    execution_time=execution_time
+                    execution_time=execution_time,
                 )
             except Exception as e:
                 last_error = e
@@ -154,8 +163,13 @@ class ParallelWorkerPool:
                     break
 
                 # Exponential backoff
-                delay = min(self.INITIAL_RETRY_DELAY * (2 ** (retries - 1)), self.MAX_RETRY_DELAY)
-                logger.warning(f"Task {task_id} failed on worker {worker.worker_id}, retry {retries}/{self.MAX_RETRIES} in {delay:.1f}s: {str(e)}")
+                delay = min(
+                    self.INITIAL_RETRY_DELAY * (2 ** (retries - 1)),
+                    self.MAX_RETRY_DELAY,
+                )
+                logger.warning(
+                    f"Task {task_id} failed on worker {worker.worker_id}, retry {retries}/{self.MAX_RETRIES} in {delay:.1f}s: {str(e)}"
+                )
                 time.sleep(delay)
 
                 # Get a new worker for retries to avoid bad connections
@@ -163,13 +177,15 @@ class ParallelWorkerPool:
 
         # All retries failed
         execution_time = time.time() - start_time
-        logger.error(f"Task {task_id} failed after {self.MAX_RETRIES} retries in {execution_time:.3f}s: {str(last_error)}")
+        logger.error(
+            f"Task {task_id} failed after {self.MAX_RETRIES} retries in {execution_time:.3f}s: {str(last_error)}"
+        )
         return TaskResult(
             task_id=task_id,
             success=False,
             error=last_error,
             retries_used=self.MAX_RETRIES,
-            execution_time=execution_time
+            execution_time=execution_time,
         )
 
     def submit_task(
@@ -184,7 +200,13 @@ class ParallelWorkerPool:
 
     def submit_batch(
         self,
-        tasks: list[tuple[str, Callable[[WorkerConnection, dict[str, Any]], R], dict[str, Any] | None]],
+        tasks: list[
+            tuple[
+                str,
+                Callable[[WorkerConnection, dict[str, Any]], R],
+                dict[str, Any] | None,
+            ]
+        ],
     ) -> list[TaskResult[R]]:
         """Submit a batch of tasks to the worker pool (parallel execution).
 
@@ -203,10 +225,7 @@ class ParallelWorkerPool:
         # Submit all tasks
         for task_id, func, params in tasks:
             future = self._executor.submit(
-                self._execute_task_with_retry,
-                task_id,
-                func,
-                params or {}
+                self._execute_task_with_retry, task_id, func, params or {}
             )
             futures[future] = task_id
 
@@ -222,7 +241,7 @@ class ParallelWorkerPool:
                     success=False,
                     error=e,
                     retries_used=0,
-                    execution_time=0.0
+                    execution_time=0.0,
                 )
 
         # Return results in original order
@@ -240,6 +259,7 @@ class ParallelWorkerPool:
         Returns:
             List of TaskResult objects with query results
         """
+
         def query_func(worker: WorkerConnection, params: dict) -> list[dict]:
             return worker.execute_query(params["query"], params["query_params"])
 
@@ -271,6 +291,7 @@ class ParallelWorkerPool:
 
     def health_check(self) -> bool:
         """Check if all workers are healthy and can connect to Memgraph."""
+
         def health_func(worker: WorkerConnection, _: dict) -> bool:
             worker.execute_query("RETURN 1 AS health;")
             return True
@@ -279,12 +300,16 @@ class ParallelWorkerPool:
         results = self.submit_batch(tasks)
 
         healthy_count = sum(1 for res in results if res.success)
-        logger.info(f"Worker pool health check: {healthy_count}/{self.NUM_WORKERS} workers healthy")
+        logger.info(
+            f"Worker pool health check: {healthy_count}/{self.NUM_WORKERS} workers healthy"
+        )
         return healthy_count == self.NUM_WORKERS
 
     def close(self) -> None:
         """Shutdown the worker pool and close all connections."""
-        logger.info(f"Shutting down parallel worker pool with {self.NUM_WORKERS} workers")
+        logger.info(
+            f"Shutting down parallel worker pool with {self.NUM_WORKERS} workers"
+        )
         self._executor.shutdown(wait=True)
         for worker in self._workers:
             worker.close()

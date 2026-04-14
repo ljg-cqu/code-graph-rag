@@ -52,7 +52,7 @@ class Calculator:
     docs_dir.mkdir()
     api_doc = docs_dir / "api.md"
     api_doc.write_text(
-        '''# API Documentation
+        """# API Documentation
 
 ## Overview
 
@@ -65,7 +65,7 @@ The Calculator class must provide an `add` method that adds two numbers.
 ## Authentication
 
 The system shall implement user authentication.
-''',
+""",
         encoding="utf-8",
     )
     return tmp_path
@@ -302,9 +302,7 @@ class TestIndexDocuments:
     ) -> None:
         """index_documents returns indexing statistics."""
         # Mock DocumentGraphUpdater
-        with patch(
-            "codebase_rag.mcp.tools.DocumentGraphUpdater"
-        ) as mock_updater_class:
+        with patch("codebase_rag.mcp.tools.DocumentGraphUpdater") as mock_updater_class:
             mock_updater = MagicMock()
             mock_updater.run.return_value = {
                 "total_documents": 5,
@@ -326,9 +324,7 @@ class TestIndexDocuments:
         self, mcp_registry: MCPToolsRegistry
     ) -> None:
         """index_documents handles errors gracefully."""
-        with patch(
-            "codebase_rag.mcp.tools.DocumentGraphUpdater"
-        ) as mock_updater_class:
+        with patch("codebase_rag.mcp.tools.DocumentGraphUpdater") as mock_updater_class:
             mock_updater_class.side_effect = Exception("Connection failed")
 
             result = await mcp_registry.index_documents()
@@ -376,9 +372,7 @@ class TestDocumentToolSchemas:
     def test_query_document_graph_schema(self, mcp_registry: MCPToolsRegistry) -> None:
         """query_document_graph has correct schema."""
         tools = mcp_registry.get_tool_schemas()
-        query_doc = next(
-            (t for t in tools if t.name == "query_document_graph"), None
-        )
+        query_doc = next((t for t in tools if t.name == "query_document_graph"), None)
 
         assert query_doc is not None
         props = query_doc.inputSchema["properties"]
@@ -405,9 +399,7 @@ class TestDocumentToolSchemas:
     def test_index_documents_schema(self, mcp_registry: MCPToolsRegistry) -> None:
         """index_documents has correct schema."""
         tools = mcp_registry.get_tool_schemas()
-        index_docs = next(
-            (t for t in tools if t.name == "index_documents"), None
-        )
+        index_docs = next((t for t in tools if t.name == "index_documents"), None)
 
         assert index_docs is not None
         # index_documents has no required parameters

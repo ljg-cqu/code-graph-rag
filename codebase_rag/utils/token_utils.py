@@ -288,9 +288,7 @@ def _truncate_balanced(
 
     # Third pass: enforce min_rows guarantee by force-adding remaining rows
     # This ensures we always return at least min_rows (or all rows if fewer exist)
-    unselected[
-        len(kept) - len(row_token_counts) :
-    ]  # Rows not yet processed
+    unselected[len(kept) - len(row_token_counts) :]  # Rows not yet processed
     remaining_unselected = [r for r in unselected if r not in kept]
 
     while len(kept) < min_rows and remaining_unselected and len(kept) < n:

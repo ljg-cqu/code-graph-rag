@@ -140,25 +140,39 @@ __all__ = [
     "get_auth_solutions",
 ]
 
+
 # Lazy import for switching utilities to avoid circular imports
 def __getattr__(name: str):
-    if name in ("SwitchResult", "switch_embedding_provider", "reembed_all_vectors", "get_embedding_status"):
+    if name in (
+        "SwitchResult",
+        "switch_embedding_provider",
+        "reembed_all_vectors",
+        "get_embedding_status",
+    ):
         from .switching import (
             SwitchResult,
             get_embedding_status,
             reembed_all_vectors,
             switch_embedding_provider,
         )
+
         return locals()[name]
     if name in ("TokenBucket", "AdaptiveRateLimiter"):
         from .rate_limiter import AdaptiveRateLimiter, TokenBucket
+
         return locals()[name]
-    if name in ("USER_FACING_MESSAGES", "AUTH_SOLUTIONS", "get_user_facing_message", "get_auth_solutions"):
+    if name in (
+        "USER_FACING_MESSAGES",
+        "AUTH_SOLUTIONS",
+        "get_user_facing_message",
+        "get_auth_solutions",
+    ):
         from .errors import (
             AUTH_SOLUTIONS,
             USER_FACING_MESSAGES,
             get_auth_solutions,
             get_user_facing_message,
         )
+
         return locals()[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

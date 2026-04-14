@@ -121,7 +121,9 @@ def _extract_references_from_line(line: str, line_num: int) -> list[CodeReferenc
         )
 
     # Pattern 5: "module `module.path`" references
-    for match in re.finditer(r"module\s+`([a-zA-Z_][\w]*(?:\.[\w]+)*)`", line, re.IGNORECASE):
+    for match in re.finditer(
+        r"module\s+`([a-zA-Z_][\w]*(?:\.[\w]+)*)`", line, re.IGNORECASE
+    ):
         name = match.group(1)
         refs.append(
             CodeReference(

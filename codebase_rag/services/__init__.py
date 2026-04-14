@@ -15,6 +15,14 @@ class IngestorProtocol(Protocol):
         properties: PropertyDict | None = None,
     ) -> None: ...
 
+    def ensure_edge(
+        self,
+        rel_type: str,
+        from_identifier: str,
+        to_identifier: str,
+        properties: PropertyDict | None = None,
+    ) -> None: ...
+
     def flush_all(self) -> None: ...
 
 

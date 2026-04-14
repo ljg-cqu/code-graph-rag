@@ -13,7 +13,6 @@ def main():
     prompt = "Review this Python file for security vulnerabilities, performance issues, and code style problems."
     subtasks = splitter.split_task(prompt, strategy="file")
 
-
     # Validate subtasks cover all code files
     if not splitter.validate_subtasks(subtasks, prompt):
         return
@@ -25,7 +24,6 @@ def main():
     orchestrator.execute_tasks(subtasks)
 
     # Step 4: Consolidate and print results
-
 
     # Cleanup
     orchestrator.shutdown()

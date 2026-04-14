@@ -1,6 +1,5 @@
 """Tests for Pydantic schemas, especially QueryGraphData validator."""
 
-
 from codebase_rag.schemas import QueryGraphData, _normalize_value
 from codebase_rag.types_defs import RELATIONSHIP_SCHEMAS, NodeLabel, RelationshipType
 
@@ -61,7 +60,7 @@ class TestQueryGraphData:
         data = QueryGraphData(
             query_used="MATCH (n) RETURN n.name AS name",
             results=[{"name": "test"}],
-            summary="Found 1 result"
+            summary="Found 1 result",
         )
         assert data.results == [{"name": "test"}]
 
@@ -75,21 +74,19 @@ class TestQueryGraphData:
                     {"name": "UniIOTX.sol", "type": "Module"},
                     {"name": "UniIOTX", "type": "Contract"},
                     {"name": "burnFrom", "type": "Method"},
-                ]
+                ],
             }
         ]
         data = QueryGraphData(
             query_used="MATCH (f:File) RETURN f.path AS filePath",
             results=results,
-            summary="Found 1 file"
+            summary="Found 1 file",
         )
         assert data.results == results
 
     def test_accepts_empty_results(self) -> None:
         data = QueryGraphData(
-            query_used="MATCH (n) RETURN n",
-            results=[],
-            summary="No results"
+            query_used="MATCH (n) RETURN n", results=[], summary="No results"
         )
         assert data.results == []
 
@@ -97,7 +94,7 @@ class TestQueryGraphData:
         data = QueryGraphData(
             query_used="MATCH (n) RETURN n.name AS name, n.desc AS desc",
             results=[{"name": "test", "desc": None}],
-            summary="Found 1 result"
+            summary="Found 1 result",
         )
         assert data.results == [{"name": "test", "desc": None}]
 
@@ -106,7 +103,7 @@ class TestQueryGraphData:
         data = QueryGraphData(
             query_used="MATCH (n) RETURN n",
             results=[{"valid": "row"}, "invalid", 123],  # type: ignore
-            summary="Processed"
+            summary="Processed",
         )
         assert data.results == [{"valid": "row"}]
 
@@ -115,7 +112,7 @@ class TestQueryGraphData:
         data = QueryGraphData(
             query_used="MATCH (n) RETURN n",
             results=[{"value": b"bytes"}],  # bytes should become string
-            summary="Found 1"
+            summary="Found 1",
         )
         assert data.results == [{"value": "b'bytes'"}]
 

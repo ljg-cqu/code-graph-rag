@@ -395,7 +395,10 @@ class MCPToolsRegistry:
                         default=False,
                     ),
                 },
-                required=[cs.MCPParamName.EMBEDDING_PROVIDER, cs.MCPParamName.EMBEDDING_MODEL],
+                required=[
+                    cs.MCPParamName.EMBEDDING_PROVIDER,
+                    cs.MCPParamName.EMBEDDING_MODEL,
+                ],
             ),
             handler=self.set_embedding_provider,
             returns_json=True,
@@ -819,6 +822,7 @@ class MCPToolsRegistry:
         logger.info("Getting embedding status")
         try:
             from codebase_rag.embeddings import get_embedding_status
+
             return get_embedding_status()
         except Exception as e:
             logger.error(f"Failed to get embedding status: {e}")
@@ -950,7 +954,9 @@ class MCPToolsRegistry:
                     "spec_document": spec_document_path,
                     "mode": "CODE_VS_DOC",
                     "accepted": False,
-                    "cost_estimate": trigger_result.cost_estimate.to_dict() if trigger_result.cost_estimate else None,
+                    "cost_estimate": trigger_result.cost_estimate.to_dict()
+                    if trigger_result.cost_estimate
+                    else None,
                     "message": trigger_result.message,
                 }
 
@@ -971,7 +977,9 @@ class MCPToolsRegistry:
                 "dry_run": dry_run,
                 "validation_report": result.get("validation_report"),
                 "answer": result.get("answer", ""),
-                "cost_estimate": trigger_result.cost_estimate.to_dict() if trigger_result.cost_estimate else None,
+                "cost_estimate": trigger_result.cost_estimate.to_dict()
+                if trigger_result.cost_estimate
+                else None,
             }
         except Exception as e:
             logger.error(f"Validation failed: {e}")
@@ -1007,7 +1015,9 @@ class MCPToolsRegistry:
                     "document": document_path,
                     "mode": "DOC_VS_CODE",
                     "accepted": False,
-                    "cost_estimate": trigger_result.cost_estimate.to_dict() if trigger_result.cost_estimate else None,
+                    "cost_estimate": trigger_result.cost_estimate.to_dict()
+                    if trigger_result.cost_estimate
+                    else None,
                     "message": trigger_result.message,
                 }
 
@@ -1028,7 +1038,9 @@ class MCPToolsRegistry:
                 "dry_run": dry_run,
                 "validation_report": result.get("validation_report"),
                 "answer": result.get("answer", ""),
-                "cost_estimate": trigger_result.cost_estimate.to_dict() if trigger_result.cost_estimate else None,
+                "cost_estimate": trigger_result.cost_estimate.to_dict()
+                if trigger_result.cost_estimate
+                else None,
             }
         except Exception as e:
             logger.error(f"Validation failed: {e}")

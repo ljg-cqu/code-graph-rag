@@ -186,11 +186,19 @@ MCP_SET_EMBEDDING_PROVIDER = (
 )
 
 MCP_PARAM_EMBEDDING_PROVIDER = "Embedding provider name (local, openai, google, ollama)"
-MCP_PARAM_EMBEDDING_MODEL = "Model identifier (e.g., text-embedding-3-small, nomic-embed-text)"
-MCP_PARAM_EMBEDDING_DIMENSION = "Optional dimension override (auto-detected from model by default)"
-MCP_PARAM_EMBEDDING_API_KEY = "API key for external providers (optional if set in environment)"
+MCP_PARAM_EMBEDDING_MODEL = (
+    "Model identifier (e.g., text-embedding-3-small, nomic-embed-text)"
+)
+MCP_PARAM_EMBEDDING_DIMENSION = (
+    "Optional dimension override (auto-detected from model by default)"
+)
+MCP_PARAM_EMBEDDING_API_KEY = (
+    "API key for external providers (optional if set in environment)"
+)
 MCP_PARAM_EMBEDDING_ENDPOINT = "Custom endpoint URL (optional)"
-MCP_PARAM_REEMBED = "If true, re-embed all vectors after switching providers (default: false)"
+MCP_PARAM_REEMBED = (
+    "If true, re-embed all vectors after switching providers (default: false)"
+)
 
 # Document GraphRAG tool descriptions
 MCP_QUERY_DOCUMENT_GRAPH = (

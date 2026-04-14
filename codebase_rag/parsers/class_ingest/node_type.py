@@ -36,9 +36,7 @@ def determine_node_type(
             logger.info(logs.CLASS_FOUND_TYPE.format(name=class_name, qn=class_qn))
             return NodeType.TYPE
         case (
-            cs.TS_STRUCT_SPECIFIER
-            | cs.TS_RS_STRUCT_ITEM
-            | cs.TS_SOL_STRUCT_DECLARATION
+            cs.TS_STRUCT_SPECIFIER | cs.TS_RS_STRUCT_ITEM | cs.TS_SOL_STRUCT_DECLARATION
         ):
             logger.info(logs.CLASS_FOUND_STRUCT.format(name=class_name, qn=class_qn))
             return NodeType.CLASS

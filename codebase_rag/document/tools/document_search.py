@@ -73,8 +73,7 @@ def document_semantic_search(
         )
         # Filter by min_similarity and get node IDs
         filtered_results = [
-            (nid, sim) for nid, sim in backend_results
-            if sim >= min_similarity
+            (nid, sim) for nid, sim in backend_results if sim >= min_similarity
         ][:limit]
 
         if filtered_results:

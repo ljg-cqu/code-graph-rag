@@ -66,7 +66,9 @@ def create_query_document_graph_tool(
                     f"({source.node_type or 'Section'})"
                 )
                 if source.line_range:
-                    result_lines.append(f"   Lines: {source.line_range[0]}-{source.line_range[1]}")
+                    result_lines.append(
+                        f"   Lines: {source.line_range[0]}-{source.line_range[1]}"
+                    )
 
             result_lines.append(f"\n\n**Answer:**\n{response.answer}")
 

@@ -59,7 +59,9 @@ class BaseValidator(ABC):
         """
         pass
 
-    def _execute_code_query(self, cypher: str, params: dict | None = None) -> list[dict]:
+    def _execute_code_query(
+        self, cypher: str, params: dict | None = None
+    ) -> list[dict]:
         """Execute a query on the code graph."""
         if self.code_graph is None:
             return []
@@ -67,6 +69,7 @@ class BaseValidator(ABC):
             return self.code_graph.fetch_all(cypher, params or {})
         except Exception as e:
             from loguru import logger
+
             logger.error(f"Code graph query failed: {e}")
             return []
 
@@ -78,6 +81,7 @@ class BaseValidator(ABC):
             return self.doc_graph.fetch_all(cypher, params or {})
         except Exception as e:
             from loguru import logger
+
             logger.error(f"Document graph query failed: {e}")
             return []
 

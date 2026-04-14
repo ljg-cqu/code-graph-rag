@@ -139,7 +139,9 @@ def test_get_model_uses_cuda_when_available(force_local_provider: None) -> None:
 
 
 @pytest.mark.skipif(not _has_semantic_deps(), reason="torch/transformers not installed")
-def test_get_model_does_not_use_cuda_when_unavailable(force_local_provider: None) -> None:
+def test_get_model_does_not_use_cuda_when_unavailable(
+    force_local_provider: None,
+) -> None:
     from codebase_rag.embedder import get_model  # ty: ignore[possibly-missing-import]
 
     with patch("codebase_rag.embedder.UniXcoder") as mock_unixcoder_class:

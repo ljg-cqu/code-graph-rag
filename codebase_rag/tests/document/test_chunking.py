@@ -209,8 +209,14 @@ class TestTokenCounting:
         # Paragraph 1: ~60 tokens (within limit)
         # Paragraph 2: ~80 tokens (close to limit)
         # If overlap (30) + para2 (80) = 110, that exceeds max_tokens (100)
-        para1 = "This is paragraph one with some content that adds up to about sixty tokens or so. " * 2
-        para2 = "This is paragraph two which is longer and has more content to reach about eighty tokens in total length. " * 2
+        para1 = (
+            "This is paragraph one with some content that adds up to about sixty tokens or so. "
+            * 2
+        )
+        para2 = (
+            "This is paragraph two which is longer and has more content to reach about eighty tokens in total length. "
+            * 2
+        )
         large_content = para1 + "\n\n" + para2
 
         doc = ExtractedDocument(
@@ -450,12 +456,16 @@ class TestParameterValidation:
 
     def test_invalid_overlap_exceeds_max_tokens(self):
         """Test that overlap_tokens >= max_tokens raises ValueError."""
-        with pytest.raises(ValueError, match="overlap_tokens .* must be less than max_tokens"):
+        with pytest.raises(
+            ValueError, match="overlap_tokens .* must be less than max_tokens"
+        ):
             SemanticDocumentChunker(max_tokens=50, overlap_tokens=50)
 
     def test_invalid_overlap_greater_than_max_tokens(self):
         """Test that overlap_tokens > max_tokens raises ValueError."""
-        with pytest.raises(ValueError, match="overlap_tokens .* must be less than max_tokens"):
+        with pytest.raises(
+            ValueError, match="overlap_tokens .* must be less than max_tokens"
+        ):
             SemanticDocumentChunker(max_tokens=50, overlap_tokens=100)
 
     def test_valid_parameters(self):
@@ -491,8 +501,12 @@ class TestLineTrackingAccuracy:
         chunks = list(chunker.chunk_document(doc))
         # All start_line values should be >= 0
         for chunk in chunks:
-            assert chunk.start_line >= 0, f"start_line {chunk.start_line} should be >= 0"
-            assert chunk.end_line >= chunk.start_line, "end_line should be >= start_line"
+            assert chunk.start_line >= 0, (
+                f"start_line {chunk.start_line} should be >= 0"
+            )
+            assert chunk.end_line >= chunk.start_line, (
+                "end_line should be >= start_line"
+            )
 
     def test_plain_text_line_tracking(self):
         """Verify line tracking in plain text documents (no sections)."""
@@ -522,7 +536,10 @@ class TestLineTrackingAccuracy:
             if chunk.end_line < len(lines):
                 extracted = "\n".join(lines[chunk.start_line : chunk.end_line + 1])
                 # Content should match (allowing for stripping)
-                assert chunk.content.strip() in extracted or extracted.strip() in chunk.content
+                assert (
+                    chunk.content.strip() in extracted
+                    or extracted.strip() in chunk.content
+                )
 
     def test_section_line_tracking_preserved(self):
         """Verify section line numbers are preserved in chunks."""
@@ -688,7 +705,9 @@ class TestSecurityBounds:
     def test_max_tokens_upper_bound(self):
         """Test that max_tokens exceeding upper bound raises ValueError."""
         with pytest.raises(ValueError, match="exceeds reasonable limit"):
-            SemanticDocumentChunker(max_tokens=10000)  # Exceeds MAX_REASONABLE_TOKENS (8192)
+            SemanticDocumentChunker(
+                max_tokens=10000
+            )  # Exceeds MAX_REASONABLE_TOKENS (8192)
 
     def test_max_tokens_at_upper_bound_accepted(self):
         """Test that max_tokens at upper bound is accepted."""
@@ -806,10 +825,14 @@ class TestContentBetweenSubsections:
         chunk_contents = [c.content for c in chunks]
 
         # Verify intro text is captured
-        assert any("Intro text" in c for c in chunk_contents), "Intro text not found in chunks"
+        assert any("Intro text" in c for c in chunk_contents), (
+            "Intro text not found in chunks"
+        )
 
         # Verify subsection A content is captured
-        assert any("A content" in c for c in chunk_contents), "Subsection A content not found"
+        assert any("A content" in c for c in chunk_contents), (
+            "Subsection A content not found"
+        )
 
         # CRITICAL: Verify between text is captured (the bug fix)
         assert any("Between text" in c for c in chunk_contents), (
@@ -817,7 +840,9 @@ class TestContentBetweenSubsections:
         )
 
         # Verify subsection B content is captured
-        assert any("B content" in c for c in chunk_contents), "Subsection B content not found"
+        assert any("B content" in c for c in chunk_contents), (
+            "Subsection B content not found"
+        )
 
     def test_trailing_content_after_last_subsection_preserved(self):
         """Verify trailing content after the last subsection is preserved."""
@@ -840,14 +865,14 @@ class TestContentBetweenSubsections:
                     title="Section",
                     level=1,
                     start_line=0,  # Section header line
-                    end_line=6,     # Last line of content (document line 6)
+                    end_line=6,  # Last line of content (document line 6)
                     content="\n\n## Sub A\nA content.\n\nTrailing text here.",
                     subsections=[
                         ExtractedSection(
                             title="Sub A",
                             level=2,
                             start_line=3,  # ## Sub A header at document line 3
-                            end_line=4,    # A content at document line 4
+                            end_line=4,  # A content at document line 4
                             content="A content.",
                             subsections=[],
                         ),
@@ -961,7 +986,9 @@ class TestChunkIndexUniqueness:
         )
 
         chunks = list(chunker.chunk_document(doc))
-        assert len(chunks) >= 4, f"Need at least 4 chunks for nested test, got {len(chunks)}"
+        assert len(chunks) >= 4, (
+            f"Need at least 4 chunks for nested test, got {len(chunks)}"
+        )
 
         indices = [c.chunk_index for c in chunks]
         # Verify uniqueness

@@ -32,7 +32,10 @@ class TestSolidityHandler:
         assert isinstance(handler, SolidityHandler)
 
     def test_solidity_handler_extends_base(self) -> None:
-        assert issubclass(SolidityHandler, get_handler(SupportedLanguage.PYTHON).__class__.__bases__[0])
+        assert issubclass(
+            SolidityHandler,
+            get_handler(SupportedLanguage.PYTHON).__class__.__bases__[0],
+        )
 
     def test_handler_has_all_protocol_methods(self) -> None:
         handler = get_handler(SupportedLanguage.SOLIDITY)
@@ -271,7 +274,9 @@ class TestSolidityNodeSchemas:
         assert "end_line" in schema.properties
 
     def test_state_variable_schema_exists(self) -> None:
-        state_var_schemas = [s for s in NODE_SCHEMAS if s.label == NodeLabel.STATE_VARIABLE]
+        state_var_schemas = [
+            s for s in NODE_SCHEMAS if s.label == NodeLabel.STATE_VARIABLE
+        ]
         assert len(state_var_schemas) == 1
         schema = state_var_schemas[0]
         assert "qualified_name" in schema.properties
@@ -307,8 +312,7 @@ class TestSolidityHandlerBehavioral:
         # Create a mock hierarchy: source_file -> contract_declaration -> function
         contract_node = create_mock_node(cs.TS_SOL_CONTRACT_DECLARATION)
         func_node = create_mock_node(
-            cs.TS_SOL_FUNCTION_DEFINITION,
-            parent=contract_node
+            cs.TS_SOL_FUNCTION_DEFINITION, parent=contract_node
         )
 
         assert handler.is_contract_function(func_node) is True
@@ -317,10 +321,7 @@ class TestSolidityHandlerBehavioral:
         handler = SolidityHandler()
         # Create a mock hierarchy: source_file -> function (no contract)
         source_file = create_mock_node(cs.TS_SOL_SOURCE_FILE)
-        func_node = create_mock_node(
-            cs.TS_SOL_FUNCTION_DEFINITION,
-            parent=source_file
-        )
+        func_node = create_mock_node(cs.TS_SOL_FUNCTION_DEFINITION, parent=source_file)
 
         assert handler.is_contract_function(func_node) is False
 
@@ -329,10 +330,7 @@ class TestSolidityHandlerBehavioral:
         # Create deep nesting: source_file -> contract -> some_node -> function
         contract_node = create_mock_node(cs.TS_SOL_CONTRACT_DECLARATION)
         intermediate = create_mock_node("block", parent=contract_node)
-        func_node = create_mock_node(
-            cs.TS_SOL_FUNCTION_DEFINITION,
-            parent=intermediate
-        )
+        func_node = create_mock_node(cs.TS_SOL_FUNCTION_DEFINITION, parent=intermediate)
 
         assert handler.is_contract_function(func_node) is True
 
@@ -341,8 +339,7 @@ class TestSolidityHandlerBehavioral:
         # is_class_method should delegate to is_contract_function
         contract_node = create_mock_node(cs.TS_SOL_CONTRACT_DECLARATION)
         func_node = create_mock_node(
-            cs.TS_SOL_FUNCTION_DEFINITION,
-            parent=contract_node
+            cs.TS_SOL_FUNCTION_DEFINITION, parent=contract_node
         )
 
         assert handler.is_class_method(func_node) is True
@@ -351,8 +348,7 @@ class TestSolidityHandlerBehavioral:
         handler = SolidityHandler()
         name_node = create_mock_node(cs.TS_SOL_IDENTIFIER, text="myFunction")
         func_node = create_mock_node(
-            cs.TS_SOL_FUNCTION_DEFINITION,
-            fields={cs.FIELD_NAME: name_node}
+            cs.TS_SOL_FUNCTION_DEFINITION, fields={cs.FIELD_NAME: name_node}
         )
 
         assert handler.extract_function_name(func_node) == "myFunction"
@@ -369,8 +365,7 @@ class TestSolidityHandlerBehavioral:
         # Payable fallback/receive should be "receive"
         mutability_node = create_mock_node(cs.TS_SOL_STATE_MUTABILITY, text="payable")
         fallback_node = create_mock_node(
-            cs.TS_SOL_FALLBACK_RECEIVE_DEFINITION,
-            children=[mutability_node]
+            cs.TS_SOL_FALLBACK_RECEIVE_DEFINITION, children=[mutability_node]
         )
 
         assert handler.extract_function_name(fallback_node) == "receive"
@@ -392,8 +387,7 @@ class TestSolidityHandlerBehavioral:
         handler = SolidityHandler()
         visibility_node = create_mock_node(cs.TS_SOL_VISIBILITY, text="public")
         func_node = create_mock_node(
-            cs.TS_SOL_FUNCTION_DEFINITION,
-            children=[visibility_node]
+            cs.TS_SOL_FUNCTION_DEFINITION, children=[visibility_node]
         )
 
         assert handler.extract_visibility(func_node) == "public"
@@ -408,8 +402,7 @@ class TestSolidityHandlerBehavioral:
         handler = SolidityHandler()
         mutability_node = create_mock_node(cs.TS_SOL_STATE_MUTABILITY, text="view")
         func_node = create_mock_node(
-            cs.TS_SOL_FUNCTION_DEFINITION,
-            children=[mutability_node]
+            cs.TS_SOL_FUNCTION_DEFINITION, children=[mutability_node]
         )
 
         assert handler.extract_state_mutability(func_node) == "view"
@@ -424,8 +417,7 @@ class TestSolidityHandlerBehavioral:
         handler = SolidityHandler()
         mutability_node = create_mock_node(cs.TS_SOL_STATE_MUTABILITY, text="payable")
         func_node = create_mock_node(
-            cs.TS_SOL_FUNCTION_DEFINITION,
-            children=[mutability_node]
+            cs.TS_SOL_FUNCTION_DEFINITION, children=[mutability_node]
         )
 
         assert handler.is_payable(func_node) is True
@@ -434,8 +426,7 @@ class TestSolidityHandlerBehavioral:
         handler = SolidityHandler()
         mutability_node = create_mock_node(cs.TS_SOL_STATE_MUTABILITY, text="view")
         func_node = create_mock_node(
-            cs.TS_SOL_FUNCTION_DEFINITION,
-            children=[mutability_node]
+            cs.TS_SOL_FUNCTION_DEFINITION, children=[mutability_node]
         )
 
         assert handler.is_payable(func_node) is False
@@ -444,8 +435,7 @@ class TestSolidityHandlerBehavioral:
         handler = SolidityHandler()
         mutability_node = create_mock_node(cs.TS_SOL_STATE_MUTABILITY, text="view")
         func_node = create_mock_node(
-            cs.TS_SOL_FUNCTION_DEFINITION,
-            children=[mutability_node]
+            cs.TS_SOL_FUNCTION_DEFINITION, children=[mutability_node]
         )
 
         assert handler.is_view_or_pure(func_node) is True
@@ -454,8 +444,7 @@ class TestSolidityHandlerBehavioral:
         handler = SolidityHandler()
         mutability_node = create_mock_node(cs.TS_SOL_STATE_MUTABILITY, text="pure")
         func_node = create_mock_node(
-            cs.TS_SOL_FUNCTION_DEFINITION,
-            children=[mutability_node]
+            cs.TS_SOL_FUNCTION_DEFINITION, children=[mutability_node]
         )
 
         assert handler.is_view_or_pure(func_node) is True
@@ -464,8 +453,7 @@ class TestSolidityHandlerBehavioral:
         handler = SolidityHandler()
         mutability_node = create_mock_node(cs.TS_SOL_STATE_MUTABILITY, text="payable")
         func_node = create_mock_node(
-            cs.TS_SOL_FUNCTION_DEFINITION,
-            children=[mutability_node]
+            cs.TS_SOL_FUNCTION_DEFINITION, children=[mutability_node]
         )
 
         assert handler.is_view_or_pure(func_node) is False
@@ -475,16 +463,13 @@ class TestSolidityHandlerBehavioral:
         # Create inheritance specifier with user_defined_type
         identifier_node = create_mock_node(cs.TS_SOL_IDENTIFIER, text="BaseContract")
         user_defined_type = create_mock_node(
-            cs.TS_SOL_USER_DEFINED_TYPE,
-            children=[identifier_node]
+            cs.TS_SOL_USER_DEFINED_TYPE, children=[identifier_node]
         )
         inheritance_specifier = create_mock_node(
-            cs.TS_SOL_INHERITANCE_SPECIFIER,
-            children=[user_defined_type]
+            cs.TS_SOL_INHERITANCE_SPECIFIER, children=[user_defined_type]
         )
         contract_node = create_mock_node(
-            cs.TS_SOL_CONTRACT_DECLARATION,
-            children=[inheritance_specifier]
+            cs.TS_SOL_CONTRACT_DECLARATION, children=[inheritance_specifier]
         )
 
         result = handler.extract_inheritance(contract_node)
@@ -498,12 +483,10 @@ class TestSolidityHandlerBehavioral:
         id2 = create_mock_node(cs.TS_SOL_IDENTIFIER, text="Base2")
         udt2 = create_mock_node(cs.TS_SOL_USER_DEFINED_TYPE, children=[id2])
         inheritance_specifier = create_mock_node(
-            cs.TS_SOL_INHERITANCE_SPECIFIER,
-            children=[udt1, udt2]
+            cs.TS_SOL_INHERITANCE_SPECIFIER, children=[udt1, udt2]
         )
         contract_node = create_mock_node(
-            cs.TS_SOL_CONTRACT_DECLARATION,
-            children=[inheritance_specifier]
+            cs.TS_SOL_CONTRACT_DECLARATION, children=[inheritance_specifier]
         )
 
         result = handler.extract_inheritance(contract_node)
@@ -520,8 +503,7 @@ class TestSolidityHandlerBehavioral:
         handler = SolidityHandler()
         identifier_node = create_mock_node(cs.TS_SOL_IDENTIFIER, text="BaseClass")
         user_defined_type = create_mock_node(
-            cs.TS_SOL_USER_DEFINED_TYPE,
-            children=[identifier_node]
+            cs.TS_SOL_USER_DEFINED_TYPE, children=[identifier_node]
         )
 
         assert handler.extract_base_class_name(user_defined_type) == "BaseClass"
@@ -543,12 +525,10 @@ class TestSolidityHandlerBehavioral:
         # Create modifier invocation with identifier
         mod_identifier = create_mock_node(cs.TS_SOL_IDENTIFIER, text="onlyOwner")
         modifier_invocation = create_mock_node(
-            cs.TS_SOL_MODIFIER_INVOCATION,
-            children=[mod_identifier]
+            cs.TS_SOL_MODIFIER_INVOCATION, children=[mod_identifier]
         )
         func_node = create_mock_node(
-            cs.TS_SOL_FUNCTION_DEFINITION,
-            children=[modifier_invocation]
+            cs.TS_SOL_FUNCTION_DEFINITION, children=[modifier_invocation]
         )
 
         result = handler.extract_decorators(func_node)
@@ -561,8 +541,7 @@ class TestSolidityHandlerBehavioral:
         mod_id2 = create_mock_node(cs.TS_SOL_IDENTIFIER, text="whenNotPaused")
         mod_inv2 = create_mock_node(cs.TS_SOL_MODIFIER_INVOCATION, children=[mod_id2])
         func_node = create_mock_node(
-            cs.TS_SOL_FUNCTION_DEFINITION,
-            children=[mod_inv1, mod_inv2]
+            cs.TS_SOL_FUNCTION_DEFINITION, children=[mod_inv1, mod_inv2]
         )
 
         result = handler.extract_decorators(func_node)
@@ -595,7 +574,9 @@ def solidity_parser() -> Parser | None:
     return Parser(language)
 
 
-@pytest.mark.skipif(not SOLIDITY_PARSER_AVAILABLE, reason="tree-sitter-solidity not available")
+@pytest.mark.skipif(
+    not SOLIDITY_PARSER_AVAILABLE, reason="tree-sitter-solidity not available"
+)
 class TestSolidityHandlerWithRealParser:
     """Integration tests using real tree-sitter parsing."""
 
@@ -632,7 +613,9 @@ contract MyContract {
 
         assert handler.extract_function_name(func_node) == "getValue"
 
-    def test_extract_function_name_constructor_real(self, solidity_parser: Parser) -> None:
+    def test_extract_function_name_constructor_real(
+        self, solidity_parser: Parser
+    ) -> None:
         handler = SolidityHandler()
         code = b"""
 contract MyContract {
@@ -687,7 +670,9 @@ contract MyContract {
         result = handler.extract_visibility(public_func)
         assert result == "public"
 
-    def test_extract_state_mutability_real_parsing(self, solidity_parser: Parser) -> None:
+    def test_extract_state_mutability_real_parsing(
+        self, solidity_parser: Parser
+    ) -> None:
         handler = SolidityHandler()
         code = b"""
 contract MyContract {

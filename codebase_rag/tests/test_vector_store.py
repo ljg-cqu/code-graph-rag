@@ -138,6 +138,7 @@ def test_store_embedding_calls_upsert(
     # Configure mock backend to delegate to mock client
     def store_batch_side_effect(points):
         from qdrant_client.models import PointStruct
+
         mock_qdrant_client.upsert(
             collection_name="code_embeddings",
             points=[
@@ -174,9 +175,7 @@ def test_store_embedding_handles_exception(
 
     def store_batch_side_effect(points):
         try:
-            mock_qdrant_client.upsert(
-                collection_name="code_embeddings", points=[]
-            )
+            mock_qdrant_client.upsert(collection_name="code_embeddings", points=[])
         except Exception:
             return 0
         return 0
@@ -297,7 +296,9 @@ def test_search_embeddings_default_top_k(
     search_embeddings([0.2] * 768)
 
     mock_qdrant_client.query_points.assert_called_once_with(
-        collection_name="code_embeddings", query=[0.2] * 768, limit=settings.VECTOR_SEARCH_TOP_K
+        collection_name="code_embeddings",
+        query=[0.2] * 768,
+        limit=settings.VECTOR_SEARCH_TOP_K,
     )
 
 

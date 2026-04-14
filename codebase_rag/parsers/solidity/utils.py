@@ -48,9 +48,7 @@ def load_remappings(repo_path: Path) -> dict[str, str]:
                 remappings[key.strip()] = value.strip()
 
     # Sort by key length descending (most specific first)
-    return dict(
-        sorted(remappings.items(), key=lambda x: len(x[0]), reverse=True)
-    )
+    return dict(sorted(remappings.items(), key=lambda x: len(x[0]), reverse=True))
 
 
 def extract_solidity_import_info(import_path: str) -> SolidityImport:

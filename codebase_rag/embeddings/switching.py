@@ -199,7 +199,9 @@ def reembed_all_vectors() -> int:
 
     # Batch embed
     logger.info(f"Re-embedding {len(snippets)} nodes...")
-    embeddings = embed_code_batch(snippets, batch_size=settings.VECTOR_EMBEDDING_BATCH_SIZE)
+    embeddings = embed_code_batch(
+        snippets, batch_size=settings.VECTOR_EMBEDDING_BATCH_SIZE
+    )
 
     # Update vectors in backend
     updated = 0

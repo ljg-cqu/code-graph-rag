@@ -18,7 +18,6 @@ def main():
     prompt = "Perform a security review of this file: check for SQL injection, XSS vulnerabilities, insecure dependencies, and improper authentication checks."
     subtasks = splitter.split_task(prompt, strategy="file")
 
-
     # Step 2: Execute tasks with round-robin distribution
     orchestrator.execute_tasks(subtasks)
 

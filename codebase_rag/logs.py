@@ -59,17 +59,25 @@ EMBEDDING_RECONCILE_MISSING = "Embedding verification: {missing} of {expected} e
 EMBEDDING_RECONCILE_FAILED = "Embedding verification check failed: {error}"
 VECTOR_DELETE_PROJECT = "Deleting {count} embeddings for project '{project}'"
 VECTOR_DELETE_PROJECT_DONE = "Deleted embeddings for project '{project}'"
-VECTOR_DELETE_PROJECT_FAILED = "Failed to delete embeddings for project '{project}': {error}"
+VECTOR_DELETE_PROJECT_FAILED = (
+    "Failed to delete embeddings for project '{project}': {error}"
+)
 EMBEDDING_CACHE_HIT = "Embedding cache hit for {count} snippets"
 EMBEDDING_CACHE_LOADED = "Loaded embedding cache with {count} entries from {path}"
 EMBEDDING_CACHE_SAVE_FAILED = "Failed to save embedding cache to {path}: {error}"
 EMBEDDING_CACHE_LOAD_FAILED = "Failed to load embedding cache from {path}: {error}"
-EMBEDDING_PROVIDER_INITIALIZED = "Initialized embedding provider: {provider}/{model} (dimension={dimension})"
+EMBEDDING_PROVIDER_INITIALIZED = (
+    "Initialized embedding provider: {provider}/{model} (dimension={dimension})"
+)
 EMBEDDING_PROVIDER_SWITCHED = "Switched embedding provider from {old_provider}/{old_model} to {new_provider}/{new_model}"
-EMBEDDING_DIMENSION_MISMATCH = "Embedding dimension mismatch: existing={existing_dim}, configured={configured_dim}"
+EMBEDDING_DIMENSION_MISMATCH = (
+    "Embedding dimension mismatch: existing={existing_dim}, configured={configured_dim}"
+)
 EMBEDDING_REEMBEDDING_START = "Re-embedding {count} nodes with {provider}/{model}"
 EMBEDDING_REEMBEDDING_PROGRESS = "Re-embedding progress: {done}/{total}"
-EMBEDDING_REEMBEDDING_COMPLETE = "Re-embedding complete: {success} success, {failed} failed"
+EMBEDDING_REEMBEDDING_COMPLETE = (
+    "Re-embedding complete: {success} success, {failed} failed"
+)
 
 # (H) Image logs
 IMAGE_COPIED = "Copied image to temporary path: {path}"
@@ -732,12 +740,16 @@ PROGRESS_FILES_PROCESSED = "{count} processed"
 
 # (H) Vector backend logs
 MG_VECTOR_INIT = "Initializing Memgraph vector indexes for: {index}"
-MG_VECTOR_INDEX_CREATED = "Created vector index '{index}' for {label} nodes (dim={dim}, capacity={capacity})"
+MG_VECTOR_INDEX_CREATED = (
+    "Created vector index '{index}' for {label} nodes (dim={dim}, capacity={capacity})"
+)
 MG_VECTOR_INDEX_EXISTS = "Vector index '{index}' already exists"
 MG_VECTOR_INDEX_FAILED = "Failed to create vector index '{index}': {error}"
 MG_VECTOR_INDEX_INFO = "Vector index info: {info}"
 MG_VECTOR_CLOSED = "Closed Memgraph vector backend connection"
-QDRANT_COLLECTION_CREATED = "Created Qdrant collection '{collection}' with {dim} dimensions"
+QDRANT_COLLECTION_CREATED = (
+    "Created Qdrant collection '{collection}' with {dim} dimensions"
+)
 QDRANT_BACKEND_READY = "Qdrant backend ready with collection '{collection}'"
 QDRANT_CLIENT_CLOSED = "Closed Qdrant client connection"
 VECTOR_DELETE_FAILED = "Failed to delete vector embeddings: {error}"

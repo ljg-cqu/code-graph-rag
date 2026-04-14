@@ -83,12 +83,12 @@ else:
 
     def get_qdrant_client():
         """Get Qdrant client (not available)."""
-        raise RuntimeError("Qdrant client not installed. Install with: pip install qdrant-client")
+        raise RuntimeError(
+            "Qdrant client not installed. Install with: pip install qdrant-client"
+        )
 
 
-def store_embedding(
-    node_id: int, embedding: list[float], qualified_name: str
-) -> None:
+def store_embedding(node_id: int, embedding: list[float], qualified_name: str) -> None:
     """Store a single embedding (backward compatibility).
 
     Uses configured backend (Memgraph or Qdrant).
@@ -128,9 +128,7 @@ def delete_project_embeddings(project_name: str, node_ids: Sequence[int]) -> Non
 
     try:
         logger.info(
-            ls.VECTOR_DELETE_PROJECT.format(
-                count=len(node_ids), project=project_name
-            )
+            ls.VECTOR_DELETE_PROJECT.format(count=len(node_ids), project=project_name)
         )
         deleted_count = backend.delete_batch(node_ids)
         logger.info(ls.VECTOR_DELETE_PROJECT_DONE.format(project=project_name))

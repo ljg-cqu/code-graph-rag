@@ -63,7 +63,9 @@ class OllamaEmbeddingProvider(EmbeddingProvider):
         if self._client is None:
             import httpx
 
-            self._client = httpx.Client(timeout=120.0)  # Longer timeout for local model loading
+            self._client = httpx.Client(
+                timeout=120.0
+            )  # Longer timeout for local model loading
         return self._client
 
     def validate_config(self) -> None:
@@ -86,9 +88,7 @@ class OllamaEmbeddingProvider(EmbeddingProvider):
                 model=self.model_id,
             ) from e
 
-    def _make_request(
-        self, texts: list[str], batch_size: int
-    ) -> list[list[float]]:
+    def _make_request(self, texts: list[str], batch_size: int) -> list[list[float]]:
         """Make embedding request to Ollama API.
 
         Args:

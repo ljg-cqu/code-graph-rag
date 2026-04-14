@@ -289,4 +289,6 @@ Just text.
         # H3 has H4 as subsection
         assert len(doc.sections[0].subsections[0].subsections[0].subsections) == 1
         assert doc.sections[0].subsections[0].subsections[0].subsections[0].level == 4
-        assert doc.sections[0].subsections[0].subsections[0].subsections[0].title == "H4"
+        assert (
+            doc.sections[0].subsections[0].subsections[0].subsections[0].title == "H4"
+        )

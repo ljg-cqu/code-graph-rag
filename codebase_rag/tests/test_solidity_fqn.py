@@ -46,8 +46,7 @@ class TestSolidityGetName:
         """Extract name from contract declaration."""
         name_node = create_mock_node(cs.TS_SOL_IDENTIFIER, text="MyContract")
         contract_node = create_mock_node(
-            cs.TS_SOL_CONTRACT_DECLARATION,
-            fields={cs.FIELD_NAME: name_node}
+            cs.TS_SOL_CONTRACT_DECLARATION, fields={cs.FIELD_NAME: name_node}
         )
         result = _solidity_get_name(contract_node)
         assert result == "MyContract"
@@ -56,8 +55,7 @@ class TestSolidityGetName:
         """Extract name from interface declaration."""
         name_node = create_mock_node(cs.TS_SOL_IDENTIFIER, text="IMyInterface")
         interface_node = create_mock_node(
-            cs.TS_SOL_INTERFACE_DECLARATION,
-            fields={cs.FIELD_NAME: name_node}
+            cs.TS_SOL_INTERFACE_DECLARATION, fields={cs.FIELD_NAME: name_node}
         )
         result = _solidity_get_name(interface_node)
         assert result == "IMyInterface"
@@ -66,8 +64,7 @@ class TestSolidityGetName:
         """Extract name from library declaration."""
         name_node = create_mock_node(cs.TS_SOL_IDENTIFIER, text="MyLibrary")
         library_node = create_mock_node(
-            cs.TS_SOL_LIBRARY_DECLARATION,
-            fields={cs.FIELD_NAME: name_node}
+            cs.TS_SOL_LIBRARY_DECLARATION, fields={cs.FIELD_NAME: name_node}
         )
         result = _solidity_get_name(library_node)
         assert result == "MyLibrary"
@@ -76,8 +73,7 @@ class TestSolidityGetName:
         """Extract name from function definition."""
         name_node = create_mock_node(cs.TS_SOL_IDENTIFIER, text="myFunction")
         func_node = create_mock_node(
-            cs.TS_SOL_FUNCTION_DEFINITION,
-            fields={cs.FIELD_NAME: name_node}
+            cs.TS_SOL_FUNCTION_DEFINITION, fields={cs.FIELD_NAME: name_node}
         )
         result = _solidity_get_name(func_node)
         assert result == "myFunction"
@@ -92,8 +88,7 @@ class TestSolidityGetName:
         """Receive function (payable) should return 'receive' as name."""
         mutability_node = create_mock_node(cs.TS_SOL_STATE_MUTABILITY, text="payable")
         receive_node = create_mock_node(
-            cs.TS_SOL_FALLBACK_RECEIVE_DEFINITION,
-            children=[mutability_node]
+            cs.TS_SOL_FALLBACK_RECEIVE_DEFINITION, children=[mutability_node]
         )
         result = _solidity_get_name(receive_node)
         assert result == "receive"
@@ -107,10 +102,11 @@ class TestSolidityGetName:
 
     def test_fallback_with_non_payable_mutability(self) -> None:
         """Fallback with non-payable mutability should return 'fallback'."""
-        mutability_node = create_mock_node(cs.TS_SOL_STATE_MUTABILITY, text="nonpayable")
+        mutability_node = create_mock_node(
+            cs.TS_SOL_STATE_MUTABILITY, text="nonpayable"
+        )
         fallback_node = create_mock_node(
-            cs.TS_SOL_FALLBACK_RECEIVE_DEFINITION,
-            children=[mutability_node]
+            cs.TS_SOL_FALLBACK_RECEIVE_DEFINITION, children=[mutability_node]
         )
         result = _solidity_get_name(fallback_node)
         assert result == "fallback"
@@ -119,8 +115,7 @@ class TestSolidityGetName:
         """Extract name from modifier definition."""
         name_node = create_mock_node(cs.TS_SOL_IDENTIFIER, text="onlyOwner")
         modifier_node = create_mock_node(
-            cs.TS_SOL_MODIFIER_DEFINITION,
-            fields={cs.FIELD_NAME: name_node}
+            cs.TS_SOL_MODIFIER_DEFINITION, fields={cs.FIELD_NAME: name_node}
         )
         result = _solidity_get_name(modifier_node)
         assert result == "onlyOwner"
@@ -190,22 +185,26 @@ class TestSolidityFQNSpec:
 
     def test_scope_node_types(self) -> None:
         """Verify scope node types are correctly defined."""
-        expected_scope_types = frozenset({
-            cs.TS_SOL_CONTRACT_DECLARATION,
-            cs.TS_SOL_INTERFACE_DECLARATION,
-            cs.TS_SOL_LIBRARY_DECLARATION,
-            cs.TS_SOL_SOURCE_FILE,
-        })
+        expected_scope_types = frozenset(
+            {
+                cs.TS_SOL_CONTRACT_DECLARATION,
+                cs.TS_SOL_INTERFACE_DECLARATION,
+                cs.TS_SOL_LIBRARY_DECLARATION,
+                cs.TS_SOL_SOURCE_FILE,
+            }
+        )
         assert SOLIDITY_FQN_SPEC.scope_node_types == expected_scope_types
 
     def test_function_node_types(self) -> None:
         """Verify function node types are correctly defined."""
-        expected_function_types = frozenset({
-            cs.TS_SOL_FUNCTION_DEFINITION,
-            cs.TS_SOL_MODIFIER_DEFINITION,
-            cs.TS_SOL_FALLBACK_RECEIVE_DEFINITION,
-            cs.TS_SOL_CONSTRUCTOR_DEFINITION,
-        })
+        expected_function_types = frozenset(
+            {
+                cs.TS_SOL_FUNCTION_DEFINITION,
+                cs.TS_SOL_MODIFIER_DEFINITION,
+                cs.TS_SOL_FALLBACK_RECEIVE_DEFINITION,
+                cs.TS_SOL_CONSTRUCTOR_DEFINITION,
+            }
+        )
         assert SOLIDITY_FQN_SPEC.function_node_types == expected_function_types
 
     def test_get_name_is_solidity_get_name(self) -> None:
@@ -240,13 +239,9 @@ class TestSolidityFQNGeneration:
         # Build hierarchy: source_file -> contract
         name_node = create_mock_node(cs.TS_SOL_IDENTIFIER, text="MyContract")
         contract_node = create_mock_node(
-            cs.TS_SOL_CONTRACT_DECLARATION,
-            fields={cs.FIELD_NAME: name_node}
+            cs.TS_SOL_CONTRACT_DECLARATION, fields={cs.FIELD_NAME: name_node}
         )
-        source_file = create_mock_node(
-            cs.TS_SOL_SOURCE_FILE,
-            children=[contract_node]
-        )
+        source_file = create_mock_node(cs.TS_SOL_SOURCE_FILE, children=[contract_node])
         contract_node.node_parent = source_file
 
         file_path = Path("/repo/src/MyContract.sol")
@@ -271,20 +266,16 @@ class TestSolidityFQNGeneration:
         # Build hierarchy: source_file -> contract -> function
         func_name_node = create_mock_node(cs.TS_SOL_IDENTIFIER, text="getValue")
         func_node = create_mock_node(
-            cs.TS_SOL_FUNCTION_DEFINITION,
-            fields={cs.FIELD_NAME: func_name_node}
+            cs.TS_SOL_FUNCTION_DEFINITION, fields={cs.FIELD_NAME: func_name_node}
         )
         contract_name_node = create_mock_node(cs.TS_SOL_IDENTIFIER, text="MyContract")
         contract_node = create_mock_node(
             cs.TS_SOL_CONTRACT_DECLARATION,
             fields={cs.FIELD_NAME: contract_name_node},
-            children=[func_node]
+            children=[func_node],
         )
         func_node.node_parent = contract_node
-        source_file = create_mock_node(
-            cs.TS_SOL_SOURCE_FILE,
-            children=[contract_node]
-        )
+        source_file = create_mock_node(cs.TS_SOL_SOURCE_FILE, children=[contract_node])
         contract_node.node_parent = source_file
 
         file_path = Path("/repo/src/MyContract.sol")
@@ -300,20 +291,16 @@ class TestSolidityFQNGeneration:
         """Function inside library should have FQN: project.module.LibraryName.functionName."""
         func_name_node = create_mock_node(cs.TS_SOL_IDENTIFIER, text="safeAdd")
         func_node = create_mock_node(
-            cs.TS_SOL_FUNCTION_DEFINITION,
-            fields={cs.FIELD_NAME: func_name_node}
+            cs.TS_SOL_FUNCTION_DEFINITION, fields={cs.FIELD_NAME: func_name_node}
         )
         lib_name_node = create_mock_node(cs.TS_SOL_IDENTIFIER, text="SafeMath")
         library_node = create_mock_node(
             cs.TS_SOL_LIBRARY_DECLARATION,
             fields={cs.FIELD_NAME: lib_name_node},
-            children=[func_node]
+            children=[func_node],
         )
         func_node.node_parent = library_node
-        source_file = create_mock_node(
-            cs.TS_SOL_SOURCE_FILE,
-            children=[library_node]
-        )
+        source_file = create_mock_node(cs.TS_SOL_SOURCE_FILE, children=[library_node])
         library_node.node_parent = source_file
 
         file_path = Path("/repo/src/libraries/SafeMath.sol")
@@ -329,20 +316,16 @@ class TestSolidityFQNGeneration:
         """Function inside interface should have FQN: project.module.InterfaceName.functionName."""
         func_name_node = create_mock_node(cs.TS_SOL_IDENTIFIER, text="transfer")
         func_node = create_mock_node(
-            cs.TS_SOL_FUNCTION_DEFINITION,
-            fields={cs.FIELD_NAME: func_name_node}
+            cs.TS_SOL_FUNCTION_DEFINITION, fields={cs.FIELD_NAME: func_name_node}
         )
         interface_name_node = create_mock_node(cs.TS_SOL_IDENTIFIER, text="IERC20")
         interface_node = create_mock_node(
             cs.TS_SOL_INTERFACE_DECLARATION,
             fields={cs.FIELD_NAME: interface_name_node},
-            children=[func_node]
+            children=[func_node],
         )
         func_node.node_parent = interface_node
-        source_file = create_mock_node(
-            cs.TS_SOL_SOURCE_FILE,
-            children=[interface_node]
-        )
+        source_file = create_mock_node(cs.TS_SOL_SOURCE_FILE, children=[interface_node])
         interface_node.node_parent = source_file
 
         file_path = Path("/repo/src/interfaces/IERC20.sol")
@@ -361,13 +344,10 @@ class TestSolidityFQNGeneration:
         contract_node = create_mock_node(
             cs.TS_SOL_CONTRACT_DECLARATION,
             fields={cs.FIELD_NAME: contract_name_node},
-            children=[constructor_node]
+            children=[constructor_node],
         )
         constructor_node.node_parent = contract_node
-        source_file = create_mock_node(
-            cs.TS_SOL_SOURCE_FILE,
-            children=[contract_node]
-        )
+        source_file = create_mock_node(cs.TS_SOL_SOURCE_FILE, children=[contract_node])
         contract_node.node_parent = source_file
 
         file_path = Path("/repo/src/MyContract.sol")
@@ -383,20 +363,16 @@ class TestSolidityFQNGeneration:
         """Receive function FQN should be: project.module.ContractName.receive."""
         mutability_node = create_mock_node(cs.TS_SOL_STATE_MUTABILITY, text="payable")
         receive_node = create_mock_node(
-            cs.TS_SOL_FALLBACK_RECEIVE_DEFINITION,
-            children=[mutability_node]
+            cs.TS_SOL_FALLBACK_RECEIVE_DEFINITION, children=[mutability_node]
         )
         contract_name_node = create_mock_node(cs.TS_SOL_IDENTIFIER, text="MyContract")
         contract_node = create_mock_node(
             cs.TS_SOL_CONTRACT_DECLARATION,
             fields={cs.FIELD_NAME: contract_name_node},
-            children=[receive_node]
+            children=[receive_node],
         )
         receive_node.node_parent = contract_node
-        source_file = create_mock_node(
-            cs.TS_SOL_SOURCE_FILE,
-            children=[contract_node]
-        )
+        source_file = create_mock_node(cs.TS_SOL_SOURCE_FILE, children=[contract_node])
         contract_node.node_parent = source_file
 
         file_path = Path("/repo/src/MyContract.sol")
@@ -416,13 +392,10 @@ class TestSolidityFQNGeneration:
         contract_node = create_mock_node(
             cs.TS_SOL_CONTRACT_DECLARATION,
             fields={cs.FIELD_NAME: contract_name_node},
-            children=[fallback_node]
+            children=[fallback_node],
         )
         fallback_node.node_parent = contract_node
-        source_file = create_mock_node(
-            cs.TS_SOL_SOURCE_FILE,
-            children=[contract_node]
-        )
+        source_file = create_mock_node(cs.TS_SOL_SOURCE_FILE, children=[contract_node])
         contract_node.node_parent = source_file
 
         file_path = Path("/repo/src/MyContract.sol")
@@ -438,20 +411,16 @@ class TestSolidityFQNGeneration:
         """Modifier FQN inside contract should be: project.module.ContractName.modifierName."""
         modifier_name_node = create_mock_node(cs.TS_SOL_IDENTIFIER, text="onlyOwner")
         modifier_node = create_mock_node(
-            cs.TS_SOL_MODIFIER_DEFINITION,
-            fields={cs.FIELD_NAME: modifier_name_node}
+            cs.TS_SOL_MODIFIER_DEFINITION, fields={cs.FIELD_NAME: modifier_name_node}
         )
         contract_name_node = create_mock_node(cs.TS_SOL_IDENTIFIER, text="MyContract")
         contract_node = create_mock_node(
             cs.TS_SOL_CONTRACT_DECLARATION,
             fields={cs.FIELD_NAME: contract_name_node},
-            children=[modifier_node]
+            children=[modifier_node],
         )
         modifier_node.node_parent = contract_node
-        source_file = create_mock_node(
-            cs.TS_SOL_SOURCE_FILE,
-            children=[contract_node]
-        )
+        source_file = create_mock_node(cs.TS_SOL_SOURCE_FILE, children=[contract_node])
         contract_node.node_parent = source_file
 
         file_path = Path("/repo/src/MyContract.sol")
@@ -467,13 +436,9 @@ class TestSolidityFQNGeneration:
         """Free function (outside contract) FQN should be: project.module.functionName."""
         func_name_node = create_mock_node(cs.TS_SOL_IDENTIFIER, text="helper")
         func_node = create_mock_node(
-            cs.TS_SOL_FUNCTION_DEFINITION,
-            fields={cs.FIELD_NAME: func_name_node}
+            cs.TS_SOL_FUNCTION_DEFINITION, fields={cs.FIELD_NAME: func_name_node}
         )
-        source_file = create_mock_node(
-            cs.TS_SOL_SOURCE_FILE,
-            children=[func_node]
-        )
+        source_file = create_mock_node(cs.TS_SOL_SOURCE_FILE, children=[func_node])
         func_node.node_parent = source_file
 
         file_path = Path("/repo/src/utils.sol")
@@ -491,20 +456,16 @@ class TestSolidityFQNGeneration:
         """Nested contract path should include subdirectories in module parts."""
         func_name_node = create_mock_node(cs.TS_SOL_IDENTIFIER, text="mint")
         func_node = create_mock_node(
-            cs.TS_SOL_FUNCTION_DEFINITION,
-            fields={cs.FIELD_NAME: func_name_node}
+            cs.TS_SOL_FUNCTION_DEFINITION, fields={cs.FIELD_NAME: func_name_node}
         )
         contract_name_node = create_mock_node(cs.TS_SOL_IDENTIFIER, text="MyToken")
         contract_node = create_mock_node(
             cs.TS_SOL_CONTRACT_DECLARATION,
             fields={cs.FIELD_NAME: contract_name_node},
-            children=[func_node]
+            children=[func_node],
         )
         func_node.node_parent = contract_node
-        source_file = create_mock_node(
-            cs.TS_SOL_SOURCE_FILE,
-            children=[contract_node]
-        )
+        source_file = create_mock_node(cs.TS_SOL_SOURCE_FILE, children=[contract_node])
         contract_node.node_parent = source_file
 
         file_path = Path("/repo/src/tokens/MyToken.sol")
@@ -517,7 +478,9 @@ class TestSolidityFQNGeneration:
         assert result == "myproject.tokens.MyToken.MyToken.mint"
 
 
-@pytest.mark.skipif(not SOLIDITY_PARSER_AVAILABLE, reason="tree-sitter-solidity not available")
+@pytest.mark.skipif(
+    not SOLIDITY_PARSER_AVAILABLE, reason="tree-sitter-solidity not available"
+)
 class TestSolidityFQNWithRealParser:
     """Integration tests using real tree-sitter parsing for FQN generation.
 
@@ -848,7 +811,11 @@ contract MultiFunction {
                     for body_child in body.children:
                         if body_child.type == cs.TS_SOL_FUNCTION_DEFINITION:
                             fqn = resolve_fqn_from_ast(
-                                body_child, file_path, repo_root, project_name, SOLIDITY_FQN_SPEC
+                                body_child,
+                                file_path,
+                                repo_root,
+                                project_name,
+                                SOLIDITY_FQN_SPEC,
                             )
                             if fqn:
                                 fqns.append(fqn)
@@ -858,7 +825,9 @@ contract MultiFunction {
         assert "myproject.MultiFunction.MultiFunction.funcC" in fqns
 
 
-@pytest.mark.skipif(not SOLIDITY_PARSER_AVAILABLE, reason="tree-sitter-solidity not available")
+@pytest.mark.skipif(
+    not SOLIDITY_PARSER_AVAILABLE, reason="tree-sitter-solidity not available"
+)
 class TestSolidityFQNEdgeCases:
     """Tests for edge cases in Solidity FQN generation."""
 
@@ -931,7 +900,9 @@ contract Child is Parent {
         # FQN uses Child (the contract containing the function), not Parent
         assert fqn == "myproject.Child.Child.childMethod"
 
-    def test_contract_with_multiple_inheritance_fqn(self, solidity_parser: Parser) -> None:
+    def test_contract_with_multiple_inheritance_fqn(
+        self, solidity_parser: Parser
+    ) -> None:
         """Test FQN for contract with multiple inheritance."""
         code = b"""
 contract MultiInherit is A, B, C {

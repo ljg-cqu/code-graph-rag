@@ -72,7 +72,9 @@ def query_document_graph(
             match_end = query.upper().find("RETURN")
             if match_end != -1:
                 query = (
-                    query[:match_end] + f" WHERE {workspace_filter} " + query[match_end:]
+                    query[:match_end]
+                    + f" WHERE {workspace_filter} "
+                    + query[match_end:]
                 )
 
     try:
@@ -166,9 +168,7 @@ def get_section_chunks(
         RETURN c
         ORDER BY c.start_line
         """
-    return ingestor.fetch_all(
-        query, params={"qn": section_qn, "workspace": workspace}
-    )
+    return ingestor.fetch_all(query, params={"qn": section_qn, "workspace": workspace})
 
 
 __all__ = [

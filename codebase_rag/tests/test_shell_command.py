@@ -336,7 +336,10 @@ class TestHasRedirectOperators:
 
     def test_fd_redirect_with_path(self) -> None:
         # Common pattern: stderr redirected to /dev/null
-        assert _has_redirect_operators(["find", "/path", "-name", "*.txt", "2>/dev/null"]) is True
+        assert (
+            _has_redirect_operators(["find", "/path", "-name", "*.txt", "2>/dev/null"])
+            is True
+        )
 
 
 class TestSeparateRmFlags:
@@ -797,9 +800,7 @@ class TestSecurityIntegration:
         stderr_lower = result.stderr.lower()
         assert "outside project" in stderr_lower or "system directory" in stderr_lower
 
-    async def test_redirect_rejected(
-        self, shell_commander: ShellCommander
-    ) -> None:
+    async def test_redirect_rejected(self, shell_commander: ShellCommander) -> None:
         result = await shell_commander.execute("find . -name '*.sol' 2>/dev/null")
         assert result.return_code == -1
         assert "redirect" in result.stderr.lower()

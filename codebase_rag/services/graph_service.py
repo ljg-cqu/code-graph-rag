@@ -24,8 +24,10 @@ from ..constants import (
     KEY_NAME,
     KEY_PROJECT_NAME,
     KEY_PROPS,
+    KEY_QUALIFIED_NAME,
     KEY_TO_VAL,
     NODE_UNIQUE_CONSTRAINTS,
+    NodeLabel,
     REL_TYPE_CALLS,
 )
 from ..cypher_queries import (
@@ -392,6 +394,46 @@ class MemgraphIngestor:
         if len(self.node_buffer) >= self.batch_size:
             logger.debug(ls.MG_NODE_BUFFER_FLUSH, size=self.batch_size)
             self.flush_nodes()
+
+    def ensure_node(self, label: str, properties: dict[str, PropertyValue]) -> None:
+        self.ensure_node_batch(label, properties)
+
+    def ensure_edge(
+        self,
+        rel_type: str,
+        from_identifier: str,
+        to_identifier: str,
+        properties: PropertyDict | None = None,
+    ) -> None:
+        # Simplified interface for graph_updater.py
+        # Determine node label based on relationship type and identifier pattern
+        def _get_label(identifier: str) -> str:
+            # Simple heuristic: if identifier contains a dot and the part after
+            # the last dot starts with lowercase, it might be a method
+            # This is language-dependent but works for many cases
+            if "." in identifier:
+                # Check if it looks like a method (e.g., ClassName.methodName)
+                parts = identifier.split(".")
+                if len(parts) > 1 and parts[-1][0].islower():
+                    return NodeLabel.METHOD
+            return NodeLabel.FUNCTION
+
+        if rel_type == REL_TYPE_CALLS:
+            # For CALLS relationships, try to determine if nodes are methods or functions
+            from_label = _get_label(from_identifier)
+            to_label = _get_label(to_identifier)
+        else:
+            # For other relationships, use generic Node type
+            # This might need to be refined based on actual usage
+            from_label = "Node"
+            to_label = "Node"
+
+        self.ensure_relationship_batch(
+            (from_label, KEY_QUALIFIED_NAME, from_identifier),
+            rel_type,
+            (to_label, KEY_QUALIFIED_NAME, to_identifier),
+            properties,
+        )
 
     def ensure_relationship_batch(
         self,

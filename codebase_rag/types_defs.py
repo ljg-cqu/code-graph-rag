@@ -563,10 +563,22 @@ RELATIONSHIP_SCHEMAS: tuple[RelationshipSchema, ...] = (
     RelationshipSchema(
         (NodeLabel.MODULE,),
         RelationshipType.DEFINES,
-        (NodeLabel.CLASS, NodeLabel.FUNCTION, NodeLabel.INTERFACE, NodeLabel.ENUM, NodeLabel.TYPE, NodeLabel.UNION, NodeLabel.CONTRACT, NodeLabel.LIBRARY),
+        (
+            NodeLabel.CLASS,
+            NodeLabel.FUNCTION,
+            NodeLabel.INTERFACE,
+            NodeLabel.ENUM,
+            NodeLabel.TYPE,
+            NodeLabel.UNION,
+            NodeLabel.CONTRACT,
+            NodeLabel.LIBRARY,
+        ),
     ),
     RelationshipSchema(
-        (NodeLabel.CLASS, NodeLabel.CONTRACT,),
+        (
+            NodeLabel.CLASS,
+            NodeLabel.CONTRACT,
+        ),
         RelationshipType.DEFINES_METHOD,
         (NodeLabel.METHOD,),
     ),
@@ -578,7 +590,14 @@ RELATIONSHIP_SCHEMAS: tuple[RelationshipSchema, ...] = (
     RelationshipSchema(
         (NodeLabel.MODULE,),
         RelationshipType.EXPORTS,
-        (NodeLabel.CLASS, NodeLabel.FUNCTION, NodeLabel.INTERFACE, NodeLabel.ENUM, NodeLabel.TYPE, NodeLabel.UNION),
+        (
+            NodeLabel.CLASS,
+            NodeLabel.FUNCTION,
+            NodeLabel.INTERFACE,
+            NodeLabel.ENUM,
+            NodeLabel.TYPE,
+            NodeLabel.UNION,
+        ),
     ),
     RelationshipSchema(
         (NodeLabel.MODULE,),
@@ -591,12 +610,21 @@ RELATIONSHIP_SCHEMAS: tuple[RelationshipSchema, ...] = (
         (NodeLabel.MODULE_IMPLEMENTATION,),
     ),
     RelationshipSchema(
-        (NodeLabel.CLASS, NodeLabel.CONTRACT,),
+        (
+            NodeLabel.CLASS,
+            NodeLabel.CONTRACT,
+        ),
         RelationshipType.INHERITS,
-        (NodeLabel.CLASS, NodeLabel.CONTRACT,),
+        (
+            NodeLabel.CLASS,
+            NodeLabel.CONTRACT,
+        ),
     ),
     RelationshipSchema(
-        (NodeLabel.CLASS, NodeLabel.CONTRACT,),
+        (
+            NodeLabel.CLASS,
+            NodeLabel.CONTRACT,
+        ),
         RelationshipType.IMPLEMENTS,
         (NodeLabel.INTERFACE,),
     ),

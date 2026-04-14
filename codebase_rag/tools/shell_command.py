@@ -10,6 +10,7 @@ Limitations:
 - Subshell patterns like '$()' and backticks are blocked.
 - Only commands in the allowlist can be executed.
 """
+
 from __future__ import annotations
 
 import asyncio

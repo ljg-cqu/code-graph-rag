@@ -72,7 +72,9 @@ class CodeVsDocValidator(BaseValidator):
                     element=req.get("description", str(req)),
                     status="VALID" if implemented else "MISSING",
                     direction="CODE_VS_DOC",
-                    suggestion=None if implemented else f"Implement {req.get('description', req)}",
+                    suggestion=None
+                    if implemented
+                    else f"Implement {req.get('description', req)}",
                 )
             )
 
@@ -125,9 +127,10 @@ class CodeVsDocValidator(BaseValidator):
                 # Basic requirement extraction: look for sections that contain
                 # keywords like "must", "shall", "required", "should"
                 import re
+
                 requirement_patterns = [
-                    r'(?:must|shall|required|should)\s+([^.]+)',
-                    r'([A-Z][^.]*\b(?:must|shall|required|should)\b[^.]*)',
+                    r"(?:must|shall|required|should)\s+([^.]+)",
+                    r"([A-Z][^.]*\b(?:must|shall|required|should)\b[^.]*)",
                 ]
                 for pattern in requirement_patterns:
                     matches = re.findall(pattern, content, re.IGNORECASE)
@@ -135,22 +138,30 @@ class CodeVsDocValidator(BaseValidator):
                         if isinstance(match, tuple):
                             match = match[0] if match[0] else match[1]
                         if match and len(match) > 10:
-                            requirements.append({
-                                "description": match.strip(),
-                                "source_section": title,
-                                "source_document": document_path,
-                            })
+                            requirements.append(
+                                {
+                                    "description": match.strip(),
+                                    "source_section": title,
+                                    "source_document": document_path,
+                                }
+                            )
 
         # If no requirements found via pattern matching, use sections as requirements
         if not requirements:
             for result in results:
                 title = result.get("title", "")
-                if title and title.lower() not in ("introduction", "overview", "background"):
-                    requirements.append({
-                        "description": f"Section: {title}",
-                        "source_section": title,
-                        "source_document": document_path,
-                    })
+                if title and title.lower() not in (
+                    "introduction",
+                    "overview",
+                    "background",
+                ):
+                    requirements.append(
+                        {
+                            "description": f"Section: {title}",
+                            "source_section": title,
+                            "source_document": document_path,
+                        }
+                    )
 
         return requirements[:20]  # Limit to 20 requirements for now
 
@@ -190,10 +201,11 @@ class CodeVsDocValidator(BaseValidator):
 
         # Extract potential function/class names from the requirement
         import re
+
         # Look for CamelCase words (likely class/function names)
-        names = re.findall(r'\b([A-Z][a-zA-Z]+[a-z][a-zA-Z]*)\b', description)
+        names = re.findall(r"\b([A-Z][a-zA-Z]+[a-z][a-zA-Z]*)\b", description)
         # Also look for snake_case words
-        names.extend(re.findall(r'\b([a-z]+_[a-z_]+)\b', description))
+        names.extend(re.findall(r"\b([a-z]+_[a-z_]+)\b", description))
         # Add section title as a potential name
         if source_section:
             # Convert section title to possible function/class name

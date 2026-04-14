@@ -14,7 +14,7 @@ from .call_resolver import CallResolver
 from .cpp import utils as cpp_utils
 from .import_processor import ImportProcessor
 from .type_inference import TypeInferenceEngine
-from .utils import get_function_captures, is_method_node
+from .utils import get_function_captures, is_method_node, query_captures_to_dict
 
 
 class CallProcessor:
@@ -142,7 +142,8 @@ class CallProcessor:
         method_query = queries[language][cs.QUERY_FUNCTIONS]
         if not method_query:
             return
-        method_captures = method_query.captures(body_node)
+        cursor = QueryCursor(method_query)
+        method_captures = query_captures_to_dict(cursor.matches(body_node))
         method_nodes = method_captures.get(cs.CAPTURE_FUNCTION, [])
         for method_node in method_nodes:
             if not isinstance(method_node, Node):
@@ -174,7 +175,8 @@ class CallProcessor:
         query = queries[language][cs.QUERY_CLASSES]
         if not query:
             return
-        captures = query.captures(root_node)
+        cursor = QueryCursor(query)
+        captures = query_captures_to_dict(cursor.matches(root_node))
         class_nodes = captures.get(cs.CAPTURE_CLASS, [])
 
         for class_node in class_nodes:
@@ -289,7 +291,8 @@ class CallProcessor:
             caller_node, module_qn, language
         )
 
-        captures = calls_query.captures(caller_node)
+        cursor = QueryCursor(calls_query)
+        captures = query_captures_to_dict(cursor.matches(caller_node))
         call_nodes = captures.get(cs.CAPTURE_CALL, [])
 
         logger.debug(

@@ -88,7 +88,9 @@ class EmbeddingProvider(ABC):
         """Return provider identifier as EmbeddingProvider enum."""
         ...
 
-    def get_config(self, key: str, default: str | int | None = None) -> str | int | None:
+    def get_config(
+        self, key: str, default: str | int | None = None
+    ) -> str | int | None:
         """Get a configuration value."""
         return self._config.get(key, default)
 
@@ -183,7 +185,11 @@ class EmbeddingProvider(ABC):
 
         Returns conservative estimates based on typical provider limits.
         """
-        provider = self.provider_name.value if hasattr(self.provider_name, "value") else str(self.provider_name)
+        provider = (
+            self.provider_name.value
+            if hasattr(self.provider_name, "value")
+            else str(self.provider_name)
+        )
 
         # Conservative estimates based on typical provider limits
         match provider:

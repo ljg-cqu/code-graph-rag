@@ -124,9 +124,7 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
                 model=self.model_id,
             )
 
-    def _make_request(
-        self, texts: list[str], batch_size: int
-    ) -> list[list[float]]:
+    def _make_request(self, texts: list[str], batch_size: int) -> list[list[float]]:
         """Make embedding request to OpenAI API.
 
         Args:

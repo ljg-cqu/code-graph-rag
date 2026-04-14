@@ -639,9 +639,7 @@ def start_unified_watcher(
         username=settings.MEMGRAPH_USERNAME,
         password=settings.MEMGRAPH_PASSWORD,
     ) as code_ingestor:
-        code_updater = GraphUpdater(
-            code_ingestor, repo_path_obj, parsers, queries
-        )
+        code_updater = GraphUpdater(code_ingestor, repo_path_obj, parsers, queries)
 
         # Initialize document graph updater
         doc_updater = DocumentGraphUpdater(

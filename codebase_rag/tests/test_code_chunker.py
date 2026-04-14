@@ -1,6 +1,5 @@
 """Tests for semantic code chunker."""
 
-
 from codebase_rag.models import CodeChunk
 from codebase_rag.utils.code_chunker import (
     BOUNDARY_NODE_TYPES,
@@ -29,13 +28,13 @@ class TestSemanticCodeChunker:
 
     def test_chunk_respects_function_boundaries(self) -> None:
         """Verify chunking splits at function boundaries."""
-        code = '''
+        code = """
 def func1():
     pass
 
 def func2():
     pass
-'''
+"""
         chunker = SemanticCodeChunker(max_tokens=15)  # Lower limit to force splitting
         chunks = chunker.chunk(code)
         # Either 1 or 2 chunks depending on token count and exact splitting
@@ -64,7 +63,7 @@ def func2():
     def test_chunk_very_long_single_line(self) -> None:
         """Very long single line should be split."""
         # Use a line with commas so it can be split
-        code = 'x = "' + ','.join(['a' * 100 for _ in range(50)]) + '"'
+        code = 'x = "' + ",".join(["a" * 100 for _ in range(50)]) + '"'
         chunker = SemanticCodeChunker(max_tokens=100)
         chunks = chunker.chunk(code)
         assert len(chunks) >= 1
@@ -92,13 +91,13 @@ def func2():
 
     def test_overlap_adds_context(self) -> None:
         """Overlap should add context between chunks."""
-        code = '''
+        code = """
 def func1():
     x = 1
 
 def func2():
     y = 2
-'''
+"""
         chunker = SemanticCodeChunker(max_tokens=20, overlap_tokens=10)
         chunks = chunker.chunk(code)
         # With overlap, chunks may have overlapping content
@@ -144,20 +143,20 @@ class TestGenerateCodeSummary:
 
     def test_extract_function_signature(self) -> None:
         """Should extract function signatures."""
-        code = '''
+        code = """
 def my_func(a: int, b: str) -> bool:
     return True
-'''
+"""
         summary = generate_code_summary(code)
         assert "def my_func" in summary
         assert "a: int" in summary or "a" in summary
 
     def test_extract_class_definition(self) -> None:
         """Should extract class definitions."""
-        code = '''
+        code = """
 class MyClass(BaseClass):
     pass
-'''
+"""
         summary = generate_code_summary(code)
         assert "class MyClass" in summary
 
@@ -206,7 +205,9 @@ class TestBoundaryNodeTypes:
             assert lang in BOUNDARY_NODE_TYPES, f"Missing boundary types for {lang}"
             types = BOUNDARY_NODE_TYPES[lang]
             # All languages should have at least function types
-            assert "function" in types or "class" in types, f"No useful types for {lang}"
+            assert "function" in types or "class" in types, (
+                f"No useful types for {lang}"
+            )
 
     def test_language_modules_mapping(self) -> None:
         """All languages in BOUNDARY_NODE_TYPES should have module mapping."""

@@ -135,7 +135,6 @@ class LocalEmbeddingProvider(EmbeddingProvider):
         """
         self._ensure_model_loaded()
 
-
         assert self._model is not None
         assert self._torch is not None
 
@@ -166,7 +165,6 @@ class LocalEmbeddingProvider(EmbeddingProvider):
             return []
 
         self._ensure_model_loaded()
-
 
         assert self._model is not None
         assert self._torch is not None

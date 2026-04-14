@@ -221,7 +221,13 @@ def _handle_indexing(
             # === Optional JSON Ingestion (10 Parallel Workers by Default) ===
             if ingest_json:
                 from codebase_rag.json_ingestion import ingest_json_data
-                _info(style(f"Running JSON ingestion with {json_parallel_workers} parallel workers...", cs.Color.CYAN))
+
+                _info(
+                    style(
+                        f"Running JSON ingestion with {json_parallel_workers} parallel workers...",
+                        cs.Color.CYAN,
+                    )
+                )
 
                 # Resolve target JSON path (user-provided or repo root)
                 target_json_path = json_path or str(repo_path)
@@ -235,7 +241,7 @@ def _handle_indexing(
                         dry_run=False,
                         parallel_workers=json_parallel_workers,
                         # Link ingested data to active document workspace for isolation
-                        metadata_override={"workspace": doc_workspace}
+                        metadata_override={"workspace": doc_workspace},
                     )
 
                     # Display ingestion results
@@ -245,25 +251,50 @@ def _handle_indexing(
                         header_style=f"{cs.StyleModifier.BOLD} {cs.Color.MAGENTA}",
                     )
                     json_table.add_column("Metric", style=cs.Color.CYAN)
-                    json_table.add_column("Count", style=cs.Color.YELLOW, justify="right")
+                    json_table.add_column(
+                        "Count", style=cs.Color.YELLOW, justify="right"
+                    )
 
-                    json_table.add_row("JSON files processed", str(getattr(ingest_result, 'files_processed', 0)))
-                    json_table.add_row("Invalid JSON files skipped", str(getattr(ingest_result, 'files_skipped', 0)))
-                    json_table.add_row("Entities ingested", str(ingest_result.entities_ingested))
-                    json_table.add_row("Relationships ingested", str(ingest_result.relationships_ingested))
+                    json_table.add_row(
+                        "JSON files processed",
+                        str(getattr(ingest_result, "files_processed", 0)),
+                    )
+                    json_table.add_row(
+                        "Invalid JSON files skipped",
+                        str(getattr(ingest_result, "files_skipped", 0)),
+                    )
+                    json_table.add_row(
+                        "Entities ingested", str(ingest_result.entities_ingested)
+                    )
+                    json_table.add_row(
+                        "Relationships ingested",
+                        str(ingest_result.relationships_ingested),
+                    )
 
                     app_context.console.print(json_table)
 
                     # Handle errors if fail-on-invalid is enabled
                     if ingest_result.errors:
-                        _info(style(f"Ingestion completed with {len(ingest_result.errors)} errors:", cs.Color.YELLOW))
+                        _info(
+                            style(
+                                f"Ingestion completed with {len(ingest_result.errors)} errors:",
+                                cs.Color.YELLOW,
+                            )
+                        )
                         for error in ingest_result.errors[:15]:
                             _info(style(f"  - {error}", cs.Color.RED))
                         if len(ingest_result.errors) > 15:
-                            _info(style(f"  ... and {len(ingest_result.errors) - 15} more errors", cs.Color.RED))
+                            _info(
+                                style(
+                                    f"  ... and {len(ingest_result.errors) - 15} more errors",
+                                    cs.Color.RED,
+                                )
+                            )
 
                         if not json_skip_invalid:
-                            raise ValueError("JSON ingestion failed (--json-fail-on-invalid enabled)")
+                            raise ValueError(
+                                "JSON ingestion failed (--json-fail-on-invalid enabled)"
+                            )
 
                 except Exception as e:
                     _info(style(f"JSON ingestion failed: {e}", cs.Color.RED))
@@ -548,6 +579,15 @@ def start(
 
     target_repo_path = repo_path or settings.TARGET_REPO_PATH
 
+    # Validate repo path exists
+    if not Path(target_repo_path).exists():
+        typer.echo(
+            f"ERROR: Repository path '{target_repo_path}' does not exist.\n"
+            f"HINT: If you used --repo-path, make sure to provide a valid path after it, e.g. --repo-path . --clean",
+            err=True,
+        )
+        raise typer.Exit(1)
+
     # --output requires --index-code or --index-all (which triggers code update)
     if output and not (index_code or index_all):
         app_context.console.print(
@@ -713,6 +753,13 @@ def index(
     ),
 ) -> None:
     target_repo_path = repo_path or settings.TARGET_REPO_PATH
+    # Validate repo path exists
+    if not Path(target_repo_path).exists():
+        typer.echo(
+            f"ERROR: Repository path '{target_repo_path}' does not exist.",
+            err=True,
+        )
+        raise typer.Exit(1)
     repo_to_index = Path(target_repo_path)
     _info(style(cs.CLI_MSG_INDEXING_AT.format(path=repo_to_index), cs.Color.GREEN))
 
@@ -854,6 +901,13 @@ def optimize(
         app_context.session.confirm_edits = True
 
     target_repo_path = repo_path or settings.TARGET_REPO_PATH
+    # Validate repo path exists
+    if not Path(target_repo_path).exists():
+        typer.echo(
+            f"ERROR: Repository path '{target_repo_path}' does not exist.",
+            err=True,
+        )
+        raise typer.Exit(1)
 
     _update_and_validate_models(orchestrator, cypher)
 
@@ -1436,6 +1490,13 @@ def index_docs(
     from .services.graph_service import MemgraphIngestor
 
     target_repo_path = repo_path or settings.TARGET_REPO_PATH
+    # Validate repo path exists
+    if not Path(target_repo_path).exists():
+        typer.echo(
+            f"ERROR: Repository path '{target_repo_path}' does not exist.",
+            err=True,
+        )
+        raise typer.Exit(1)
     repo_to_index = Path(target_repo_path)
 
     _info(style(f"Indexing documents in: {repo_to_index}", cs.Color.CYAN))

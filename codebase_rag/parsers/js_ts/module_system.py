@@ -13,6 +13,7 @@ from ... import logs as ls
 from ...types_defs import ASTNode
 from ..utils import (
     ingest_exported_function,
+    query_captures_to_dict,
     safe_decode_text,
     safe_decode_with_fallback,
 )
@@ -61,7 +62,8 @@ class JsTsModuleSystemMixin:
         try:
             try:
                 query = Query(language_obj, cs.JS_COMMONJS_DESTRUCTURE_QUERY)
-                captures = query.captures(root_node)
+                cursor = QueryCursor(query)
+                captures = query_captures_to_dict(cursor.matches(root_node))
 
                 variable_declarators = captures.get(cs.CAPTURE_VARIABLE_DECLARATOR, [])
 
@@ -279,9 +281,8 @@ class JsTsModuleSystemMixin:
 
         for query_text in query_texts:
             try:
-                captures = QueryCursor(Query(language_obj, query_text)).captures(
-                    root_node
-                )
+                cursor = QueryCursor(Query(language_obj, query_text))
+                captures = query_captures_to_dict(cursor.matches(root_node))
 
                 self._process_exports_pattern(
                     captures.get(cs.CAPTURE_EXPORTS_OBJ, []),
@@ -319,7 +320,7 @@ class JsTsModuleSystemMixin:
                     cleaned_query = textwrap.dedent(query_text).strip()
                     query = Query(lang_query, cleaned_query)
                     cursor = QueryCursor(query)
-                    captures = cursor.captures(root_node)
+                    captures = query_captures_to_dict(cursor.matches(root_node))
 
                     export_names = captures.get(cs.CAPTURE_EXPORT_NAME, [])
                     export_functions = captures.get(cs.CAPTURE_EXPORT_FUNCTION, [])

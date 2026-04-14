@@ -9,7 +9,7 @@ from pathlib import Path
 
 from loguru import logger
 from rich.progress import Progress, SpinnerColumn, TextColumn
-from tree_sitter import Node, Parser
+from tree_sitter import Language, Node, Parser
 
 from . import constants as cs
 from . import logs as ls
@@ -535,52 +535,45 @@ class GraphUpdater:
                 # Collect results as they complete
                 for future in as_completed(futures):
                     try:
-                        definition_results, call_edge_results = future.result()
+                        node_results, rel_results = future.result()
                         processed_count = 0
 
-                        # Update main process state with definitions
-                        for result in definition_results:
-                            if result["type"] == "definition":
-                                # Deserialize NodeType from string/value
-                                try:
-                                    node_type = NodeType(result["node_type"])
-                                except ValueError:
-                                    # Fallback for string values
-                                    node_type = NodeType[result["node_type"]]
-
-                                self.function_registry.insert(
-                                    result["qualified_name"], node_type
-                                )
-                                self.simple_name_lookup[result["simple_name"]].add(
-                                    result["qualified_name"]
-                                )
-
-                                # Add node to ingestor
-                                self.ingestor.ensure_node(
-                                    node_type,
-                                    {
-                                        "qualified_name": result["qualified_name"],
-                                        "name": result["simple_name"],
-                                        "path": result["file_path"],
-                                    },
-                                )
-                            elif result["type"] == "dependency":
-                                # Process dependency data
+                        for node_result in node_results:
+                            label = node_result["label"]
+                            if label == "_dependency":
                                 self.factory.definition_processor.process_dependencies(
-                                    Path(result["file_path"])
+                                    Path(node_result["file_path"])
                                 )
+                                processed_count += 1
+                                continue
+
+                            props = node_result["props"]
+                            self.ingestor.ensure_node(label, props)
+                            qn = props.get(cs.KEY_QUALIFIED_NAME)
+                            if qn and isinstance(qn, str):
+                                try:
+                                    node_type = NodeType(label)
+                                    self.function_registry.insert(qn, node_type)
+                                    simple_name = qn.split(".")[-1]
+                                    self.simple_name_lookup[simple_name].add(qn)
+                                except ValueError:
+                                    pass
                             processed_count += 1
 
-                        # Add all call edges to main ingestor
-                        for edge in call_edge_results:
-                            self.ingestor.ensure_edge(
-                                "CALLS",
-                                from_identifier=edge["from_qn"],
-                                to_identifier=edge["to_qn"],
-                                properties={
-                                    "line": edge["line"],
-                                    "path": edge["file_path"],
-                                },
+                        for rel in rel_results:
+                            self.ingestor.ensure_relationship_batch(
+                                (
+                                    rel["from_label"],
+                                    rel["from_key"],
+                                    rel["from_val"],
+                                ),
+                                rel["rel_type"],
+                                (
+                                    rel["to_label"],
+                                    rel["to_key"],
+                                    rel["to_val"],
+                                ),
+                                rel["props"] or None,
                             )
 
                         # Update progress and flush state periodically
@@ -702,17 +695,22 @@ class GraphUpdater:
             ast_cache=worker_ast_cache,
         )
 
-        definition_results: list[dict] = []
-        call_edge_results: list[dict] = []
+        all_nodes: list[dict] = []
+        all_relationships: list[dict] = []
 
         for filepath in file_chunk:
+            nodes_offset = len(worker_ingestor.nodes)
+            rel_offsets: dict[tuple[str, str, str, str, str], int] = {
+                pattern: len(rel_list)
+                for pattern, rel_list in worker_ingestor.relationships.items()
+            }
+
             lang_config = get_language_spec(filepath.suffix)
             if (
                 lang_config
                 and isinstance(lang_config.language, cs.SupportedLanguage)
                 and lang_config.language in parsers
             ):
-                # Process file definitions
                 result = worker_factory.definition_processor.process_file(
                     filepath,
                     lang_config.language,
@@ -723,55 +721,62 @@ class GraphUpdater:
                     root_node, language = result
                     worker_ast_cache[filepath] = (root_node, language)
 
-                    # Collect extracted definitions (serializable only)
-                    for qn, node_type in worker_function_registry.items():
-                        simple_name = qn.split(".")[-1]
-                        definition_results.append(
+                    for label, props in worker_ingestor.nodes[nodes_offset:]:
+                        all_nodes.append(
                             {
-                                "type": "definition",
-                                "qualified_name": qn,
-                                "node_type": node_type.value
-                                if hasattr(node_type, "value")
-                                else str(node_type),
-                                "simple_name": simple_name,
+                                "label": str(label),
+                                "props": dict(props),
                                 "file_path": str(filepath),
                             }
                         )
 
-                    # Process calls in the same file immediately (no need to pass AST back)
                     worker_factory.call_processor.process_calls_in_file(
                         filepath, root_node, language, queries
                     )
 
-                    # Collect call edges (serializable only)
-                    for edge in worker_ingestor.get_call_edges():
-                        call_edge_results.append(
-                            {
-                                "from_qn": edge["from"],
-                                "to_qn": edge["to"],
-                                "file_path": str(filepath),
-                                "line": edge.get("line"),
-                            }
+                    for (
+                        from_label,
+                        from_key,
+                        rel_type,
+                        to_label,
+                        to_key,
+                    ), rel_list in worker_ingestor.relationships.items():
+                        old_offset = rel_offsets.get(
+                            (from_label, from_key, rel_type, to_label, to_key), 0
                         )
+                        for rel_data in rel_list[old_offset:]:
+                            all_relationships.append(
+                                {
+                                    "from_label": str(from_label),
+                                    "from_key": from_key,
+                                    "rel_type": rel_type,
+                                    "to_label": str(to_label),
+                                    "to_key": to_key,
+                                    "from_val": rel_data["from_val"],
+                                    "to_val": rel_data["to_val"],
+                                    "props": dict(rel_data.get("props") or {}),
+                                    "file_path": str(filepath),
+                                }
+                            )
 
             elif (
                 filepath.name.lower() in cs.DEPENDENCY_FILES
                 or filepath.suffix.lower() == cs.CSPROJ_SUFFIX
             ):
-                # Process dependency files
                 dep_data = worker_factory.definition_processor.process_dependencies(
                     filepath
                 )
                 if dep_data:
-                    definition_results.append(
+                    all_nodes.append(
                         {
-                            "type": "dependency",
+                            "label": "_dependency",
+                            "props": {},
                             "file_path": str(filepath),
-                            "data": dep_data,
+                            "dep_data": dep_data,
                         }
                     )
 
-        return definition_results, call_edge_results
+        return all_nodes, all_relationships
 
     def _process_single_file(self, filepath: Path) -> None:
         lang_config = get_language_spec(filepath.suffix)

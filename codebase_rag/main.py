@@ -303,6 +303,10 @@ def _setup_common_initialization(repo_path: str) -> Path:
     logger.add(sys.stdout, format=cs.LOG_FORMAT)
 
     project_root = Path(repo_path).resolve()
+    if not project_root.exists():
+        raise FileNotFoundError(
+            f"Repository path '{repo_path}' does not exist.\nHINT: If you used --repo-path, make sure to provide a valid path after it, e.g. --repo-path . --clean"
+        )
     # Use parent directory if repo_path is a single file
     tmp_base = project_root.parent if project_root.is_file() else project_root
     tmp_dir = tmp_base / cs.TMP_DIR

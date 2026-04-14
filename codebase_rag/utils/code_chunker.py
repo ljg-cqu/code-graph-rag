@@ -90,7 +90,11 @@ BOUNDARY_NODE_TYPES: dict[str, dict[str, list[str]]] = {
         ],
     },
     "typescript": {
-        "class": ["class_declaration", "interface_declaration", "type_alias_declaration"],
+        "class": [
+            "class_declaration",
+            "interface_declaration",
+            "type_alias_declaration",
+        ],
         "function": [
             "function_declaration",
             "function_expression",
@@ -109,7 +113,12 @@ BOUNDARY_NODE_TYPES: dict[str, dict[str, list[str]]] = {
         "class": ["struct_item", "enum_item", "trait_item"],
         "function": ["function_item", "closure_expression"],
         "method": ["function_item"],  # Inside impl blocks
-        "block": ["if_expression", "for_expression", "while_expression", "match_expression"],
+        "block": [
+            "if_expression",
+            "for_expression",
+            "while_expression",
+            "match_expression",
+        ],
     },
     "cpp": {
         "class": ["class_specifier", "struct_specifier", "enum_specifier"],
@@ -139,10 +148,19 @@ BOUNDARY_NODE_TYPES: dict[str, dict[str, list[str]]] = {
         "class": [],  # Lua has no native classes
         "function": ["function_declaration", "function_definition"],
         "method": [],  # Methods are just functions with : syntax
-        "block": ["if_statement", "for_statement", "while_statement", "repeat_statement"],
+        "block": [
+            "if_statement",
+            "for_statement",
+            "while_statement",
+            "repeat_statement",
+        ],
     },
     "solidity": {
-        "class": ["contract_declaration", "interface_declaration", "library_declaration"],
+        "class": [
+            "contract_declaration",
+            "interface_declaration",
+            "library_declaration",
+        ],
         "function": [
             "function_definition",
             "modifier_definition",
@@ -410,10 +428,7 @@ class SemanticCodeChunker:
                 start_line = i + 1
                 continue
 
-            if (
-                current_tokens + line_tokens > self.max_tokens
-                and current_chunk_lines
-            ):
+            if current_tokens + line_tokens > self.max_tokens and current_chunk_lines:
                 # Flush current chunk
                 content = "\n".join(current_chunk_lines)
                 chunks.append(
@@ -458,10 +473,7 @@ class SemanticCodeChunker:
 
         for part in parts:
             part_tokens = count_tokens(part)
-            if (
-                current_tokens + part_tokens > self.max_tokens
-                and current_parts
-            ):
+            if current_tokens + part_tokens > self.max_tokens and current_parts:
                 chunks.append(
                     CodeChunk(
                         content=" ".join(current_parts),
@@ -503,10 +515,7 @@ class SemanticCodeChunker:
         for i, line in enumerate(lines):
             line_tokens = count_tokens(line + "\n")
 
-            if (
-                current_tokens + line_tokens > self.max_tokens
-                and current_lines
-            ):
+            if current_tokens + line_tokens > self.max_tokens and current_lines:
                 chunks.append(
                     CodeChunk(
                         content="\n".join(current_lines),

@@ -38,13 +38,14 @@ with open(SCHEMA_PATH) as f:
 embedding_provider = get_embedding_provider_instance()
 embedding_cache = EmbeddingCache()
 vector_store = get_vector_store_instance()
+
+
 # Round-robin Memgraph connection pool for parallel workers (thread-safe)
 class MemgraphConnectionPool:
     def __init__(self, host: str, port: int, pool_size: int = 10):
         self.pool_size = pool_size
         self.connections = [
-            MemgraphIngestor(host=host, port=port)
-            for _ in range(pool_size)
+            MemgraphIngestor(host=host, port=port) for _ in range(pool_size)
         ]
         self._lock = threading.Lock()
         self._counter = 0
@@ -56,11 +57,12 @@ class MemgraphConnectionPool:
             self._counter += 1
             return conn
 
+
 # Initialize pool with connection count matching configured parallel worker count
 graph_pool = MemgraphConnectionPool(
     host=settings.JSON_MEMGRAPH_HOST,
     port=settings.JSON_MEMGRAPH_PORT,
-    pool_size=settings.JSON_PARALLEL_WORKERS
+    pool_size=settings.JSON_PARALLEL_WORKERS,
 )
 # Backward compatibility: single connection for existing non-parallel code
 graph_service = graph_pool.get()
@@ -556,9 +558,12 @@ def ingest_json_data(
     Supports parallel processing with configurable worker count.
     """
     import concurrent.futures
+
     result = IngestionResult(dataset_id=dataset_id or "", dry_run=dry_run)
 
-    def process_single_file(file_data: tuple[Path, dict[str, Any]]) -> tuple[IngestionResult, bool]:
+    def process_single_file(
+        file_data: tuple[Path, dict[str, Any]],
+    ) -> tuple[IngestionResult, bool]:
         """Process a single JSON file, returns partial result and success flag"""
         file_path, data = file_data
         partial_result = IngestionResult(dataset_id=dataset_id or "", dry_run=dry_run)
@@ -613,7 +618,9 @@ def ingest_json_data(
         entity_embeddings, embed_errors = generate_embeddings_for_entities(entities)
         partial_result.errors.extend(embed_errors)
 
-        rel_embeddings, rel_embed_errors = generate_embeddings_for_relationships(relationships)
+        rel_embeddings, rel_embed_errors = generate_embeddings_for_relationships(
+            relationships
+        )
         partial_result.errors.extend(rel_embed_errors)
 
         # Ingest entities with thread-local connection
@@ -626,7 +633,7 @@ def ingest_json_data(
             incremental=incremental,
             conflict_resolution=conflict_resolution,
             last_updated_threshold=validated_data["metadata"].get("last_updated"),
-            graph_connection=graph_conn
+            graph_connection=graph_conn,
         )
         partial_result.entities_ingested += e_ingested
         partial_result.entities_updated += e_updated
@@ -645,7 +652,7 @@ def ingest_json_data(
             incremental=incremental,
             conflict_resolution=conflict_resolution,
             last_updated_threshold=validated_data["metadata"].get("last_updated"),
-            graph_connection=graph_conn
+            graph_connection=graph_conn,
         )
         partial_result.relationships_ingested += r_ingested
         partial_result.relationships_updated += r_updated
@@ -666,10 +673,17 @@ def ingest_json_data(
 
             # Process files in parallel if workers > 1
             if parallel_workers > 1 and len(json_files) > 1:
-                logger.info(f"Processing files with {parallel_workers} parallel workers")
-                with concurrent.futures.ThreadPoolExecutor(max_workers=parallel_workers) as executor:
+                logger.info(
+                    f"Processing files with {parallel_workers} parallel workers"
+                )
+                with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=parallel_workers
+                ) as executor:
                     # Submit all files for processing
-                    future_to_file = {executor.submit(process_single_file, file_data): file_data for file_data in json_files}
+                    future_to_file = {
+                        executor.submit(process_single_file, file_data): file_data
+                        for file_data in json_files
+                    }
 
                     # Aggregate results as they complete
                     for future in concurrent.futures.as_completed(future_to_file):
@@ -685,11 +699,21 @@ def ingest_json_data(
                         result.entities_updated += partial_result.entities_updated
                         result.entities_skipped += partial_result.entities_skipped
                         result.entities_failed += partial_result.entities_failed
-                        result.relationships_processed += partial_result.relationships_processed
-                        result.relationships_ingested += partial_result.relationships_ingested
-                        result.relationships_updated += partial_result.relationships_updated
-                        result.relationships_skipped += partial_result.relationships_skipped
-                        result.relationships_failed += partial_result.relationships_failed
+                        result.relationships_processed += (
+                            partial_result.relationships_processed
+                        )
+                        result.relationships_ingested += (
+                            partial_result.relationships_ingested
+                        )
+                        result.relationships_updated += (
+                            partial_result.relationships_updated
+                        )
+                        result.relationships_skipped += (
+                            partial_result.relationships_skipped
+                        )
+                        result.relationships_failed += (
+                            partial_result.relationships_failed
+                        )
                         result.errors.extend(partial_result.errors)
                         if partial_result.dataset_id and not result.dataset_id:
                             result.dataset_id = partial_result.dataset_id
@@ -709,8 +733,12 @@ def ingest_json_data(
                     result.entities_updated += partial_result.entities_updated
                     result.entities_skipped += partial_result.entities_skipped
                     result.entities_failed += partial_result.entities_failed
-                    result.relationships_processed += partial_result.relationships_processed
-                    result.relationships_ingested += partial_result.relationships_ingested
+                    result.relationships_processed += (
+                        partial_result.relationships_processed
+                    )
+                    result.relationships_ingested += (
+                        partial_result.relationships_ingested
+                    )
                     result.relationships_updated += partial_result.relationships_updated
                     result.relationships_skipped += partial_result.relationships_skipped
                     result.relationships_failed += partial_result.relationships_failed

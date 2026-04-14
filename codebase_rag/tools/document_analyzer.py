@@ -210,10 +210,7 @@ class DocumentAnalyzer:
             content = result.get("content", "")
             preview = content[:200] if content else ""
 
-            parts.append(
-                f"{i}. **{section_title}** ({doc_path})\n"
-                f"   {preview}...\n"
-            )
+            parts.append(f"{i}. **{section_title}** ({doc_path})\n   {preview}...\n")
 
         return "\n".join(parts)
 

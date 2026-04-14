@@ -1,6 +1,5 @@
 """Tests for smart truncation functionality."""
 
-
 from codebase_rag.models import TruncationResult
 from codebase_rag.utils.token_utils import (
     _truncate_at_statement_boundary,
@@ -43,9 +42,7 @@ class TestTruncateResultsSmart:
             {"id": 2, "relevance_score": 0.9, "content": "b"},
             {"id": 3, "relevance_score": 0.5, "content": "c"},
         ]
-        result = truncate_results_smart(
-            results, max_tokens=1000, strategy="relevance"
-        )
+        result = truncate_results_smart(results, max_tokens=1000, strategy="relevance")
         # All should fit, but sorted by relevance
         ids = [r["id"] for r in result.results]
         assert 2 in ids  # Highest score should be included
@@ -57,9 +54,7 @@ class TestTruncateResultsSmart:
             {"id": 2, "relevance_score": 0.9},
             {"id": 3, "relevance_score": 0.5},
         ]
-        result = truncate_results_smart(
-            results, max_tokens=1000, strategy="relevance"
-        )
+        result = truncate_results_smart(results, max_tokens=1000, strategy="relevance")
         # Order should be restored to original
         ids = [r["id"] for r in result.results]
         assert ids == sorted(ids)
@@ -87,9 +82,7 @@ class TestTruncateResultsSmart:
     def test_balanced_with_single_massive_row(self) -> None:
         """One row exceeding entire budget should be capped."""
         results = [{"content": "x" * 100000}]  # 100k chars
-        result = truncate_results_smart(
-            results, max_tokens=5000, strategy="balanced"
-        )
+        result = truncate_results_smart(results, max_tokens=5000, strategy="balanced")
         assert len(result.results) == 1
         # Row should be capped
         result_tokens = count_tokens(str(result.results[0]))
@@ -98,9 +91,7 @@ class TestTruncateResultsSmart:
     def test_row_cap_applied_first(self) -> None:
         """Row cap should be applied before token counting."""
         results = [{"id": i, "content": "x"} for i in range(100)]
-        result = truncate_results_smart(
-            results, max_tokens=100000, row_cap=10
-        )
+        result = truncate_results_smart(results, max_tokens=100000, row_cap=10)
         assert len(result.results) == 10
 
     def test_returns_truncation_result(self) -> None:
@@ -193,12 +184,8 @@ class TestTruncateBalanced:
 
     def test_respects_min_rows(self) -> None:
         """Should respect min_rows parameter."""
-        row_token_counts = [
-            ({"id": i, "content": "x" * 100}, 50) for i in range(100)
-        ]
-        kept, tokens = _truncate_balanced(
-            row_token_counts, max_tokens=500, min_rows=10
-        )
+        row_token_counts = [({"id": i, "content": "x" * 100}, 50) for i in range(100)]
+        kept, tokens = _truncate_balanced(row_token_counts, max_tokens=500, min_rows=10)
         assert len(kept) >= 10
 
 
@@ -215,7 +202,9 @@ class TestTruncateRowFields:
         """Large code field should be truncated at statement boundary."""
         row = {"id": 1, "content": "x = 1;\ny = 2;\nz = 3;"}
         result = truncate_row_fields(row, max_tokens=10)
-        assert "..." in result["content"] or len(result["content"]) < len(row["content"])
+        assert "..." in result["content"] or len(result["content"]) < len(
+            row["content"]
+        )
 
     def test_prioritizes_largest_fields(self) -> None:
         """Should prioritize truncating largest fields."""

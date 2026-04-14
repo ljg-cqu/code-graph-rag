@@ -182,9 +182,7 @@ def _get_chunks_for_section(
         ORDER BY c.start_line
         """
 
-    return ingestor.fetch_all(
-        query, params={"qn": section_qn, "workspace": workspace}
-    )
+    return ingestor.fetch_all(query, params={"qn": section_qn, "workspace": workspace})
 
 
 def read_section_content(
@@ -241,9 +239,7 @@ def read_chunk_content(
     RETURN c
     """
 
-    results = ingestor.fetch_all(
-        query, params={"qn": chunk_qn, "workspace": workspace}
-    )
+    results = ingestor.fetch_all(query, params={"qn": chunk_qn, "workspace": workspace})
 
     if not results:
         return None
