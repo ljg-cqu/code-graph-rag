@@ -989,6 +989,15 @@ The knowledge graph uses the following node types and relationships:
 
 Configuration is managed through environment variables in `.env` file:
 
+### Custom Environment File Path
+- `ENV_FILE`: Path to a custom environment file to load instead of the default `.env` (e.g. `ENV_FILE=.env_for_cgr`). This allows you to use separate configuration files for different repositories or environments.
+
+When using a custom env file, you can either:
+1. Run from the target repository root: `ENV_FILE=.env_for_cgr cgr start`
+2. Run from a different directory: `ENV_FILE=/full/path/to/.env_for_cgr cgr start --repo-path /full/path/to/target/repo`
+
+Values from the custom `ENV_FILE` will take precedence over any values in a default `.env` file in the current working directory.
+
 ### Provider-Specific Settings
 
 #### Orchestrator Model Configuration

@@ -69,7 +69,8 @@ class GraphAlgorithms:
     def run_pagerank(self) -> int:
         """Run PageRank algorithm and store scores as node properties.
 
-        Uses Memgraph MAGE pagerank.get() procedure.
+        Uses Memgraph MAGE pagerank.get() procedure (Enterprise-only feature).
+        Falls back gracefully for Community edition users.
         Scores are stored in `pagerank_score` property on all nodes.
 
         Returns:
@@ -77,19 +78,35 @@ class GraphAlgorithms:
         """
         logger.info("Running PageRank algorithm...")
 
-        cypher = """
-        CALL pagerank.get() YIELD node, rank
-        SET node.pagerank_score = rank
-        RETURN count(node) AS updated_count;
+        # First check if PageRank procedure exists (Enterprise-only feature)
+        check_cypher = """
+        SHOW PROCEDURES YIELD name
+        WHERE name = 'pagerank.get'
+        RETURN count(*) AS count;
         """
 
         try:
+            check_results = self._execute_query(check_cypher)
+            if not check_results or check_results[0].get("count", 0) == 0:
+                logger.info(
+                    "PageRank procedure not available (Memgraph Community edition), skipping optimization"
+                )
+                return 0
+
+            cypher = """
+            CALL pagerank.get() YIELD node, rank
+            SET node.pagerank_score = rank
+            RETURN count(node) AS updated_count;
+            """
             results = self._execute_query(cypher)
             updated = results[0].get("updated_count", 0) if results else 0
             logger.info(f"PageRank algorithm completed, updated {updated} nodes")
             return updated
         except Exception as e:
-            logger.error(f"PageRank algorithm failed: {e}")
+            logger.debug(f"PageRank algorithm failed: {e}")
+            logger.info(
+                "Skipping PageRank optimization (not supported in your Memgraph edition)"
+            )
             return 0
 
     def run_community_detection(self, use_leiden: bool = True) -> int:
@@ -118,7 +135,9 @@ class GraphAlgorithms:
                 results = self._execute_query(cypher)
                 updated = results[0].get("updated_count", 0) if results else 0
                 if updated > 0:
-                    logger.info(f"{algo_name} community detection completed, updated {updated} nodes")
+                    logger.info(
+                        f"{algo_name} community detection completed, updated {updated} nodes"
+                    )
                     return updated
             except Exception as e:
                 logger.warning(f"Leiden algorithm failed, falling back to Louvain: {e}")
@@ -137,13 +156,17 @@ class GraphAlgorithms:
         try:
             results = self._execute_query(cypher)
             updated = results[0].get("updated_count", 0) if results else 0
-            logger.info(ls.ALGO_COMMUNITY_COMPLETED.format(algo="Louvain", count=updated))
+            logger.info(
+                ls.ALGO_COMMUNITY_COMPLETED.format(algo="Louvain", count=updated)
+            )
             return updated
         except Exception as e:
             logger.error(f"Community detection algorithm failed: {e}")
             return 0
 
-    def get_bfs_context(self, start_node_id: int, max_depth: int = 3) -> list[dict[str, Any]]:
+    def get_bfs_context(
+        self, start_node_id: int, max_depth: int = 3
+    ) -> list[dict[str, Any]]:
         """Get BFS traversal context starting from a node.
 
         Args:
@@ -170,10 +193,7 @@ class GraphAlgorithms:
         ORDER BY depth ASC, pagerank_score DESC;
         """
 
-        params = {
-            "start_id": start_node_id,
-            "max_depth": max_depth
-        }
+        params = {"start_id": start_node_id, "max_depth": max_depth}
 
         try:
             return self._execute_query(cypher, params)
@@ -217,10 +237,7 @@ class GraphAlgorithms:
         LIMIT $top_k;
         """
 
-        params = {
-            "node_id": node_id,
-            "top_k": top_k
-        }
+        params = {"node_id": node_id, "top_k": top_k}
 
         try:
             return self._execute_query(cypher, params)

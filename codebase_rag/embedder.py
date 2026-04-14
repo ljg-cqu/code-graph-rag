@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 import tempfile
+from collections import OrderedDict
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 from urllib.parse import quote
@@ -87,6 +88,7 @@ class EmbeddingCache:
     CACHE_VERSION = 2
     LEGACY_VERSION = 1
     MIN_SUPPORTED_VERSION = 1
+    MAX_CACHE_SIZE = 10000  # ~10MB memory usage for 768-dim floats
 
     def __init__(
         self,
@@ -94,7 +96,7 @@ class EmbeddingCache:
         model_id: str | None = None,
         dimension: int | None = None,
     ) -> None:
-        self._cache: dict[str, list[float]] = {}
+        self._cache: OrderedDict[str, list[float]] = OrderedDict()
         self._path = path
         self._model_id = model_id or cs.UNIXCODER_MODEL
         self._dimension = dimension or 768
@@ -135,12 +137,19 @@ class EmbeddingCache:
     def get(self, content: str, model_id: str = "") -> list[float] | None:
         """Get cached embedding for content."""
         cache_key = self._content_hash(content, model_id or self._model_id)
-        return self._cache.get(cache_key)
+        if cache_key in self._cache:
+            self._cache.move_to_end(cache_key)
+            return self._cache[cache_key]
+        return None
 
     def put(self, content: str, embedding: list[float], model_id: str = "") -> None:
         """Store embedding in cache."""
         cache_key = self._content_hash(content, model_id or self._model_id)
         self._cache[cache_key] = embedding
+        self._cache.move_to_end(cache_key)
+        # Evict least recently used if over limit
+        if len(self._cache) > self.MAX_CACHE_SIZE:
+            self._cache.popitem(last=False)
         self._dirty = True
 
     def get_many(

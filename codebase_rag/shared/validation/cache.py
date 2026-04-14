@@ -6,6 +6,7 @@ for unchanged content.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -58,6 +59,8 @@ class ValidationCache:
         self._document_index: dict[str, set[str]] = {}  # document_path -> cache_keys
         # Structured index for O(1) mode invalidation
         self._mode_index: dict[str, set[str]] = {}  # mode -> cache_keys
+        # Async lock for thread safety in concurrent contexts
+        self._lock = asyncio.Lock()
 
     def compute_key(
         self,
@@ -71,7 +74,7 @@ class ValidationCache:
         content = f"{document_path}|{document_hash}|{code_graph_hash}|{mode}|{scope}"
         return hashlib.sha256(content.encode()).hexdigest()
 
-    def get(
+    async def get(
         self,
         document_path: str,
         document_hash: str,
@@ -83,14 +86,13 @@ class ValidationCache:
         key = self.compute_key(
             document_path, document_hash, code_graph_hash, mode, scope
         )
-        cached = self._cache.get(key)
+        async with self._lock:
+            cached = self._cache.get(key)
+            if cached and cached.expires_at > datetime.now(UTC):
+                return cached
+            return None
 
-        if cached and cached.expires_at > datetime.now(UTC):
-            return cached
-
-        return None
-
-    def set(
+    async def set(
         self,
         document_path: str,
         document_hash: str,
@@ -107,86 +109,58 @@ class ValidationCache:
             document_path, document_hash, code_graph_hash, mode, scope
         )
 
-        self._cache[key] = CachedValidation(
-            report=report,
-            cached_at=now,
-            expires_at=now + timedelta(hours=ttl),
-            document_path=document_path,
-            mode=mode,
-            document_hash=document_hash,
-            code_graph_hash=code_graph_hash,
-        )
+        async with self._lock:
+            self._cache[key] = CachedValidation(
+                report=report,
+                cached_at=now,
+                expires_at=now + timedelta(hours=ttl),
+                document_path=document_path,
+                mode=mode,
+                document_hash=document_hash,
+                code_graph_hash=code_graph_hash,
+            )
 
-        # Track document -> keys mapping for O(1) invalidation
-        if document_path not in self._document_index:
-            self._document_index[document_path] = set()
-        self._document_index[document_path].add(key)
+            # Track document -> keys mapping for O(1) invalidation
+            if document_path not in self._document_index:
+                self._document_index[document_path] = set()
+            self._document_index[document_path].add(key)
 
-        # Track mode -> keys mapping for O(1) mode invalidation
-        if mode not in self._mode_index:
-            self._mode_index[mode] = set()
-        self._mode_index[mode].add(key)
+            # Track mode -> keys mapping for O(1) mode invalidation
+            if mode not in self._mode_index:
+                self._mode_index[mode] = set()
+            self._mode_index[mode].add(key)
 
-        # Evict old entries if over limit
-        if len(self._cache) > self.MAX_CACHE_SIZE:
-            self._evict_oldest()
+            # Evict old entries if over limit
+            if len(self._cache) > self.MAX_CACHE_SIZE:
+                await self._evict_oldest()
 
-    def invalidate_document(self, document_path: str) -> int:
+    async def invalidate_document(self, document_path: str) -> int:
         """Invalidate all cached validations for a document."""
-        keys_to_remove = self._document_index.get(document_path, set()).copy()
-        if not keys_to_remove:
-            return 0
+        async with self._lock:
+            keys_to_remove = self._document_index.get(document_path, set()).copy()
+            if not keys_to_remove:
+                return 0
 
-        for k in keys_to_remove:
-            cached = self._cache.pop(k, None)
-            if cached and cached.mode in self._mode_index:
-                # Clean up mode index
-                self._mode_index[cached.mode].discard(k)
-                if not self._mode_index[cached.mode]:
-                    del self._mode_index[cached.mode]
+            for k in keys_to_remove:
+                cached = self._cache.pop(k, None)
+                if cached and cached.mode in self._mode_index:
+                    # Clean up mode index
+                    self._mode_index[cached.mode].discard(k)
+                    if not self._mode_index[cached.mode]:
+                        del self._mode_index[cached.mode]
 
-        self._document_index.pop(document_path, None)
-        return len(keys_to_remove)
+            self._document_index.pop(document_path, None)
+            return len(keys_to_remove)
 
-    def invalidate_code_graph(self) -> int:
+    async def invalidate_code_graph(self) -> int:
         """Invalidate all CODE_VS_DOC results when code graph changes.
 
         Note: CODE_VS_DOC compares code against docs, so code changes affect it.
         """
-        keys_to_remove = self._mode_index.get("CODE_VS_DOC", set()).copy()
-        if not keys_to_remove:
-            return 0
-
-        for key in keys_to_remove:
-            cached = self._cache.pop(key, None)
-            if cached:
-                # Clean up document index
-                if cached.document_path in self._document_index:
-                    self._document_index[cached.document_path].discard(key)
-                    if not self._document_index[cached.document_path]:
-                        del self._document_index[cached.document_path]
-                # Clean up mode index
-                self._mode_index["CODE_VS_DOC"].discard(key)
-
-        if not self._mode_index["CODE_VS_DOC"]:
-            del self._mode_index["CODE_VS_DOC"]
-
-        return len(keys_to_remove)
-
-    def invalidate_all_code_dependent(self) -> int:
-        """Invalidate both CODE_VS_DOC and DOC_VS_CODE when code graph changes.
-
-        Both validation directions depend on code state:
-        - CODE_VS_DOC: Code is being validated against docs
-        - DOC_VS_CODE: Docs are being validated against code
-
-        Call this when code graph is updated.
-        """
-        total_removed = 0
-        for mode in ("CODE_VS_DOC", "DOC_VS_CODE"):
-            keys_to_remove = self._mode_index.get(mode, set()).copy()
+        async with self._lock:
+            keys_to_remove = self._mode_index.get("CODE_VS_DOC", set()).copy()
             if not keys_to_remove:
-                continue
+                return 0
 
             for key in keys_to_remove:
                 cached = self._cache.pop(key, None)
@@ -197,17 +171,52 @@ class ValidationCache:
                         if not self._document_index[cached.document_path]:
                             del self._document_index[cached.document_path]
                     # Clean up mode index
-                    self._mode_index[mode].discard(key)
+                    self._mode_index["CODE_VS_DOC"].discard(key)
 
-            if not self._mode_index[mode]:
-                del self._mode_index[mode]
+            if not self._mode_index["CODE_VS_DOC"]:
+                del self._mode_index["CODE_VS_DOC"]
 
-            total_removed += len(keys_to_remove)
+            return len(keys_to_remove)
 
-        return total_removed
+    async def invalidate_all_code_dependent(self) -> int:
+        """Invalidate both CODE_VS_DOC and DOC_VS_CODE when code graph changes.
 
-    def _evict_oldest(self) -> None:
-        """Evict oldest cached entries."""
+        Both validation directions depend on code state:
+        - CODE_VS_DOC: Code is being validated against docs
+        - DOC_VS_CODE: Docs are being validated against code
+
+        Call this when code graph is updated.
+        """
+        async with self._lock:
+            total_removed = 0
+            for mode in ("CODE_VS_DOC", "DOC_VS_CODE"):
+                keys_to_remove = self._mode_index.get(mode, set()).copy()
+                if not keys_to_remove:
+                    continue
+
+                for key in keys_to_remove:
+                    cached = self._cache.pop(key, None)
+                    if cached:
+                        # Clean up document index
+                        if cached.document_path in self._document_index:
+                            self._document_index[cached.document_path].discard(key)
+                            if not self._document_index[cached.document_path]:
+                                del self._document_index[cached.document_path]
+                        # Clean up mode index
+                        self._mode_index[mode].discard(key)
+
+                if not self._mode_index[mode]:
+                    del self._mode_index[mode]
+
+                total_removed += len(keys_to_remove)
+
+            return total_removed
+
+    async def _evict_oldest(self) -> None:
+        """Evict oldest cached entries.
+
+        NOTE: Must only be called while already holding self._lock.
+        """
         sorted_entries = sorted(
             self._cache.items(),
             key=lambda x: x[1].cached_at,
@@ -226,27 +235,30 @@ class ValidationCache:
                 if not self._mode_index[cached.mode]:
                     del self._mode_index[cached.mode]
 
-    def clear(self) -> None:
+    async def clear(self) -> None:
         """Clear all cached entries."""
-        self._cache.clear()
-        self._document_index.clear()
+        async with self._lock:
+            self._cache.clear()
+            self._document_index.clear()
 
-    def size(self) -> int:
+    async def size(self) -> int:
         """Get current cache size."""
-        return len(self._cache)
+        async with self._lock:
+            return len(self._cache)
 
-    def get_stats(self) -> dict:
+    async def get_stats(self) -> dict:
         """Get cache statistics."""
-        now = datetime.now(UTC)
-        expired = sum(1 for c in self._cache.values() if c.expires_at <= now)
-        valid = len(self._cache) - expired
+        async with self._lock:
+            now = datetime.now(UTC)
+            expired = sum(1 for c in self._cache.values() if c.expires_at <= now)
+            valid = len(self._cache) - expired
 
-        return {
-            "total_entries": len(self._cache),
-            "valid_entries": valid,
-            "expired_entries": expired,
-            "document_index_size": len(self._document_index),
-        }
+            return {
+                "total_entries": len(self._cache),
+                "valid_entries": valid,
+                "expired_entries": expired,
+                "document_index_size": len(self._document_index),
+            }
 
 
 __all__ = ["CachedValidation", "ValidationCache"]

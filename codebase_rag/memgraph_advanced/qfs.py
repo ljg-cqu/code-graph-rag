@@ -5,7 +5,7 @@ from typing import Any, Optional
 
 from ..services.graph_service import MemgraphIngestor
 from ..config import settings
-from ..llm.providers import get_llm_provider
+from ..providers import get_provider_from_config
 
 
 @dataclass
@@ -24,7 +24,10 @@ class CommunityQFS:
     """Query-Focused Summarization using community detection."""
 
     def __init__(self):
-        self.llm = get_llm_provider()
+        self.provider = get_provider_from_config(settings.active_orchestrator_config)
+        self.llm = self.provider.create_model(
+            settings.active_orchestrator_config.model_id
+        )
 
     def build_community_summaries(self, min_size: int = 5) -> list[CommunitySummary]:
         """
@@ -167,6 +170,10 @@ class CommunityQFS:
 
         # Sort by score descending
         scored.sort()
+        if not scored:
+            logger.debug(
+                "No communities matched query keywords, returning all communities in original order"
+            )
         return [comm for (score, comm) in scored] + [
             comm for comm in communities if comm not in [c for (s, c) in scored]
         ]

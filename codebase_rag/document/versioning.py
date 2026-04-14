@@ -12,6 +12,7 @@ import json
 import os
 import tempfile
 import threading
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -50,9 +51,7 @@ class ContentVersionTracker:
         """Compute content fingerprint."""
         return hashlib.sha256(content.encode()).hexdigest()
 
-    def compute_section_hashes(
-        self, sections: list[ExtractedSection]
-    ) -> list[str]:
+    def compute_section_hashes(self, sections: list[ExtractedSection]) -> list[str]:
         """Compute hashes for each section."""
         return [self.compute_hash(s.content) for s in sections]
 
@@ -157,10 +156,13 @@ class VersionCache:
 
     Stores version metadata for quick lookup during incremental updates.
     Thread-safe with in-memory locking and atomic disk writes.
+    LRU eviction policy to bound memory usage.
     """
 
+    MAX_CACHE_SIZE = 10000  # Max number of document version entries to keep in memory
+
     def __init__(self, cache_path: Path | None = None) -> None:
-        self._cache: dict[str, DocumentVersion] = {}
+        self._cache: OrderedDict[str, DocumentVersion] = OrderedDict()
         self._cache_path = cache_path
         self._lock = threading.RLock()  # Reentrant lock for thread safety
 
@@ -240,12 +242,19 @@ class VersionCache:
     def get(self, path: str) -> DocumentVersion | None:
         """Get version for a path."""
         with self._lock:
-            return self._cache.get(path)
+            if path in self._cache:
+                self._cache.move_to_end(path)
+                return self._cache[path]
+            return None
 
     def set(self, version: DocumentVersion) -> None:
         """Set version for a path."""
         with self._lock:
             self._cache[version.path] = version
+            self._cache.move_to_end(version.path)
+            # Evict least recently used if over limit
+            if len(self._cache) > self.MAX_CACHE_SIZE:
+                self._cache.popitem(last=False)
 
     def remove(self, path: str) -> bool:
         """Remove version for a path."""

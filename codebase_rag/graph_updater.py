@@ -341,24 +341,30 @@ class GraphUpdater:
         from .graph_algorithms import get_shared_algorithms
         from .config import settings
 
-        logger.info("Running post-ingestion graph algorithms to improve retrieval quality...")
+        logger.info(
+            "Running post-ingestion graph algorithms to improve retrieval quality..."
+        )
         algo = get_shared_algorithms()
-        
+
         # Run ANALYZE GRAPH first to update query planner statistics
         algo.analyze_graph()
         logger.debug("ANALYZE GRAPH completed, query planner optimized")
-        
+
         # Run PageRank for result ranking
         pagerank_updated = algo.run_pagerank()
         if pagerank_updated > 0:
-            logger.info(f"PageRank computed for {pagerank_updated} nodes, retrieval ranking improved")
-        
+            logger.info(
+                f"PageRank computed for {pagerank_updated} nodes, retrieval ranking improved"
+            )
+
         # Run community detection (only if there are enough nodes)
         if pagerank_updated >= 10:  # Minimum 10 nodes for meaningful communities
             community_updated = algo.run_community_detection()
             if community_updated > 0:
-                logger.info(f"Community detection completed, {community_updated} nodes assigned to communities")
-        
+                logger.info(
+                    f"Community detection completed, {community_updated} nodes assigned to communities"
+                )
+
         # Close algorithm connection
         algo.close()
         logger.info("Post-ingestion graph algorithm processing complete")
@@ -518,7 +524,6 @@ class GraphUpdater:
                         chunk,
                         self.repo_path,
                         self.factory.structure_processor.structural_elements,
-                        self.queries,
                         self.project_name,
                     )
                     for chunk in worker_chunks
@@ -627,18 +632,16 @@ class GraphUpdater:
         file_chunk: list[Path],
         repo_path: Path,
         structural_elements: dict,
-        queries: dict[cs.SupportedLanguage, LanguageQueries],
         project_name: str,
     ) -> tuple[list[dict], list[dict]]:
         """Worker process method to process a chunk of files in isolation.
-        Fix: No unpickleable Parser instances passed across process boundaries - parsers initialized per worker.
+        Fix: No unpickleable Parser/Query instances passed across process boundaries - parsers/queries initialized per worker.
         Fix: Returns only serializable data, no Tree-sitter Node objects passed back to main process.
 
         Args:
             file_chunk: List of files to process by this worker
             repo_path: Root path of the repository
             structural_elements: Pre-identified structural elements from pass 1
-            queries: Tree-sitter query instances (picklable) for supported languages
             project_name: Name of the project
 
         Returns:
@@ -647,18 +650,28 @@ class GraphUpdater:
         from tree_sitter import Parser
 
         from .language_spec import get_language_spec, get_supported_languages
+        from .parser_loader import load_queries_for_language
+        from .types_defs import SupportedLanguage
+
+        # Initialize queries inside worker (avoids pickle issues with tree_sitter.Query objects)
+        queries: dict[SupportedLanguage, LanguageQueries] = {}
+        for lang in get_supported_languages():
+            queries[lang] = load_queries_for_language(lang)
         from .parsers.factory import ProcessorFactory
         from .services.memory_ingestor import MemoryIngestor
+
+        from .language_spec import LANGUAGE_SPECS
 
         # Initialize parsers INSIDE worker (avoids unpickleable parser issue)
         parsers: dict[cs.SupportedLanguage, Parser] = {}
         for lang in get_supported_languages():
             try:
+                lang_spec = LANGUAGE_SPECS[lang]
                 parser = Parser()
-                parser.set_language(lang.language_module)
-                parsers[lang.id] = parser
+                parser.set_language(lang_spec.language_module)
+                parsers[lang] = parser
             except Exception as e:
-                logger.debug(f"Skipping parser for {lang.id}: {str(e)}")
+                logger.debug(f"Skipping parser for {lang.value}: {str(e)}")
 
         # Use lightweight memory ingestor for worker processing (no DB connections)
         worker_ingestor = MemoryIngestor()

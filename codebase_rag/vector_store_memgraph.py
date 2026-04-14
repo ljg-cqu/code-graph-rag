@@ -41,22 +41,34 @@ class MemgraphBackend(VectorBackend):
         "Library",
     )
 
-    def __init__(self) -> None:
+    def __init__(self, is_document: bool = False) -> None:
+        self.is_document = is_document
         self._conn: mgclient.Connection | None = None
 
     def _create_connection(self) -> mgclient.Connection:
         """Create a new Memgraph connection."""
-        if settings.MEMGRAPH_USERNAME:
+        if self.is_document:
+            host = settings.DOC_MEMGRAPH_HOST
+            port = settings.DOC_MEMGRAPH_PORT
+            username = settings.DOC_MEMGRAPH_USERNAME
+            password = settings.DOC_MEMGRAPH_PASSWORD
+        else:
+            host = settings.MEMGRAPH_HOST
+            port = settings.MEMGRAPH_PORT
+            username = settings.MEMGRAPH_USERNAME
+            password = settings.MEMGRAPH_PASSWORD
+
+        if username:
             conn = mgclient.connect(
-                host=settings.MEMGRAPH_HOST,
-                port=settings.MEMGRAPH_PORT,
-                username=settings.MEMGRAPH_USERNAME,
-                password=settings.MEMGRAPH_PASSWORD,
+                host=host,
+                port=port,
+                username=username,
+                password=password,
             )
         else:
             conn = mgclient.connect(
-                host=settings.MEMGRAPH_HOST,
-                port=settings.MEMGRAPH_PORT,
+                host=host,
+                port=port,
             )
         conn.autocommit = True
         return conn
@@ -275,7 +287,7 @@ class MemgraphBackend(VectorBackend):
                 "embedding": query_embedding,
                 "top_k": effective_top_k,
                 "project_prefix": project_prefix,
-                "max_depth": max_context_depth
+                "max_depth": max_context_depth,
             }
 
             try:
@@ -294,7 +306,10 @@ class MemgraphBackend(VectorBackend):
 
         # Sort final results and return top_k
         if include_context:
-            all_results.sort(key=lambda x: (x["similarity"] * 0.7) + (x["pagerank_score"] * 0.3), reverse=True)
+            all_results.sort(
+                key=lambda x: (x["similarity"] * 0.7) + (x["pagerank_score"] * 0.3),
+                reverse=True,
+            )
             return all_results[:effective_top_k]
         else:
             all_results.sort(key=lambda x: x[1], reverse=True)

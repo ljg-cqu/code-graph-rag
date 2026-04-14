@@ -296,6 +296,26 @@ def _process_language(
         return False
 
 
+def load_queries_for_language(lang: cs.SupportedLanguage) -> LanguageQueries | None:
+    """Load queries for a single supported language"""
+    from .language_spec import LANGUAGE_SPECS
+
+    lang_config = LANGUAGE_SPECS.get(lang)
+    if not lang_config:
+        return None
+
+    lang_lib = LANGUAGE_LIBRARIES.get(lang)
+    if not lang_lib:
+        return None
+
+    try:
+        language = Language(lang_lib())
+        parser = Parser(language)
+        return _create_language_queries(language, parser, lang_config, lang)
+    except Exception:
+        return None
+
+
 def load_parsers() -> tuple[
     dict[cs.SupportedLanguage, Parser], dict[cs.SupportedLanguage, LanguageQueries]
 ]:

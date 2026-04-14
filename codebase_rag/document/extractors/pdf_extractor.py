@@ -29,10 +29,9 @@ class PDFExtractor(BaseDocumentExtractor):
     def supported_extensions(self) -> list[str]:
         return [".pdf"]
 
-    def extract(self, file_path: Path) -> ExtractedDocument:
+    def _extract(self, file_path: Path) -> ExtractedDocument:
         """Extract content from PDF file."""
-        # Validate path
-        validated_path = self._validate_path(file_path)
+        validated_path = file_path
 
         # Check file size
         max_size_mb = self.get_config("max_file_size_mb", 50)
@@ -146,9 +145,9 @@ class PDFExtractor(BaseDocumentExtractor):
             modified_date=modified_date,
         )
 
-    async def extract_async(self, file_path: Path) -> ExtractedDocument:
+    async def _extract_async(self, file_path: Path) -> ExtractedDocument:
         """Async extraction for PDF files."""
-        return await asyncio.to_thread(self.extract, file_path)
+        return await asyncio.to_thread(self._extract, file_path)
 
 
 __all__ = ["PDFExtractor"]

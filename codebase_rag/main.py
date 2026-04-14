@@ -488,12 +488,17 @@ async def _run_agent_response_loop(
     config: AgentLoopUI,
     tool_names: ConfirmationToolNames,
     model_override: Model | None = None,
+    model_override_config: ModelConfig | None = None,
 ) -> None:
     deferred_results: DeferredToolResults | None = None
 
     while True:
         # === AUTOMATIC CONTEXT COMPRESSION HOOK ===
-        if settings.CONTEXT_COMPRESSION_ENABLED and message_history:
+        if (
+            settings.CONTEXT_COMPRESSION_ENABLED
+            and message_history
+            and not deferred_results
+        ):
             import dataclasses
             from .utils.token_utils import count_tokens
 
@@ -556,13 +561,21 @@ async def _run_agent_response_loop(
                 )
                 result = compressor.compress_sync()
 
-                if not result.was_rolled_back:
-                    # Replace message history with compressed version
+                if not result.was_rolled_back and result.compressed_context:
+                    # Replace message history with compressed version only if it's not empty
                     message_history = result.compressed_context
                     app_context.console.print(
                         style(
-                            f"✅ Compressed to {result.compressed_tokens:,} tokens ({result.reduction_pct:.1%} reduction, {result.retention_score:.1%} retention",
+                            f"✅ Compressed to {result.compressed_tokens:,} tokens ({result.reduction_pct:.1%} reduction, {result.retention_score:.1%} retention)",
                             cs.Color.GREEN,
+                        )
+                    )
+                elif not result.was_rolled_back and not result.compressed_context:
+                    # Skip compression if result is empty
+                    app_context.console.print(
+                        style(
+                            "⚠️ Compression returned empty context, proceeding with original",
+                            cs.Color.YELLOW,
                         )
                     )
                 else:
@@ -1132,6 +1145,7 @@ async def _run_interactive_loop(
                         config,
                         tool_names,
                         model_override,
+                        model_override_config,
                     )
                 )
                 try:
@@ -1623,7 +1637,7 @@ def prompt_for_unignored_directories(
 
 
 def _validate_provider_config(role: cs.ModelRole, config: ModelConfig) -> None:
-    from .providers.base import get_provider_from_config
+    from .providers import get_provider_from_config
 
     try:
         provider = get_provider_from_config(config)

@@ -42,12 +42,12 @@ class MarkdownExtractor(BaseDocumentExtractor):
     def supported_extensions(self) -> list[str]:
         return [".md", ".rst", ".txt"]
 
-    def extract(self, file_path: Path) -> ExtractedDocument:
+    def _extract(self, file_path: Path) -> ExtractedDocument:
         """
         Extract content from Markdown file.
 
         Args:
-            file_path: Path to the markdown file
+            file_path: Path to the markdown file (already validated by base class)
 
         Returns:
             ExtractedDocument with sections, code blocks, and references
@@ -55,8 +55,7 @@ class MarkdownExtractor(BaseDocumentExtractor):
         Raises:
             ExtractionException: If file cannot be read or parsed
         """
-        # Validate path
-        validated_path = self._validate_path(file_path)
+        validated_path = file_path
 
         # Check file size limit
         max_size_mb = self.get_config("max_file_size_mb", 50)
@@ -73,7 +72,9 @@ class MarkdownExtractor(BaseDocumentExtractor):
             content = validated_path.read_text(encoding="utf-8")
         except UnicodeDecodeError as e:
             # Try with latin-1 as fallback
-            logger.debug(f"UTF-8 decoding failed for {file_path}, trying latin-1 fallback")
+            logger.debug(
+                f"UTF-8 decoding failed for {file_path}, trying latin-1 fallback"
+            )
             try:
                 content = validated_path.read_text(encoding="latin-1")
             except (UnicodeDecodeError, OSError) as fallback_error:
@@ -126,13 +127,13 @@ class MarkdownExtractor(BaseDocumentExtractor):
             modified_date=modified_date,
         )
 
-    async def extract_async(self, file_path: Path) -> ExtractedDocument:
+    async def _extract_async(self, file_path: Path) -> ExtractedDocument:
         """
         Async extraction for large files.
 
         Uses asyncio.to_thread to avoid blocking the event loop.
         """
-        return await asyncio.to_thread(self.extract, file_path)
+        return await asyncio.to_thread(self._extract, file_path)
 
     def _extract_markdown_sections(self, content: str) -> list[ExtractedSection]:
         """Extract header hierarchy from Markdown.
@@ -236,7 +237,11 @@ class MarkdownExtractor(BaseDocumentExtractor):
 
             # Check for underline-style header
             # Validate: underline must be at least as long as title
-            if next_line and all(c == next_line[0] for c in next_line) and len(next_line) >= len(line.strip()):
+            if (
+                next_line
+                and all(c == next_line[0] for c in next_line)
+                and len(next_line) >= len(line.strip())
+            ):
                 if line.strip():  # Non-empty title
                     underline_char = next_line[0]
 
@@ -258,8 +263,12 @@ class MarkdownExtractor(BaseDocumentExtractor):
 
         # Second pass: determine end lines based on level hierarchy
         # A section at level L extends until the next section at level <= L
-        section_data: list[tuple[int, int, str, int, int]] = []  # (index, level, title, start_line, end_line)
-        for idx, (section_idx, level, title, start_line) in enumerate(section_positions):
+        section_data: list[
+            tuple[int, int, str, int, int]
+        ] = []  # (index, level, title, start_line, end_line)
+        for idx, (section_idx, level, title, start_line) in enumerate(
+            section_positions
+        ):
             # Find end line: next section at same or higher level (<=)
             end_line = len(lines) - 1  # Default to end of file
             for j in range(idx + 1, len(section_positions)):

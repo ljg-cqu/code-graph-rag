@@ -15,7 +15,7 @@ from ..prompts import (
     LOCAL_CYPHER_SYSTEM_PROMPT,
     build_rag_orchestrator_prompt,
 )
-from ..providers.base import get_provider_from_config
+from ..providers import get_provider_from_config
 
 if TYPE_CHECKING:
     from pydantic_ai.models import Model

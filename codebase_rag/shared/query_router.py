@@ -197,10 +197,13 @@ class QueryRouter:
         code_vector: VectorBackend | None = None,
         doc_vector: VectorBackend | None = None,
     ):
+        # Lazy import to avoid circular dependencies
+        from ..vector_backend import get_vector_backend
+
         self.code_graph = code_graph
         self.doc_graph = doc_graph
-        self.code_vector = code_vector
-        self.doc_vector = doc_vector
+        self.code_vector = code_vector or get_vector_backend()
+        self.doc_vector = doc_vector or get_vector_backend(is_document=True)
         self.current_mode: QueryMode = QueryMode.CODE_ONLY  # For in-chat mode switching
 
     def query(self, request: QueryRequest) -> QueryResponse:

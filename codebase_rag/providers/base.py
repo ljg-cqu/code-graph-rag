@@ -43,6 +43,13 @@ class ModelProvider(ABC):
     def provider_name(self) -> cs.Provider:
         pass
 
+    def get_model_context_window(self, model_id: str) -> int:
+        """Get the context window size for a given model ID.
+
+        Defaults to 128k tokens, override in provider subclasses for specific model sizes.
+        """
+        return 128000
+
 
 def _resolve_api_key(api_key: str | None, env_var: str) -> str | None:
     env_key = os.environ.get(env_var)

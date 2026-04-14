@@ -6,6 +6,7 @@ and prevent overwhelming external embedding services.
 
 from __future__ import annotations
 
+import asyncio
 import random
 import threading
 import time
@@ -133,4 +134,44 @@ class AdaptiveRateLimiter:
             return self._consecutive_429s >= self._max_consecutive_429s
 
 
-__all__ = ["TokenBucket", "AdaptiveRateLimiter"]
+class AsyncAdaptiveRateLimiter(AdaptiveRateLimiter):
+    """Async-compatible adaptive rate limiter using asyncio.sleep for non-blocking waits."""
+
+    async def acquire(self, tokens: int) -> float:
+        """Wait until capacity is available without blocking the event loop.
+
+        Args:
+            tokens: Estimated token count for the request.
+
+        Returns:
+            Total wait time in seconds.
+        """
+        wait_time = max(self.rpm_bucket.acquire(1), self.tpm_bucket.acquire(tokens))
+        if wait_time > 0:
+            await asyncio.sleep(wait_time)
+        return wait_time
+
+    async def handle_429(self, retry_after: float | None) -> float:
+        """Handle rate limit response with adaptive backoff, non-blocking.
+
+        Args:
+            retry_after: Optional retry-after header value in seconds.
+
+        Returns:
+            Backoff time in seconds.
+        """
+        with self._lock:
+            self._consecutive_429s += 1
+
+            if retry_after and retry_after > 0:
+                backoff = retry_after
+            else:
+                # Exponential backoff with jitter
+                base = min(60.0, 2.0**self._consecutive_429s)
+                backoff = base + random.uniform(0, 1)
+
+        await asyncio.sleep(backoff)
+        return backoff
+
+
+__all__ = ["TokenBucket", "AdaptiveRateLimiter", "AsyncAdaptiveRateLimiter"]

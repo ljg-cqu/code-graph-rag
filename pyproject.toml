@@ -54,6 +54,7 @@ dependencies = [
     "protobuf>=5.27.0",
     "defusedxml>=0.7.1",
     "huggingface-hub[hf-xet]>=0.36.0",
+    "pdfplumber>=0.11.9",
 ]
 
 [project.scripts]

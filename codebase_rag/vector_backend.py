@@ -22,9 +22,7 @@ class VectorBackend(Protocol):
         """
         ...
 
-    def store_batch(
-        self, points: Sequence[tuple[int, list[float], str]]
-    ) -> int:
+    def store_batch(self, points: Sequence[tuple[int, list[float], str]]) -> int:
         """Store embeddings in batch.
 
         Args:
@@ -102,17 +100,23 @@ class VectorBackend(Protocol):
         ...
 
 
-def get_vector_backend() -> VectorBackend:
+def get_vector_backend(is_document: bool = False) -> VectorBackend:
     """Factory function to get configured vector backend.
 
     Only Memgraph native vector storage is supported. Qdrant is deprecated and removed.
+
+    Args:
+        is_document: If True, use document graph vector backend, else use code graph backend.
 
     Returns:
         VectorBackend instance (MemgraphBackend)
     """
     from .vector_store_memgraph import MemgraphBackend
-    logger.info("Using Memgraph native vector backend")
-    return MemgraphBackend()
+
+    logger.info(
+        f"Using Memgraph native vector backend for {'document' if is_document else 'code'}"
+    )
+    return MemgraphBackend(is_document=is_document)
 
 
 # Global backend instance (lazy initialization)

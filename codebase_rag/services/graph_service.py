@@ -87,6 +87,18 @@ class MemgraphIngestor:
         self._password = password.strip() if password and password.strip() else None
         if (self._username is None) != (self._password is None):
             raise ValueError(ex.AUTH_INCOMPLETE)
+
+        # Security check: Block default credentials for non-localhost connections
+        if self._host not in ("localhost", "127.0.0.1", "::1"):
+            if (
+                self._username == "admin"
+                and self._password == "REPLACE_WITH_SECURE_PASSWORD_IN_PRODUCTION"
+            ):
+                raise PermissionError(
+                    "SECURITY VIOLATION: Default Memgraph credentials cannot be used "
+                    "with non-localhost connections. Please set a secure password "
+                    "in your environment configuration."
+                )
         if batch_size < 1:
             raise ValueError(ex.BATCH_SIZE)
         self.batch_size = batch_size

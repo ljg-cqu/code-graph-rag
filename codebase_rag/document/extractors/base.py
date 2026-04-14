@@ -121,7 +121,6 @@ class BaseDocumentExtractor(ABC):
         """List of supported file extensions (e.g., ['.md', '.rst'])."""
         pass
 
-    @abstractmethod
     def extract(self, file_path: Path) -> ExtractedDocument:
         """
         Extract content from document.
@@ -135,9 +134,12 @@ class BaseDocumentExtractor(ABC):
         Raises:
             ExtractionException: If extraction fails
         """
-        pass
+        repo_root = self.get_config("repo_root")
+        validated_path = self._validate_path(
+            file_path, Path(repo_root) if repo_root else None
+        )
+        return self._extract(validated_path)
 
-    @abstractmethod
     async def extract_async(self, file_path: Path) -> ExtractedDocument:
         """
         Async extraction for large files.
@@ -150,6 +152,28 @@ class BaseDocumentExtractor(ABC):
 
         Returns:
             ExtractedDocument with all extracted content
+        """
+        repo_root = self.get_config("repo_root")
+        validated_path = self._validate_path(
+            file_path, Path(repo_root) if repo_root else None
+        )
+        return await self._extract_async(validated_path)
+
+    @abstractmethod
+    def _extract(self, file_path: Path) -> ExtractedDocument:
+        """
+        Internal extract implementation - override this in child classes.
+
+        Path validation already completed before this method is called.
+        """
+        pass
+
+    @abstractmethod
+    async def _extract_async(self, file_path: Path) -> ExtractedDocument:
+        """
+        Internal async extract implementation - override this in child classes.
+
+        Path validation already completed before this method is called.
         """
         pass
 
@@ -245,7 +269,9 @@ class BaseDocumentExtractor(ABC):
 
     MAX_SYMLINK_DEPTH = 10
 
-    def _validate_path(self, file_path: Path, repo_root: Path | None = None, depth: int = 0) -> Path:
+    def _validate_path(
+        self, file_path: Path, repo_root: Path | None = None, depth: int = 0
+    ) -> Path:
         """
         Validate path is safe and exists.
 
@@ -311,7 +337,9 @@ class BaseDocumentExtractor(ABC):
 
         return resolved
 
-    def get_config(self, key: str, default: str | int | None = None) -> str | int | None:
+    def get_config(
+        self, key: str, default: str | int | None = None
+    ) -> str | int | None:
         """Get a configuration value."""
         return self._config.get(key, default)
 

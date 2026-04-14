@@ -28,14 +28,11 @@ class DocxExtractor(BaseDocumentExtractor):
     def supported_extensions(self) -> list[str]:
         return [".docx"]
 
-    def extract(self, file_path: Path) -> ExtractedDocument:
+    def _extract(self, file_path: Path) -> ExtractedDocument:
         """Extract content from DOCX file."""
-        # Validate path
-        validated_path = self._validate_path(file_path)
-
         # Check file size
         max_size_mb = self.get_config("max_file_size_mb", 50)
-        file_size_mb = validated_path.stat().st_size / (1024 * 1024)
+        file_size_mb = file_path.stat().st_size / (1024 * 1024)
         if file_size_mb > max_size_mb:
             raise ExtractionException(
                 path=str(file_path),
@@ -53,7 +50,7 @@ class DocxExtractor(BaseDocumentExtractor):
                 message="DOCX extraction requires python-docx. Install with: uv add python-docx",
             )
 
-        return self._extract_with_docx(validated_path, file_path, Document)
+        return self._extract_with_docx(file_path, file_path, Document)
 
     def _extract_with_docx(
         self, validated_path: Path, original_path: Path, Document: type
@@ -131,7 +128,13 @@ class DocxExtractor(BaseDocumentExtractor):
                         # Heuristic: if it looks like code, add it
                         if any(
                             kw in cell_text
-                            for kw in ["def ", "class ", "function ", "import ", "const "]
+                            for kw in [
+                                "def ",
+                                "class ",
+                                "function ",
+                                "import ",
+                                "const ",
+                            ]
                         ):
                             code_blocks.append(cell_text)
 
@@ -151,9 +154,9 @@ class DocxExtractor(BaseDocumentExtractor):
             modified_date=modified_date,
         )
 
-    async def extract_async(self, file_path: Path) -> ExtractedDocument:
+    async def _extract_async(self, file_path: Path) -> ExtractedDocument:
         """Async extraction for DOCX files."""
-        return await asyncio.to_thread(self.extract, file_path)
+        return await asyncio.to_thread(self._extract, file_path)
 
 
 __all__ = ["DocxExtractor"]
