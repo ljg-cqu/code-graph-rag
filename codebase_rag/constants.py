@@ -855,6 +855,7 @@ EXIT_COMMANDS = frozenset({"exit", "quit"})
 # (H) CLI commands
 MODEL_COMMAND_PREFIX = "/model"
 MODE_COMMAND_PREFIX = "/mode"
+COMPRESS_COMMAND_PREFIX = "/compress"
 HELP_COMMAND = "/help"
 
 # (H) UI separators and formatting

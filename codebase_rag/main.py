@@ -66,6 +66,7 @@ from .tools.semantic_search import (
     create_semantic_search_tool,
 )
 from .tools.shell_command import ShellCommander, create_shell_command_tool
+from .context_compressor import ContextCompressor
 from .types_defs import (
     CHAT_LOOP_UI,
     OPTIMIZATION_LOOP_UI,
@@ -491,6 +492,52 @@ async def _run_agent_response_loop(
     deferred_results: DeferredToolResults | None = None
 
     while True:
+        # === AUTOMATIC CONTEXT COMPRESSION HOOK ===
+        if settings.CONTEXT_COMPRESSION_ENABLED and message_history:
+            from .utils.token_utils import count_tokens
+            # Estimate total tokens (history + new question)
+            total_tokens = count_tokens(json.dumps([m.model_dump() for m in message_history] + [question_with_context]))
+            # Get max context window from model config (default to 128k if not specified)
+            max_context = 128000
+            try:
+                if model_override_config:
+                    # Get from override if set
+                    provider = get_provider_from_config(model_override_config)
+                    max_context = provider.get_model_context_window(model_override_config.model_id)
+                else:
+                    # Get from default orchestrator config
+                    provider = get_provider_from_config(settings.active_orchestrator_config)
+                    max_context = provider.get_model_context_window(settings.active_orchestrator_config.model_id)
+            except:
+                # Fallback to default 128k
+                pass
+            
+            trigger_threshold = int(max_context * settings.CONTEXT_COMPRESSION_AUTO_TRIGGER_PCT / 100)
+            
+            if total_tokens >= trigger_threshold:
+                app_context.console.print(style(f"⚠️ Context approaching limit: {total_tokens}/{max_context} tokens, running automatic compression...", cs.Color.YELLOW))
+                
+                # Convert history to compressor format
+                context = [
+                    {"role": msg.role.value, "content": msg.content}
+                    for msg in message_history
+                    if hasattr(msg, 'content')
+                ]
+                
+                compressor = ContextCompressor(
+                    context=context,
+                    aggressive_mode=False,
+                    worker_count=settings.CONTEXT_COMPRESSION_PARALLEL_WORKERS
+                )
+                result = compressor.compress_sync()
+                
+                if not result.was_rolled_back:
+                    # Replace message history with compressed version
+                    message_history = result.compressed_context
+                    app_context.console.print(style(f"✅ Compressed to {result.compressed_tokens:,} tokens ({result.reduction_pct:.1%} reduction, {result.retention_score:.1%} retention", cs.Color.GREEN))
+                else:
+                    app_context.console.print(style("⚠️ Compression rolled back, proceeding with original context", cs.Color.YELLOW))
+        
         with app_context.console.status(config.status_message):
             response = await run_with_cancellation(
                 rag_agent.run(
@@ -880,6 +927,66 @@ async def _run_interactive_loop(
                     continue
                 if command_parts[0] == cs.HELP_COMMAND:
                     app_context.console.print(cs.UI_HELP_COMMANDS)
+                    initial_question = None
+                    continue
+                if command_parts[0] == cs.COMPRESS_COMMAND_PREFIX:
+                    # Manual /compress command handler
+                    from rich.table import Table
+                    aggressive = "--aggressive" in stripped_lower
+                    preserve_match = re.search(r"--preserve\s*([^\s]*)", stripped_question)
+                    preserve_pattern = preserve_match.group(1).strip("'\"") if preserve_match else None
+                    workers_match = re.search(r"--workers\s*(\d+)", stripped_question)
+                    workers = int(workers_match.group(1)) if workers_match else settings.CONTEXT_COMPRESSION_PARALLEL_WORKERS
+                    
+                    if not app_context.session.history:
+                        app_context.console.print(style("⚠️ No existing context to compress", cs.Color.YELLOW))
+                        initial_question = None
+                        continue
+                    
+                    app_context.console.print(style(f"🔄 Running context compression with {workers} parallel round-robin workers...", cs.Color.CYAN))
+                    
+                    # Convert session history to format expected by compressor
+                    context = [
+                        {"role": msg.role.value, "content": msg.content}
+                        for msg in app_context.session.history
+                        if hasattr(msg, 'content')
+                    ]
+                    
+                    compressor = ContextCompressor(
+                        context=context,
+                        aggressive_mode=aggressive,
+                        preserve_pattern=preserve_pattern,
+                        worker_count=workers
+                    )
+                    result = compressor.compress_sync()
+                    
+                    # Display results
+                    table = Table(
+                        title=style("Context Compression Results", cs.Color.GREEN),
+                        show_header=True,
+                        header_style=f"{cs.StyleModifier.BOLD} {cs.Color.MAGENTA}",
+                    )
+                    table.add_column("Metric", style=cs.Color.CYAN)
+                    table.add_column("Value", style=cs.Color.YELLOW)
+                    
+                    table.add_row("Original tokens", f"{result.original_tokens:,}")
+                    table.add_row("Compressed tokens", f"{result.compressed_tokens:,}")
+                    table.add_row("Reduction", f"{result.reduction_pct:.1%}")
+                    table.add_row("Semantic retention", f"{result.retention_score:.1%}")
+                    table.add_row("Strategy used", result.strategy_used)
+                    table.add_row("Execution time", f"{result.execution_time*1000:.0f}ms")
+                    if result.archive_id:
+                        table.add_row("Archive ID (restore available)", result.archive_id)
+                    
+                    app_context.console.print(table)
+                    
+                    if result.was_rolled_back:
+                        app_context.console.print(style("⚠️ Compression rolled back: retention too low, no changes made", cs.Color.YELLOW))
+                    else:
+                        # Update session history with compressed version
+                        app_context.session.history = result.compressed_context
+                        app_context.console.print(style("✅ Context compressed successfully! Session continues with reduced token usage", cs.Color.GREEN))
+                    
                     initial_question = None
                     continue
 

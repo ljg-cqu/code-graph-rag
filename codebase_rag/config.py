@@ -465,6 +465,15 @@ class AppConfig(BaseSettings):
     CGR_WORKER_LLMS: str | list[str | dict] = Field(default_factory=list)
     CGR_WORKER_LLM_ASSIGNMENT_STRATEGY: Literal["round-robin"] = "round-robin"
 
+    # Context Window Compression Configuration
+    CONTEXT_COMPRESSION_AUTO_TRIGGER_PCT: float = Field(default=85.0, gt=0, lt=100)
+    CONTEXT_COMPRESSION_HYSTERESIS_PCT: float = Field(default=5.0, gt=0, lt=20)
+    CONTEXT_COMPRESSION_MIN_RETENTION_SCORE: float = Field(default=70.0, gt=0, lt=100)
+    CONTEXT_COMPRESSION_PARALLEL_WORKERS: int = Field(default=10, gt=0)
+    CONTEXT_COMPRESSION_AGGRESSIVE_RETENTION_THRESHOLD: float = Field(default=50.0, gt=0, lt=100)
+    CONTEXT_COMPRESSION_ARCHIVE_TTL_HOURS: int = Field(default=24, gt=0)
+    CONTEXT_COMPRESSION_ENABLED: bool = True
+
     def _get_default_config(self, role: str) -> ModelConfig:
         role_upper = role.upper()
 
