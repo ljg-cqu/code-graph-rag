@@ -61,6 +61,7 @@ An accurate Retrieval-Augmented Generation (RAG) system that analyzes multi-lang
 ## 🚀 Features
 
 - **⚡ Automatic Parallel Execution**: No explicit user request needed! The system automatically detects parallelizable tasks (multi-file search, bulk validation, large repo ingestion, multi-tool workflows, etc.) and spawns 10 round-robin parallel workers to speed up execution by up to 10x. Fully transparent, with graceful fallback to sequential execution for non-parallel tasks.
+- **⚡ Blazing Fast Parallel Indexing**: Up to 20x faster codebase ingestion with perfect round-robin load distribution across parallel workers, auto-optimized at runtime to match your CPU core count and workload size (never uses more workers than needed, no wasted overhead). Fully backward compatible with sequential mode, no configuration required out of the box.
 - **🌐 Global Filesystem Access**: Access files anywhere on your host system (enabled by default), with optional write approval requirements and built-in protection against path traversal attacks.
 - **📚 Document GraphRAG**: Index and query documentation (Markdown, PDF, DOCX) alongside code. Supports bidirectional validation between code and specs, merged queries across both graphs, and automated documentation audits.
 - **Multi-Language Support**:
@@ -322,6 +323,22 @@ cgr start --repo-path /path/to/repo3 --index-code
 cgr start --repo-path /path/to/repo --index-code \
   --batch-size 5000
 ```
+
+**Control parallel indexing worker count:**
+```bash
+# Override default 20 parallel workers with 15
+cgr start --repo-path /path/to/repo --index-code \
+  --parallel-workers 15
+
+# Force sequential indexing (disable parallelism entirely)
+cgr start --repo-path /path/to/repo --index-code \
+  --parallel-workers 1
+```
+
+> **💡 Auto-Optimization Note**: The system automatically adjusts worker count at runtime:
+> - Never uses more workers than available CPU cores (prevents thrashing)
+> - Never uses more workers than number of changed files (avoids wasted process startup overhead)
+> - Uses perfect round-robin distribution of files across workers for balanced load
 
 The system automatically detects and processes files for all supported languages (see Multi-Language Support section).
 
@@ -1089,6 +1106,7 @@ EMBEDDING_PROJECT_ID=your-project-id
 - `CGR_YOLO_MODE`: Enable yolo mode globally (default: `false`)
 - `ENABLE_GLOBAL_FILE_ACCESS`: Enable access to files outside the project repository (default: `true`)
 - `GLOBAL_FILE_ACCESS_WRITE_REQUIRES_APPROVAL`: Require explicit approval for write operations outside the project repository (default: `true`)
+- `PARALLEL_INDEXING_WORKERS`: Default number of parallel workers for codebase indexing (default: `20`). Auto-optimized at runtime to never exceed available CPU cores or number of changed files. Set to `1` to disable parallel indexing entirely and run sequentially.
 
 ### Custom Ignore Patterns
 

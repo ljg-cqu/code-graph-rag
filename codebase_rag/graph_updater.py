@@ -1,9 +1,12 @@
 import hashlib
 import json
 import sys
+import os
 from collections import OrderedDict, defaultdict
 from collections.abc import Callable, ItemsView, KeysView
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
+import itertools
 
 from loguru import logger
 from rich.progress import Progress, SpinnerColumn, TextColumn
@@ -393,7 +396,9 @@ class GraphUpdater:
                 eligible.append(filepath)
         return eligible
 
-    def _process_files(self, force: bool = False) -> None:
+    def _process_files(self, force: bool = False, num_workers: int | None = None) -> None:
+        # Use configured default if no explicit worker count provided
+        effective_num_workers = num_workers if num_workers is not None else settings.PARALLEL_INDEXING_WORKERS
         cache_path = self.repo_path / cs.HASH_CACHE_FILENAME
         old_hashes = _load_hash_cache(cache_path) if not force else {}
         if force:
@@ -405,6 +410,47 @@ class GraphUpdater:
         changed_count = 0
 
         current_file_keys: set[str] = set()
+        changed_files: list[Path] = []
+
+        # First pass: filter changed files and compute hashes (fast, no heavy processing)
+        for filepath in eligible_files:
+            file_key = str(filepath.relative_to(self.repo_path))
+            current_file_keys.add(file_key)
+            current_hash = _hash_file(filepath)
+            new_hashes[file_key] = current_hash
+
+            if (
+                not force
+                and file_key in old_hashes
+                and old_hashes[file_key] == current_hash
+            ):
+                logger.debug(ls.FILE_HASH_UNCHANGED, path=file_key)
+                skipped_count += 1
+                continue
+
+            if file_key in old_hashes:
+                logger.debug(ls.FILE_HASH_CHANGED, path=file_key)
+                self.remove_file_from_state(filepath)
+            else:
+                logger.debug(ls.FILE_HASH_NEW, path=file_key)
+
+            changed_files.append(filepath)
+
+        # Optimize worker count for 20 parallel worker configuration:
+        # 1. Never use more workers than available CPU cores (avoids thrashing)
+        # 2. Never use more workers than number of changed files (avoids wasted resources)
+        # 3. Minimum 1 worker for edge cases
+        available_cores = len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else (os.cpu_count() or 4)
+        actual_workers = min(num_workers, available_cores, len(changed_files)) if changed_files else 1
+
+        logger.info(f"Found {len(changed_files)} changed files to process with {actual_workers} parallel workers (round-robin distribution)")
+        if actual_workers < num_workers:
+            logger.debug(f"Adjusted worker count from requested {num_workers} to {actual_workers} (available cores: {available_cores}, changed files: {len(changed_files)})")
+
+        # Round-robin split of changed files into actual_workers chunks for balanced load
+        worker_chunks: list[list[Path]] = [[] for _ in range(actual_workers)]
+        for idx, file in enumerate(changed_files):
+            worker_chunks[idx % actual_workers].append(file)  # Perfect round-robin assignment
 
         processed_since_flush = 0
 
@@ -415,44 +461,84 @@ class GraphUpdater:
             transient=True,
         ) as progress:
             task = progress.add_task("", total=len(eligible_files))
+            # Advance progress for already skipped files first
+            progress.advance(task, skipped_count)
 
-            for filepath in eligible_files:
-                file_key = str(filepath.relative_to(self.repo_path))
-                current_file_keys.add(file_key)
+            # Parallel processing with ProcessPoolExecutor (safe for CPU-bound tasks)
+            with ProcessPoolExecutor(max_workers=actual_workers) as executor:
+                # Submit all worker chunks
+                futures = [
+                    executor.submit(
+                        self._process_worker_chunk,
+                        chunk,
+                        self.repo_path,
+                        self.factory.structure_processor.structural_elements,
+                        self.queries,
+                        self.project_name,
+                    )
+                    for chunk in worker_chunks if chunk
+                ]
 
-                current_hash = _hash_file(filepath)
-                new_hashes[file_key] = current_hash
+                from .types_defs import NodeType
 
-                if (
-                    not force
-                    and file_key in old_hashes
-                    and old_hashes[file_key] == current_hash
-                ):
-                    logger.debug(ls.FILE_HASH_UNCHANGED, path=file_key)
-                    skipped_count += 1
-                    progress.advance(task)
-                    continue
+                # Collect results as they complete
+                for future in as_completed(futures):
+                    try:
+                        definition_results, call_edge_results = future.result()
+                        processed_count = 0
 
-                if file_key in old_hashes:
-                    logger.debug(ls.FILE_HASH_CHANGED, path=file_key)
-                    self.remove_file_from_state(filepath)
-                else:
-                    logger.debug(ls.FILE_HASH_NEW, path=file_key)
+                        # Update main process state with definitions
+                        for result in definition_results:
+                            if result['type'] == 'definition':
+                                # Deserialize NodeType from string/value
+                                try:
+                                    node_type = NodeType(result['node_type'])
+                                except ValueError:
+                                    # Fallback for string values
+                                    node_type = NodeType[result['node_type']]
+                                
+                                self.function_registry.insert(result['qualified_name'], node_type)
+                                self.simple_name_lookup[result['simple_name']].add(result['qualified_name'])
+                                
+                                # Add node to ingestor
+                                self.ingestor.ensure_node(
+                                    node_type,
+                                    {
+                                        'qualified_name': result['qualified_name'],
+                                        'name': result['simple_name'],
+                                        'path': result['file_path'],
+                                    }
+                                )
+                            elif result['type'] == 'dependency':
+                                # Process dependency data
+                                self.factory.definition_processor.process_dependencies(Path(result['file_path']))
+                            processed_count += 1
 
-                changed_count += 1
-                self._process_single_file(filepath)
+                        # Add all call edges to main ingestor
+                        for edge in call_edge_results:
+                            self.ingestor.ensure_edge(
+                                'CALLS',
+                                from_identifier=edge['from_qn'],
+                                to_identifier=edge['to_qn'],
+                                properties={'line': edge['line'], 'path': edge['file_path']}
+                            )
 
-                processed_since_flush += 1
-                if processed_since_flush >= settings.FILE_FLUSH_INTERVAL:
-                    logger.info(ls.PERIODIC_FLUSH.format(count=processed_since_flush))
-                    self.ingestor.flush_all()
-                    processed_since_flush = 0
+                        # Update progress and flush state periodically
+                        changed_count += processed_count
+                        progress.advance(task, processed_count)
+                        progress.update(
+                            task,
+                            description=ls.PROGRESS_FILES_PROCESSED.format(count=changed_count),
+                        )
 
-                progress.update(
-                    task,
-                    advance=1,
-                    description=ls.PROGRESS_FILES_PROCESSED.format(count=changed_count),
-                )
+                        processed_since_flush += processed_count
+                        if processed_since_flush >= settings.FILE_FLUSH_INTERVAL:
+                            logger.info(ls.PERIODIC_FLUSH.format(count=processed_since_flush))
+                            self.ingestor.flush_all()
+                            processed_since_flush = 0
+
+                    except Exception as e:
+                        logger.error(f"Worker processing failed: {str(e)}", exc_info=True)
 
         deleted_keys = set(old_hashes.keys()) - current_file_keys
         if deleted_keys:
@@ -474,6 +560,117 @@ class GraphUpdater:
             logger.info(ls.INCREMENTAL_CHANGED, count=changed_count)
 
         _save_hash_cache(cache_path, new_hashes)
+
+    @staticmethod
+    def _process_worker_chunk(
+        file_chunk: list[Path],
+        repo_path: Path,
+        structural_elements: dict,
+        queries: dict[cs.SupportedLanguage, LanguageQueries],
+        project_name: str,
+    ) -> tuple[list[dict], list[dict]]:
+        """Worker process method to process a chunk of files in isolation.
+        Fix: No unpickleable Parser instances passed across process boundaries - parsers initialized per worker.
+        Fix: Returns only serializable data, no Tree-sitter Node objects passed back to main process.
+        
+        Args:
+            file_chunk: List of files to process by this worker
+            repo_path: Root path of the repository
+            structural_elements: Pre-identified structural elements from pass 1
+            queries: Tree-sitter query instances (picklable) for supported languages
+            project_name: Name of the project
+            
+        Returns:
+            Tuple of (definition results list, call edges list)
+        """
+        from .parsers.factory import ProcessorFactory
+        from .services.memory_ingestor import MemoryIngestor
+        from .language_spec import get_language_spec, get_supported_languages
+        from tree_sitter import Parser
+        
+        # Initialize parsers INSIDE worker (avoids unpickleable parser issue)
+        parsers: dict[cs.SupportedLanguage, Parser] = {}
+        for lang in get_supported_languages():
+            try:
+                parser = Parser()
+                parser.set_language(lang.language_module)
+                parsers[lang.id] = parser
+            except Exception as e:
+                logger.debug(f"Skipping parser for {lang.id}: {str(e)}")
+
+        # Use lightweight memory ingestor for worker processing (no DB connections)
+        worker_ingestor = MemoryIngestor()
+        worker_function_registry = FunctionRegistryTrie()
+        worker_simple_name_lookup = defaultdict(set)
+        worker_ast_cache = BoundedASTCache()
+        
+        worker_factory = ProcessorFactory(
+            ingestor=worker_ingestor,
+            repo_path=repo_path,
+            project_name=project_name,
+            queries=queries,
+            function_registry=worker_function_registry,
+            simple_name_lookup=worker_simple_name_lookup,
+            ast_cache=worker_ast_cache,
+        )
+        
+        definition_results: list[dict] = []
+        call_edge_results: list[dict] = []
+        
+        for filepath in file_chunk:
+            lang_config = get_language_spec(filepath.suffix)
+            if (
+                lang_config
+                and isinstance(lang_config.language, cs.SupportedLanguage)
+                and lang_config.language in parsers
+            ):
+                # Process file definitions
+                result = worker_factory.definition_processor.process_file(
+                    filepath,
+                    lang_config.language,
+                    queries,
+                    structural_elements,
+                )
+                if result:
+                    root_node, language = result
+                    worker_ast_cache[filepath] = (root_node, language)
+                    
+                    # Collect extracted definitions (serializable only)
+                    for qn, node_type in worker_function_registry.items():
+                        simple_name = qn.split('.')[-1]
+                        definition_results.append({
+                            'type': 'definition',
+                            'qualified_name': qn,
+                            'node_type': node_type.value if hasattr(node_type, 'value') else str(node_type),
+                            'simple_name': simple_name,
+                            'file_path': str(filepath),
+                        })
+                    
+                    # Process calls in the same file immediately (no need to pass AST back)
+                    worker_factory.call_processor.process_calls_in_file(
+                        filepath, root_node, language, queries
+                    )
+                    
+                    # Collect call edges (serializable only)
+                    for edge in worker_ingestor.get_call_edges():
+                        call_edge_results.append({
+                            'from_qn': edge['from'],
+                            'to_qn': edge['to'],
+                            'file_path': str(filepath),
+                            'line': edge.get('line'),
+                        })
+
+            elif filepath.name.lower() in cs.DEPENDENCY_FILES or filepath.suffix.lower() == cs.CSPROJ_SUFFIX:
+                # Process dependency files
+                dep_data = worker_factory.definition_processor.process_dependencies(filepath)
+                if dep_data:
+                    definition_results.append({
+                        'type': 'dependency',
+                        'file_path': str(filepath),
+                        'data': dep_data,
+                    })
+        
+        return definition_results, call_edge_results
 
     def _process_single_file(self, filepath: Path) -> None:
         lang_config = get_language_spec(filepath.suffix)

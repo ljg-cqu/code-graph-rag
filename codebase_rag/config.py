@@ -350,6 +350,12 @@ class AppConfig(BaseSettings):
     FLUSH_THREAD_POOL_SIZE: int = Field(default=4, gt=0)
     FILE_FLUSH_INTERVAL: int = Field(default=500, gt=0)
 
+    # Parallel indexing settings
+    PARALLEL_INDEXING_WORKERS: int = Field(default=20, gt=0)
+    """Number of parallel workers to use for codebase indexing.
+    Auto-optimized at runtime: will not exceed available CPU cores or number of changed files.
+    Set to 1 to disable parallel processing entirely (sequential mode)."""
+
     CACHE_MAX_ENTRIES: int = 1000
     CACHE_MAX_MEMORY_MB: int = 500
     CACHE_EVICTION_DIVISOR: int = 10
