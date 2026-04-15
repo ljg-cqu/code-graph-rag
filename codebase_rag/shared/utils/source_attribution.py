@@ -56,7 +56,19 @@ def get_source_label(node: dict) -> SourceAttribution:
         )
 
     # Code graph nodes
-    code_labels = {"Function", "Class", "Method", "Module", "File", "Interface", "Contract", "Library", "Enum", "Type", "Union"}
+    code_labels = {
+        "Function",
+        "Class",
+        "Method",
+        "Module",
+        "File",
+        "Interface",
+        "Contract",
+        "Library",
+        "Enum",
+        "Type",
+        "Union",
+    }
     if any(label in code_labels for label in labels):
         return SourceAttribution(
             source=SourceType.CODE_GRAPH,

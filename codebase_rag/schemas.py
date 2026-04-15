@@ -102,28 +102,26 @@ class HealthCheckResult(BaseModel):
 
 
 class JSONEntity(BaseModel):
-    id: str
-    labels: list[str]
-    properties: dict[str, Any]
+    id: str | None = None
+    name: str
+    type: str | None = None
+    labels: list[str] | None = None
     operation: str | None = None
-
-    @field_validator("properties")
-    @classmethod
-    def _validate_properties(cls, v: dict[str, Any]) -> dict[str, Any]:
-        if "name" not in v:
-            raise ValueError("Entity properties must contain 'name' field")
-        if "description" not in v:
-            raise ValueError("Entity properties must contain 'description' field")
-        return v
+    last_updated: str | None = None
+    properties: dict[str, Any] = {}
 
 
 class JSONRelationship(BaseModel):
     id: str | None = None
-    source_entity_id: str
-    target_entity_id: str
-    type: str
-    properties: dict[str, Any] = {}
+    source: str
+    target: str
+    relationship: str
     operation: str | None = None
+    last_updated: str | None = None
+    confidence: float | None = None
+    explanation: str | None = None
+    isInferred: bool | None = None
+    properties: dict[str, Any] = {}
 
 
 class JSONMetadata(BaseModel):

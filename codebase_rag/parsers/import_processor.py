@@ -105,7 +105,6 @@ class ImportProcessor:
         self.import_mapping[module_qn] = {}
 
         try:
-
             from .utils import get_query_captures
 
             captures_dict = get_query_captures(imports_query, root_node)

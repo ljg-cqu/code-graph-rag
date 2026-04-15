@@ -503,7 +503,6 @@ async def _run_agent_response_loop(
             and message_history
             and not deferred_results
         ):
-
             from .utils.token_utils import count_tokens
 
             # Estimate total tokens (history + new question)

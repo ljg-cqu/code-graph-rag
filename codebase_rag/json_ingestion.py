@@ -12,7 +12,7 @@ from tqdm import tqdm
 
 from .config import settings
 from .embedder import EmbeddingCache, get_embedding_provider_instance
-from .schemas import IngestionResult, UpdateResult
+from .schemas import IngestionResult, JSONEntity, JSONRelationship, UpdateResult
 from .services.graph_service import MemgraphIngestor
 from .vector_store import _get_backend as get_vector_store_instance
 
@@ -74,10 +74,34 @@ def validate_json_input(
     """
     Validate JSON input directly against the official ingestion_schema.json.
     NO CONVERSION - data must match schema exactly.
+    Also runs Pydantic type validation for entities and relationships.
     """
     errors = []
     try:
         jsonschema.validate(instance=data, schema=INGESTION_SCHEMA)
+
+        # Validate entities with Pydantic model
+        entities = data.get("entities", [])
+        for i, entity in enumerate(entities):
+            try:
+                JSONEntity(**entity)
+            except Exception as e:
+                errors.append(f"Entity {i} validation failed: {str(e)}")
+
+        # Validate relationships with Pydantic model
+        relationships = data.get("relationships", [])
+        # Handle both array and object format for relationships
+        if isinstance(relationships, dict):
+            relationships = relationships.get("relationships", [])
+        for i, rel in enumerate(relationships):
+            try:
+                JSONRelationship(**rel)
+            except Exception as e:
+                errors.append(f"Relationship {i} validation failed: {str(e)}")
+
+        if errors:
+            return False, None, errors
+
         return True, data, []
     except jsonschema.exceptions.ValidationError as e:
         errors.append(f"Schema validation failed: {str(e)}")
@@ -147,53 +171,6 @@ def generate_embeddings_for_entities(
                 embedding_cache.put(to_generate[idx], emb)
         except Exception as e:
             errors.append(f"Embedding generation failed: {str(e)}")
-
-    return embeddings, errors
-
-
-def generate_embeddings_for_relationships(
-    relationships: list[dict[str, Any]],
-) -> tuple[dict[str, list[float]], list[str]]:
-    """Generate embeddings for relationships (if they have description)."""
-    embeddings = {}
-    errors = []
-
-    texts = []
-    rel_keys = []
-    for rel in relationships:
-        # Create unique key for relationship
-        key = f"{rel['source']}-{rel['target']}-{rel['relationship']}"
-        description = rel.get("properties", {}).get("description", "")
-        if not description:
-            # Fallback to relationship type and entity reference
-            description = (
-                f"{rel['relationship']} between {rel['source']} and {rel['target']}"
-            )
-        text = description
-        texts.append(text)
-        rel_keys.append(key)
-
-    # Check cache first
-    cached_embeddings = embedding_cache.get_batch(texts)
-    to_generate = []
-    to_generate_keys = []
-
-    for i, (text, key) in enumerate(zip(texts, rel_keys)):
-        if cached_embeddings[i] is not None:
-            embeddings[key] = cached_embeddings[i]
-        else:
-            to_generate.append(text)
-            to_generate_keys.append(key)
-
-    # Generate missing embeddings
-    if to_generate:
-        try:
-            generated = embedding_provider.encode_batch(to_generate)
-            for key, emb in zip(to_generate_keys, generated):
-                embeddings[key] = emb
-                embedding_cache.put(to_generate[i], emb)
-        except Exception as e:
-            errors.append(f"Relationship embedding generation failed: {str(e)}")
 
     return embeddings, errors
 
@@ -505,7 +482,7 @@ def delete_dataset(
             # Delete relationships first
             rel_query = """
             MATCH ()-[r]->()
-            WHERE r.source_dataset = $dataset_id
+            WHERE r.dataset_id = $dataset_id
             DELETE r
             RETURN count(r) as deleted
             """
@@ -517,7 +494,7 @@ def delete_dataset(
             # Delete nodes
             node_query = """
             MATCH (n)
-            WHERE n.source_dataset = $dataset_id
+            WHERE n.dataset_id = $dataset_id
             DELETE n
             RETURN count(n) as deleted
             """

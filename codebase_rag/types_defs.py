@@ -494,8 +494,14 @@ NODE_SCHEMAS: tuple[NodeSchema, ...] = (
         NodeLabel.ENUM,
         "{qualified_name: string, name: string, path: string, absolute_path: string}",
     ),
-    NodeSchema(NodeLabel.TYPE, "{qualified_name: string, name: string, path: string, absolute_path: string}"),
-    NodeSchema(NodeLabel.UNION, "{qualified_name: string, name: string, path: string, absolute_path: string}"),
+    NodeSchema(
+        NodeLabel.TYPE,
+        "{qualified_name: string, name: string, path: string, absolute_path: string}",
+    ),
+    NodeSchema(
+        NodeLabel.UNION,
+        "{qualified_name: string, name: string, path: string, absolute_path: string}",
+    ),
     NodeSchema(
         NodeLabel.MODULE_INTERFACE,
         "{qualified_name: string, name: string, path: string, absolute_path: string}",

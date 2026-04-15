@@ -49,7 +49,11 @@ class HybridRetriever:
         self.config = config
 
     def search(self, query: str, top_k: int = 10) -> list[HybridSearchResult]:
-        if not self.vector_backend or not self.embedding_provider or not self.graph_ingestor:
+        if (
+            not self.vector_backend
+            or not self.embedding_provider
+            or not self.graph_ingestor
+        ):
             return []
 
         from ..config import HybridRetrievalConfig
@@ -90,12 +94,17 @@ class HybridRetriever:
             pagerank_score = float(record.get("pagerank_score") or 0.1)
             community_score = float(record.get("community_score") or 0.0)
             graph_score = (
-                (pagerank_score * cfg.pagerank_weight + community_score * cfg.community_weight)
+                (
+                    pagerank_score * cfg.pagerank_weight
+                    + community_score * cfg.community_weight
+                )
                 / graph_weight
                 if graph_weight > 0
                 else pagerank_score
             )
-            combined_score = vector_score * cfg.vector_weight + graph_score * graph_weight
+            combined_score = (
+                vector_score * cfg.vector_weight + graph_score * graph_weight
+            )
             results.append(
                 HybridSearchResult(
                     node_id=node_id,
@@ -115,5 +124,7 @@ class HybridRetriever:
             )
 
         results.sort(key=lambda r: r.combined_score, reverse=True)
-        logger.debug(f"Hybrid search returned {len(results)} results for query: {query[:50]!r}")
+        logger.debug(
+            f"Hybrid search returned {len(results)} results for query: {query[:50]!r}"
+        )
         return results[:top_k]
