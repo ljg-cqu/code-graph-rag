@@ -49,7 +49,8 @@ CYPHER_QUERY_RULES = """**2. Critical Cypher Query Rules**
 - **Traversal optimization**: Use built-in traversal syntax `*BFS`, `*DFS`, `*KSHORTEST` instead of Neo4j's `shortestPath()`/`kShortestPaths()` functions
 - **Type checking**: Use `valueType()` function instead of `IS :: TYPE` type predicate expressions
 - **Query hints**: Add index hints to complex queries to improve performance: e.g., `USING INDEX :Function(qualified_name)`
-- **Parallel execution**: Add `USING PARALLEL EXECUTION` to large analytical queries to leverage multiple CPU cores
+- **Do NOT use parallel execution**: Never add `USING PARALLEL EXECUTION` to queries, it requires enterprise Memgraph license
+- **Do NOT use window functions**: Never use `OVER()` clause or window functions, they are not supported in community Memgraph
 - **Performance best practices**:
   - Use explicit relationship types in matches to reduce scan scope
   - Limit path traversal depth with range patterns `*1..3` to avoid full graph scans

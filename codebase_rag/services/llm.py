@@ -33,6 +33,7 @@ def _clean_cypher_response(response_text: str) -> str:
     - Triple backticks (```cypher ... ```)
     - Bold text (**Cypher Query:**)
     - Headers and other markdown
+    - Removes unsupported features like parallel execution
     """
     query = response_text.strip()
 
@@ -61,6 +62,12 @@ def _clean_cypher_response(response_text: str) -> str:
         if query.lower().startswith(cs.CYPHER_PREFIX):
             query = query[len(cs.CYPHER_PREFIX) :].strip()
 
+    # Remove unsupported parallel execution clause
+    query = query.replace("USING PARALLEL EXECUTION", "").strip()
+    # Remove any leading empty lines left after removing the above
+    while query.startswith("\n"):
+        query = query[1:].strip()
+
     if not query.endswith(cs.CYPHER_SEMICOLON):
         query += cs.CYPHER_SEMICOLON
     return query
@@ -84,6 +91,20 @@ _CYPHER_DANGEROUS_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 
 def _validate_cypher_read_only(query: str) -> None:
     upper_query = query.upper()
+
+    # Block unsupported Memgraph Community features
+    if "OVER(" in upper_query:
+        raise ex.LLMGenerationError(
+            ex.LLM_DANGEROUS_QUERY.format(keyword="OVER() window function", query=query)
+        )
+    if "USING PARALLEL EXECUTION" in upper_query:
+        raise ex.LLMGenerationError(
+            ex.LLM_DANGEROUS_QUERY.format(
+                keyword="USING PARALLEL EXECUTION", query=query
+            )
+        )
+
+    # Block dangerous write operations
     for keyword, pattern in _CYPHER_DANGEROUS_PATTERNS:
         if pattern.search(upper_query):
             raise ex.LLMGenerationError(
