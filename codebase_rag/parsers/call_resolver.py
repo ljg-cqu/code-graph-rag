@@ -254,6 +254,11 @@ class CallResolver:
             logger.debug(ls.CALL_UNRESOLVED, call_name=call_name)
             return None
 
+        possible_matches = self.function_registry.find_ending_with(search_name)
+        if not possible_matches:
+            logger.debug(ls.CALL_UNRESOLVED, call_name=call_name)
+            return None
+
         possible_matches.sort(
             key=lambda qn: self._calculate_import_distance(qn, module_qn)
         )
@@ -537,6 +542,10 @@ class CallResolver:
     def resolve_builtin_call(self, call_name: str) -> tuple[str, str] | None:
         if call_name in cs.JS_BUILTIN_PATTERNS:
             return (cs.NodeLabel.FUNCTION, f"{cs.BUILTIN_PREFIX}.{call_name}")
+
+        # Check for Python builtins and common standard library method calls
+        if call_name in cs.PYTHON_BUILTIN_PATTERNS:
+            return (cs.NodeLabel.FUNCTION, f"{cs.BUILTIN_PREFIX}.python.{call_name}")
 
         for suffix, method in cs.JS_FUNCTION_PROTOTYPE_SUFFIXES.items():
             if call_name.endswith(suffix):

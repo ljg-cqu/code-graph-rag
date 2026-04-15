@@ -158,6 +158,10 @@ class ClassIngestMixin:
             cs.KEY_DOCSTRING: self._get_docstring(class_node),
             cs.KEY_IS_EXPORTED: is_exported,
         }
+        if node_type == nt.NodeType.CONTRACT:
+            class_props[cs.KEY_IS_ABSTRACT] = any(
+                child.type == "abstract" for child in class_node.children
+            )
         if file_path is not None:
             class_props[cs.KEY_PATH] = file_path.relative_to(self.repo_path).as_posix()
             class_props[cs.KEY_ABSOLUTE_PATH] = file_path.resolve().as_posix()

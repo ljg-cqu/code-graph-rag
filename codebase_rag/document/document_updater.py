@@ -1032,8 +1032,8 @@ class DocumentGraphUpdater:
         if not non_empty_chunks:
             logger.warning(
                 f"All chunks in {doc.path} are empty or too small (<{MIN_CHUNK_TOKENS} tokens), "
-                "skipping embedding. Possible causes: missing poppler-utils for PDF text extraction, "
-                "or scanned/image-based PDF that requires OCR to extract text."
+                "skipping embedding. Possible causes: missing pdfplumber/PyPDF2 for PDF text extraction, "
+                "or scanned/image-based PDF that requires OCR to extract text. Install PDF dependencies with: uv add pdfplumber"
             )
             return ([], [])
 

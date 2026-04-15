@@ -501,6 +501,7 @@ class RelationshipType(StrEnum):
     DEFINES_EVENT = "DEFINES_EVENT"
     DEFINES_MODIFIER = "DEFINES_MODIFIER"
     DEFINES_STATE = "DEFINES_STATE"
+    DEFINES_CUSTOM_ERROR = "DEFINES_CUSTOM_ERROR"
     CALLS_DELEGATE = "CALLS_DELEGATE"
     CALLS_STATIC = "CALLS_STATIC"
     READS_STATE = "READS_STATE"
@@ -592,55 +593,55 @@ MATCH (m:Module)
 WHERE m.qualified_name STARTS WITH ($project_name + '.')
 MATCH (m)-[:DEFINES]->(n:Function)
 RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
-       n.start_line AS start_line, n.end_line AS end_line, m.path AS path
+       n.start_line AS start_line, n.end_line AS end_line, n.path AS path
 UNION
 MATCH (m:Module)
 WHERE m.qualified_name STARTS WITH ($project_name + '.')
 MATCH (m)-[:DEFINES]->(c)-[:DEFINES_METHOD]->(n:Method)
 RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
-       n.start_line AS start_line, n.end_line AS end_line, COALESCE(n.path, m.path) AS path
+       n.start_line AS start_line, n.end_line AS end_line, n.path AS path
 UNION
 MATCH (m:Module)
 WHERE m.qualified_name STARTS WITH ($project_name + '.')
 MATCH (m)-[:DEFINES]->(n:Class)
 RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
-       n.start_line AS start_line, n.end_line AS end_line, m.path AS path
+       n.start_line AS start_line, n.end_line AS end_line, n.path AS path
 UNION
 MATCH (m:Module)
 WHERE m.qualified_name STARTS WITH ($project_name + '.')
 MATCH (m)-[:DEFINES]->(n:Interface)
 RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
-       n.start_line AS start_line, n.end_line AS end_line, m.path AS path
+       n.start_line AS start_line, n.end_line AS end_line, n.path AS path
 UNION
 MATCH (m:Module)
 WHERE m.qualified_name STARTS WITH ($project_name + '.')
 MATCH (m)-[:DEFINES]->(n:Contract)
 RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
-       n.start_line AS start_line, n.end_line AS end_line, m.path AS path
+       n.start_line AS start_line, n.end_line AS end_line, n.path AS path
 UNION
 MATCH (m:Module)
 WHERE m.qualified_name STARTS WITH ($project_name + '.')
 MATCH (m)-[:DEFINES]->(n:Library)
 RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
-       n.start_line AS start_line, n.end_line AS end_line, m.path AS path
+       n.start_line AS start_line, n.end_line AS end_line, n.path AS path
 UNION
 MATCH (m:Module)
 WHERE m.qualified_name STARTS WITH ($project_name + '.')
 MATCH (m)-[:DEFINES]->(n:Enum)
 RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
-       n.start_line AS start_line, n.end_line AS end_line, m.path AS path
+       n.start_line AS start_line, n.end_line AS end_line, n.path AS path
 UNION
 MATCH (m:Module)
 WHERE m.qualified_name STARTS WITH ($project_name + '.')
 MATCH (m)-[:DEFINES]->(n:Type)
 RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
-       n.start_line AS start_line, n.end_line AS end_line, m.path AS path
+       n.start_line AS start_line, n.end_line AS end_line, n.path AS path
 UNION
 MATCH (m:Module)
 WHERE m.qualified_name STARTS WITH ($project_name + '.')
 MATCH (m)-[:DEFINES]->(n:Union)
 RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
-       n.start_line AS start_line, n.end_line AS end_line, m.path AS path
+       n.start_line AS start_line, n.end_line AS end_line, n.path AS path
 """
 
 CYPHER_QUERY_PROJECT_NODE_IDS = """
@@ -1569,6 +1570,33 @@ JS_BUILTIN_PATTERNS: frozenset[str] = frozenset(
         "Math.min",
         "Date.now",
         "Date.parse",
+    }
+)
+
+PYTHON_BUILTIN_PATTERNS: frozenset[str] = frozenset(
+    {
+        "dict",
+        "list",
+        "set",
+        "tuple",
+        "str",
+        "int",
+        "float",
+        "bool",
+        "append",
+        "extend",
+        "pop",
+        "remove",
+        "insert",
+        "get",
+        "set",
+        "update",
+        "keys",
+        "values",
+        "items",
+        "join",
+        "split",
+        "strip",
     }
 )
 

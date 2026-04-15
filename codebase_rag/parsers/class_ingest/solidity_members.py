@@ -46,6 +46,7 @@ def _set_path_props(props: PropertyDict, file_path: Path, repo_path: Path) -> No
 def _ingest_event(
     node: Node,
     contract_qn: str,
+    container_label: cs.NodeLabel,
     ingestor: IngestorProtocol,
     file_path: Path | None,
     repo_path: Path,
@@ -82,7 +83,7 @@ def _ingest_event(
     logger.info(logs.SOL_FOUND_EVENT.format(name=name, qn=event_qn))
     ingestor.ensure_node_batch(cs.NodeLabel.EVENT, props)
     ingestor.ensure_relationship_batch(
-        (cs.NodeLabel.CONTRACT, cs.KEY_QUALIFIED_NAME, contract_qn),
+        (container_label, cs.KEY_QUALIFIED_NAME, contract_qn),
         cs.RelationshipType.DEFINES_EVENT,
         (cs.NodeLabel.EVENT, cs.KEY_QUALIFIED_NAME, event_qn),
     )
@@ -124,6 +125,7 @@ def _ingest_modifier(
 def _ingest_state_variable(
     node: Node,
     contract_qn: str,
+    container_label: cs.NodeLabel,
     ingestor: IngestorProtocol,
     file_path: Path | None,
     repo_path: Path,
@@ -168,7 +170,7 @@ def _ingest_state_variable(
     logger.info(logs.SOL_FOUND_STATE_VAR.format(name=name, qn=state_var_qn))
     ingestor.ensure_node_batch(cs.NodeLabel.STATE_VARIABLE, props)
     ingestor.ensure_relationship_batch(
-        (cs.NodeLabel.CONTRACT, cs.KEY_QUALIFIED_NAME, contract_qn),
+        (container_label, cs.KEY_QUALIFIED_NAME, contract_qn),
         cs.RelationshipType.DEFINES_STATE,
         (cs.NodeLabel.STATE_VARIABLE, cs.KEY_QUALIFIED_NAME, state_var_qn),
     )
@@ -177,6 +179,7 @@ def _ingest_state_variable(
 def _ingest_custom_error(
     node: Node,
     contract_qn: str,
+    container_label: cs.NodeLabel,
     ingestor: IngestorProtocol,
     file_path: Path | None,
     repo_path: Path,
@@ -201,8 +204,8 @@ def _ingest_custom_error(
     logger.info(logs.SOL_FOUND_CUSTOM_ERROR.format(name=name, qn=error_qn))
     ingestor.ensure_node_batch(cs.NodeLabel.CUSTOM_ERROR, props)
     ingestor.ensure_relationship_batch(
-        (cs.NodeLabel.CONTRACT, cs.KEY_QUALIFIED_NAME, contract_qn),
-        cs.RelationshipType.REVERTS_WITH,
+        (container_label, cs.KEY_QUALIFIED_NAME, contract_qn),
+        cs.RelationshipType.DEFINES_CUSTOM_ERROR,
         (cs.NodeLabel.CUSTOM_ERROR, cs.KEY_QUALIFIED_NAME, error_qn),
     )
 
@@ -219,15 +222,20 @@ def ingest_solidity_contract_members(
     if not body_node:
         return
 
+    container_label = cs.NodeLabel(contract_type)
     for child in body_node.children:
         match child.type:
             case cs.TS_SOL_EVENT_DEFINITION:
-                _ingest_event(child, contract_qn, ingestor, file_path, repo_path)
+                _ingest_event(
+                    child, contract_qn, container_label, ingestor, file_path, repo_path
+                )
             case cs.TS_SOL_MODIFIER_DEFINITION if contract_type == NodeType.CONTRACT:
                 _ingest_modifier(child, contract_qn, ingestor, file_path, repo_path)
             case cs.TS_SOL_STATE_VARIABLE_DECLARATION:
                 _ingest_state_variable(
-                    child, contract_qn, ingestor, file_path, repo_path
+                    child, contract_qn, container_label, ingestor, file_path, repo_path
                 )
             case cs.TS_SOL_ERROR_DECLARATION:
-                _ingest_custom_error(child, contract_qn, ingestor, file_path, repo_path)
+                _ingest_custom_error(
+                    child, contract_qn, container_label, ingestor, file_path, repo_path
+                )

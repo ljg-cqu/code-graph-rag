@@ -78,21 +78,7 @@ class GraphAlgorithms:
         """
         logger.info("Running PageRank algorithm...")
 
-        # First check if PageRank procedure exists (Enterprise-only feature)
-        check_cypher = """
-        SHOW PROCEDURES YIELD name
-        WHERE name = 'pagerank.get'
-        RETURN count(*) AS count;
-        """
-
         try:
-            check_results = self._execute_query(check_cypher)
-            if not check_results or check_results[0].get("count", 0) == 0:
-                logger.info(
-                    "PageRank procedure not available (Memgraph Community edition), skipping optimization"
-                )
-                return 0
-
             cypher = """
             CALL pagerank.get() YIELD node, rank
             SET node.pagerank_score = rank

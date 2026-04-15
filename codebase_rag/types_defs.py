@@ -476,31 +476,31 @@ NODE_SCHEMAS: tuple[NodeSchema, ...] = (
     ),
     NodeSchema(
         NodeLabel.CLASS,
-        "{qualified_name: string, name: string, decorators: list[string], path: string, absolute_path: string}",
+        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string, is_exported: bool, path: string, absolute_path: string}",
     ),
     NodeSchema(
         NodeLabel.FUNCTION,
-        "{qualified_name: string, name: string, decorators: list[string], path: string, absolute_path: string}",
+        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string, is_exported: bool, path: string, absolute_path: string}",
     ),
     NodeSchema(
         NodeLabel.METHOD,
-        "{qualified_name: string, name: string, decorators: list[string], path: string, absolute_path: string}",
+        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string, path: string, absolute_path: string}",
     ),
     NodeSchema(
         NodeLabel.INTERFACE,
-        "{qualified_name: string, name: string, path: string, absolute_path: string}",
+        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string, is_exported: bool, path: string, absolute_path: string}",
     ),
     NodeSchema(
         NodeLabel.ENUM,
-        "{qualified_name: string, name: string, path: string, absolute_path: string}",
+        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string, is_exported: bool, path: string, absolute_path: string}",
     ),
     NodeSchema(
         NodeLabel.TYPE,
-        "{qualified_name: string, name: string, path: string, absolute_path: string}",
+        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string, is_exported: bool, path: string, absolute_path: string}",
     ),
     NodeSchema(
         NodeLabel.UNION,
-        "{qualified_name: string, name: string, path: string, absolute_path: string}",
+        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string, is_exported: bool, path: string, absolute_path: string}",
     ),
     NodeSchema(
         NodeLabel.MODULE_INTERFACE,
@@ -514,11 +514,11 @@ NODE_SCHEMAS: tuple[NodeSchema, ...] = (
     # Solidity-specific node schemas
     NodeSchema(
         NodeLabel.CONTRACT,
-        "{qualified_name: string, name: string, is_abstract: bool, path: string, absolute_path: string, start_line: int, end_line: int}",
+        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string, is_exported: bool, is_abstract: bool, path: string, absolute_path: string}",
     ),
     NodeSchema(
         NodeLabel.LIBRARY,
-        "{qualified_name: string, name: string, path: string, absolute_path: string, start_line: int, end_line: int}",
+        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string, is_exported: bool, path: string, absolute_path: string}",
     ),
     NodeSchema(
         NodeLabel.EVENT,
@@ -685,7 +685,7 @@ RELATIONSHIP_SCHEMAS: tuple[RelationshipSchema, ...] = (
         (NodeLabel.FUNCTION, NodeLabel.METHOD),
     ),
     RelationshipSchema(
-        (NodeLabel.CONTRACT, NodeLabel.INTERFACE),
+        (NodeLabel.CONTRACT, NodeLabel.INTERFACE, NodeLabel.LIBRARY),
         RelationshipType.DEFINES_EVENT,
         (NodeLabel.EVENT,),
     ),
@@ -695,9 +695,14 @@ RELATIONSHIP_SCHEMAS: tuple[RelationshipSchema, ...] = (
         (NodeLabel.MODIFIER,),
     ),
     RelationshipSchema(
-        (NodeLabel.CONTRACT,),
+        (NodeLabel.CONTRACT, NodeLabel.LIBRARY),
         RelationshipType.DEFINES_STATE,
         (NodeLabel.STATE_VARIABLE,),
+    ),
+    RelationshipSchema(
+        (NodeLabel.CONTRACT, NodeLabel.LIBRARY),
+        RelationshipType.DEFINES_CUSTOM_ERROR,
+        (NodeLabel.CUSTOM_ERROR,),
     ),
     RelationshipSchema(
         (NodeLabel.FUNCTION, NodeLabel.METHOD),
