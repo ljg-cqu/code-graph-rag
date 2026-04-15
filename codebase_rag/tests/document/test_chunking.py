@@ -178,6 +178,37 @@ class TestSemanticDocumentChunker:
         for chunk in chunks:
             assert chunk.token_count > 0
 
+    def test_chunk_section_with_collapsed_line_metadata(self):
+        """Test chunking falls back when section metadata collapses to a header-only span."""
+        chunker = SemanticDocumentChunker(max_tokens=100)
+
+        doc = ExtractedDocument(
+            path="/test/doc.pdf",
+            file_type=".pdf",
+            content="Page 1\nAlpha\nBeta",
+            sections=[
+                ExtractedSection(
+                    title="Page 1",
+                    level=1,
+                    start_line=0,
+                    end_line=0,
+                    content="Alpha\nBeta",
+                    subsections=[],
+                )
+            ],
+            code_blocks=[],
+            code_references=[],
+            word_count=2,
+            modified_date="2024-01-01",
+        )
+
+        chunks = list(chunker.chunk_document(doc))
+
+        assert len(chunks) == 1
+        assert chunks[0].content == "Alpha\nBeta"
+        assert chunks[0].start_line == 0
+        assert chunks[0].end_line == 1
+
 
 class TestTokenCounting:
     """Tests for token counting functionality."""

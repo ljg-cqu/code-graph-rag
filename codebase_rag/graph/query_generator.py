@@ -63,6 +63,30 @@ class MemgraphQueryGenerator:
         finally:
             cursor.close()
 
+    def _is_missing_procedure_error(self, error_message: str) -> bool:
+        return "procedure" in error_message and (
+            "doesn't exist" in error_message
+            or "does not exist" in error_message
+            or "not found" in error_message
+            or "unknown procedure" in error_message
+        )
+
+    def _is_missing_vector_index_error(self, error_message: str) -> bool:
+        missing_index_markers = (
+            "vector index",
+            "index",
+        )
+        missing_markers = (
+            "doesn't exist",
+            "does not exist",
+            "not found",
+            "no such",
+            "missing",
+        )
+        return any(marker in error_message for marker in missing_index_markers) and any(
+            marker in error_message for marker in missing_markers
+        )
+
     def _detect_capabilities(self) -> MemgraphCapabilities:
         """Detect Memgraph version and supported features.
 
@@ -91,8 +115,21 @@ class MemgraphQueryGenerator:
             capabilities.supports_vector_search_procedure = True
             capabilities.supports_vector_search = True
             logger.debug("Memgraph supports vector_search.search() procedure")
-        except Exception:
-            capabilities.supports_vector_search_procedure = False
+        except Exception as e:
+            error_str = str(e).lower()
+            if self._is_missing_vector_index_error(error_str):
+                capabilities.supports_vector_search_procedure = True
+                capabilities.supports_vector_search = True
+                logger.debug(
+                    "Memgraph supports vector_search.search() procedure (probe hit missing test index)"
+                )
+            elif self._is_missing_procedure_error(error_str):
+                capabilities.supports_vector_search_procedure = False
+            else:
+                capabilities.supports_vector_search_procedure = False
+                logger.debug(
+                    f"Unable to confirm vector_search.search() procedure support: {e}"
+                )
 
         # Check direct vector function support
         if not capabilities.supports_vector_search_procedure:

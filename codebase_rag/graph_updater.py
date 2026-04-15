@@ -717,6 +717,8 @@ class GraphUpdater:
                 for pattern, rel_list in worker_ingestor.relationships.items()
             }
 
+            worker_factory.structure_processor.process_generic_file(filepath, filepath.name)
+
             lang_config = get_language_spec(filepath.suffix)
             if (
                 lang_config
@@ -733,58 +735,47 @@ class GraphUpdater:
                     root_node, language = result
                     worker_ast_cache[filepath] = (root_node, language)
 
-                    for label, props in worker_ingestor.nodes[nodes_offset:]:
-                        all_nodes.append(
-                            {
-                                "label": str(label),
-                                "props": dict(props),
-                                "file_path": str(filepath),
-                            }
-                        )
-
                     worker_factory.call_processor.process_calls_in_file(
                         filepath, root_node, language, queries
                     )
-
-                    for (
-                        from_label,
-                        from_key,
-                        rel_type,
-                        to_label,
-                        to_key,
-                    ), rel_list in worker_ingestor.relationships.items():
-                        old_offset = rel_offsets.get(
-                            (from_label, from_key, rel_type, to_label, to_key), 0
-                        )
-                        for rel_data in rel_list[old_offset:]:
-                            all_relationships.append(
-                                {
-                                    "from_label": str(from_label),
-                                    "from_key": from_key,
-                                    "rel_type": rel_type,
-                                    "to_label": str(to_label),
-                                    "to_key": to_key,
-                                    "from_val": rel_data["from_val"],
-                                    "to_val": rel_data["to_val"],
-                                    "props": dict(rel_data.get("props") or {}),
-                                    "file_path": str(filepath),
-                                }
-                            )
 
             elif (
                 filepath.name.lower() in cs.DEPENDENCY_FILES
                 or filepath.suffix.lower() == cs.CSPROJ_SUFFIX
             ):
-                dep_data = worker_factory.definition_processor.process_dependencies(
-                    filepath
+                worker_factory.definition_processor.process_dependencies(filepath)
+
+            for label, props in worker_ingestor.nodes[nodes_offset:]:
+                all_nodes.append(
+                    {
+                        "label": str(label),
+                        "props": dict(props),
+                        "file_path": str(filepath),
+                    }
                 )
-                if dep_data:
-                    all_nodes.append(
+
+            for (
+                from_label,
+                from_key,
+                rel_type,
+                to_label,
+                to_key,
+            ), rel_list in worker_ingestor.relationships.items():
+                old_offset = rel_offsets.get(
+                    (from_label, from_key, rel_type, to_label, to_key), 0
+                )
+                for rel_data in rel_list[old_offset:]:
+                    all_relationships.append(
                         {
-                            "label": "_dependency",
-                            "props": {},
+                            "from_label": str(from_label),
+                            "from_key": from_key,
+                            "rel_type": rel_type,
+                            "to_label": str(to_label),
+                            "to_key": to_key,
+                            "from_val": rel_data["from_val"],
+                            "to_val": rel_data["to_val"],
+                            "props": dict(rel_data.get("props") or {}),
                             "file_path": str(filepath),
-                            "dep_data": dep_data,
                         }
                     )
 

@@ -183,6 +183,10 @@ class SemanticDocumentChunker:
         # Count newlines before the position (0-indexed)
         return content[:position].count("\n")
 
+    def count_tokens(self, text: str) -> int:
+        """Count tokens using the shared document tokenizer."""
+        return count_tokens(text)
+
     def chunk_document(self, doc: ExtractedDocument) -> Iterator[DocumentChunk]:
         """
         Chunk document by semantic boundaries.
@@ -285,38 +289,43 @@ class SemanticDocumentChunker:
             # No subsections - use the section's end_line
             own_content_end = section.end_line
 
-        # Extract only the content specific to this section
+        all_lines = section.content.split("\n")
+        own_content = ""
+        chunk_start = content_start
+        chunk_end = own_content_end
+
         if own_content_end >= content_start:
             own_content_lines = own_content_end - content_start + 1
-            # Split content by lines and take only the "own" portion
-            all_lines = section.content.split("\n")
             own_lines = all_lines[:own_content_lines]
             own_content = "\n".join(own_lines)
+        elif not subsection_starts and section.content.strip():
+            chunk_start = section.start_line
+            chunk_end = max(section.end_line, section.start_line + len(all_lines) - 1)
+            own_content = section.content
 
-            if own_content.strip():
-                tokens = count_tokens(own_content)
+        if own_content.strip():
+            tokens = count_tokens(own_content)
 
-                if tokens <= self.max_tokens:
-                    yield DocumentChunk(
-                        content=own_content,
-                        section_title=section.title,
-                        start_line=content_start,
-                        end_line=own_content_end,
-                        token_count=tokens,
-                        document_path=doc_path,
-                        chunk_index=chunk_counter[0],
-                    )
-                    chunk_counter[0] += 1
-                else:
-                    # Split large sections - helper updates counter
-                    yield from self._split_section_content(
-                        own_content,
-                        section.title,
-                        content_start,
-                        own_content_end,
-                        doc_path,
-                        chunk_counter,
-                    )
+            if tokens <= self.max_tokens:
+                yield DocumentChunk(
+                    content=own_content,
+                    section_title=section.title,
+                    start_line=chunk_start,
+                    end_line=chunk_end,
+                    token_count=tokens,
+                    document_path=doc_path,
+                    chunk_index=chunk_counter[0],
+                )
+                chunk_counter[0] += 1
+            else:
+                yield from self._split_section_content(
+                    own_content,
+                    section.title,
+                    chunk_start,
+                    chunk_end,
+                    doc_path,
+                    chunk_counter,
+                )
 
         # Process subsections and content BETWEEN them
         # Sort subsections by start_line to process in order
@@ -324,8 +333,6 @@ class SemanticDocumentChunker:
 
         # Track the end of the previous subsection to find "between" content
         prev_end = own_content_end if subsection_starts else section.end_line
-        all_lines = section.content.split("\n")
-
         for subsection in sorted_subsections:
             # Check for content between previous content and this subsection
             if subsection.start_line > prev_end + 1:
