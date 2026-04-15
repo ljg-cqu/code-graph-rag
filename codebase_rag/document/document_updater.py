@@ -730,20 +730,24 @@ class DocumentGraphUpdater:
         path_prefix = f"{doc_path}#"
 
         try:
-            # Combined deletion query for all nodes related to this document
-            # This reduces the number of round-trips and is more atomic
             ingestor.execute_write(
                 """
                 MATCH (d:Document {path: $path, workspace: $workspace})
-                OPTIONAL MATCH (d)-[:CONTAINS_SECTION]->(s:Section)
-                OPTIONAL MATCH (d)-[:CONTAINS_CHUNK]->(c:Chunk)
+                    -[:CONTAINS_SECTION]->(s:Section)
                 DETACH DELETE s
+                """,
+                {"path": doc_path, "workspace": workspace},
+            )
+
+            ingestor.execute_write(
+                """
+                MATCH (d:Document {path: $path, workspace: $workspace})
+                    -[:CONTAINS_CHUNK]->(c:Chunk)
                 DETACH DELETE c
                 """,
                 {"path": doc_path, "workspace": workspace},
             )
 
-            # Clean up orphaned sections/chunks by path prefix (handles edge cases)
             ingestor.execute_write(
                 """
                 MATCH (s:Section {workspace: $workspace})

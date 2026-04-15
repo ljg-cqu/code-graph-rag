@@ -104,6 +104,9 @@ class ProtobufFileIngestor:
             return cs.NodeLabel.FUNCTION
 
         if rel_type == cs.REL_TYPE_CALLS:
+            # Skip relationships to builtin functions (not part of indexed codebase)
+            if to_identifier.startswith("builtin."):
+                return
             # For CALLS relationships, try to determine if nodes are methods or functions
             from_label = _get_label(from_identifier)
             to_label = _get_label(to_identifier)

@@ -174,11 +174,8 @@ class DynamicGraphAlgorithms:
     def _full_community_recalculation(self) -> dict:
         """Fallback: Full community detection recalculation."""
         cypher = """
-        CALL graph_algorithms.leiden(
-            "CALLS",
-            "OUTGOING",
-            { community_property: "community_id", weight_property: "weight" }
-        ) YIELD node, community_id
+        CALL leiden_community_detection.get()
+        YIELD node, community_id
         SET node.community_id = community_id
         RETURN community_id, count(node) AS size
         ORDER BY size DESC

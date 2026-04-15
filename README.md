@@ -1159,6 +1159,28 @@ EMBEDDING_PROJECT_ID=your-project-id
 - `GLOBAL_FILE_ACCESS_WRITE_REQUIRES_APPROVAL`: Require explicit approval for write operations outside the project repository (default: `true`)
 - `PARALLEL_INDEXING_WORKERS`: Default number of parallel workers for codebase indexing (default: `20`). Auto-optimized at runtime to never exceed available CPU cores or number of changed files. Set to `1` to disable parallel indexing entirely and run sequentially.
 
+### Logging Configuration
+All logging settings can be configured via environment variables or CLI flags (CLI flags take precedence):
+- `CGR_LOG_TO_FILE`: Enable/disable file logging (default: `true`). Logs are written to a file by default, while only user-facing output appears in the terminal.
+- `CGR_LOG_FILE_PATH`: Custom log file path (default: OS-specific cache directory:
+  - Linux: `~/.cache/cgr/cgr.log`
+  - macOS: `~/Library/Caches/cgr/cgr.log`
+  - Windows: `%LOCALAPPDATA%\cgr\cgr.log`
+)
+- `CGR_LOG_LEVEL`: Log level for file output (DEBUG, INFO, WARNING, ERROR, CRITICAL, default: `INFO`)
+- `CGR_LOG_ROTATION`: Log rotation policy (default: `10 MB`). Supports size values (e.g. `100 MB`, `1 GB`) or time values (e.g. `daily`, `weekly`, `monthly`).
+- `CGR_LOG_RETENTION`: Log retention period (default: `30 days`). Old log files are automatically deleted after this period.
+- `CGR_LOG_COMPRESSION`: Compression format for rotated logs (default: `zip`). Options: `zip`, `gz`, `bz2`, `xz`, `none`.
+- `CGR_LOG_TO_CONSOLE`: Enable/disable internal log output to terminal (default: `false`). Set to `true` to see all internal logs in the terminal (useful for debugging).
+
+#### Global CLI Logging Flags (Applies to All Commands)
+| Flag | Description |
+|------|-------------|
+| `--log-file PATH` | Override default log file path |
+| `--log-level LEVEL` | Set log level (DEBUG, INFO, WARNING, ERROR, CRITICAL) |
+| `--no-log-file` | Disable file logging entirely |
+| `--debug-logs` | Shortcut to enable DEBUG log level + console logging (equivalent to `--log-level DEBUG --log-to-console true`) |
+
 ### Custom Ignore Patterns
 
 You can specify additional directories to exclude by creating a `.cgrignore` file in your repository root:
@@ -1394,7 +1416,8 @@ The resulting binary will be located in the `dist` directory.
 
 ## 🐛 Debugging
 
-1. **Check Memgraph connection**:
+1. **Check logs**: All internal logs are written to the log file by default (see [Logging Configuration](#logging-configuration) for default paths). Use `--debug-logs` flag to enable console logging for real-time troubleshooting.
+2. **Check Memgraph connection**:
    - Ensure Docker containers are running: `docker-compose ps`
    - Verify Memgraph is accessible on port 7687
 

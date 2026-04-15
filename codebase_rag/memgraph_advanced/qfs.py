@@ -50,11 +50,9 @@ class CommunityQFS:
         """
         cypher = """
         // First, ensure communities are detected
-        CALL graph_algorithms.leiden(
-            "CALLS",
-            "OUTGOING",
-            { community_property: "community_id", weight_property: "weight" }
-        ) YIELD node, community_id
+        CALL leiden_community_detection.get()
+        YIELD node, community_id
+        SET node.community_id = community_id
 
         // Collect nodes by community
         WITH community_id, collect(node) AS nodes

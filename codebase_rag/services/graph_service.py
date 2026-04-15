@@ -71,6 +71,8 @@ class MemgraphIngestor:
         "temporarily unavailable",
         "socket",
         "transport",
+        "failed to send chunk data",
+        "failed to send message end marker",
     )
 
     __slots__ = (
@@ -295,9 +297,11 @@ class MemgraphIngestor:
         return settings.MEMGRAPH_RETRY_BASE_DELAY * attempt
 
     def _reset_shared_connection(self) -> None:
-        if self.conn is not None:
+        current_conn = self.conn
+        self.conn = None
+        if current_conn is not None:
             try:
-                self.conn.close()
+                current_conn.close()
             except Exception:
                 pass
         self.conn = self._create_connection()
@@ -309,9 +313,7 @@ class MemgraphIngestor:
         max_attempts: int,
     ) -> bool:
         return (
-            self.conn is not None
-            and attempt < max_attempts
-            and self._is_retryable_memgraph_error(error)
+            attempt < max_attempts and self._is_retryable_memgraph_error(error)
         )
 
     def _execute_query(
@@ -323,6 +325,19 @@ class MemgraphIngestor:
         max_attempts = settings.MEMGRAPH_QUERY_MAX_RETRIES + 1
         for attempt in range(1, max_attempts + 1):
             try:
+                if attempt > 1 and self.conn is None:
+                    try:
+                        self._reset_shared_connection()
+                    except Exception as reconnect_error:
+                        if self._should_retry_shared_connection_error(
+                            reconnect_error, attempt, max_attempts
+                        ):
+                            logger.warning(
+                                f"Transient Memgraph reconnect failure (attempt {attempt}/{max_attempts}), retrying: {reconnect_error}"
+                            )
+                            time.sleep(self._retry_delay_seconds(attempt))
+                            continue
+                        raise
                 with self._get_cursor() as cursor:
                     cursor.execute(query, params)
                     return self._cursor_to_results(cursor)
@@ -331,7 +346,18 @@ class MemgraphIngestor:
                     logger.warning(
                         f"Transient Memgraph query failure (attempt {attempt}/{max_attempts}), reconnecting: {e}"
                     )
-                    self._reset_shared_connection()
+                    try:
+                        self._reset_shared_connection()
+                    except Exception as reconnect_error:
+                        if self._should_retry_shared_connection_error(
+                            reconnect_error, attempt, max_attempts
+                        ):
+                            logger.warning(
+                                f"Transient Memgraph reconnect failure (attempt {attempt}/{max_attempts}), retrying: {reconnect_error}"
+                            )
+                            time.sleep(self._retry_delay_seconds(attempt))
+                            continue
+                        raise
                     time.sleep(self._retry_delay_seconds(attempt))
                     continue
                 if (
@@ -365,28 +391,53 @@ class MemgraphIngestor:
     ) -> None:
         if not params_list:
             return
-        max_attempts = (
-            settings.MEMGRAPH_QUERY_MAX_RETRIES + 1 if conn is self.conn else 1
-        )
-        current_conn = conn
+        use_shared_connection = conn is self.conn
+        max_attempts = settings.MEMGRAPH_QUERY_MAX_RETRIES + 1 if use_shared_connection else 1
         for attempt in range(1, max_attempts + 1):
             cursor = None
             try:
-                cursor = current_conn.cursor()
+                if use_shared_connection:
+                    if attempt > 1 and self.conn is None:
+                        try:
+                            self._reset_shared_connection()
+                        except Exception as reconnect_error:
+                            if self._should_retry_shared_connection_error(
+                                reconnect_error, attempt, max_attempts
+                            ):
+                                logger.warning(
+                                    f"Transient Memgraph reconnect failure (attempt {attempt}/{max_attempts}), retrying: {reconnect_error}"
+                                )
+                                time.sleep(self._retry_delay_seconds(attempt))
+                                continue
+                            raise
+                    with self._get_cursor() as shared_cursor:
+                        shared_cursor.execute(
+                            wrap_with_unwind(query), BatchWrapper(batch=params_list)
+                        )
+                    return
+                cursor = conn.cursor()
                 cursor.execute(wrap_with_unwind(query), BatchWrapper(batch=params_list))
                 return
             except Exception as e:
                 if (
-                    current_conn is self.conn
-                    and self._should_retry_shared_connection_error(
-                        e, attempt, max_attempts
-                    )
+                    use_shared_connection
+                    and self._should_retry_shared_connection_error(e, attempt, max_attempts)
                 ):
                     logger.warning(
                         f"Transient Memgraph batch failure (attempt {attempt}/{max_attempts}), reconnecting: {e}"
                     )
-                    self._reset_shared_connection()
-                    current_conn = self.conn
+                    try:
+                        self._reset_shared_connection()
+                    except Exception as reconnect_error:
+                        if self._should_retry_shared_connection_error(
+                            reconnect_error, attempt, max_attempts
+                        ):
+                            logger.warning(
+                                f"Transient Memgraph reconnect failure (attempt {attempt}/{max_attempts}), retrying: {reconnect_error}"
+                            )
+                            time.sleep(self._retry_delay_seconds(attempt))
+                            continue
+                        raise
                     time.sleep(self._retry_delay_seconds(attempt))
                     continue
                 if ERR_SUBSTR_ALREADY_EXISTS not in str(e).lower():
@@ -413,28 +464,53 @@ class MemgraphIngestor:
     ) -> list[ResultRow]:
         if not params_list:
             return []
-        max_attempts = (
-            settings.MEMGRAPH_QUERY_MAX_RETRIES + 1 if conn is self.conn else 1
-        )
-        current_conn = conn
+        use_shared_connection = conn is self.conn
+        max_attempts = settings.MEMGRAPH_QUERY_MAX_RETRIES + 1 if use_shared_connection else 1
         for attempt in range(1, max_attempts + 1):
             cursor = None
             try:
-                cursor = current_conn.cursor()
+                if use_shared_connection:
+                    if attempt > 1 and self.conn is None:
+                        try:
+                            self._reset_shared_connection()
+                        except Exception as reconnect_error:
+                            if self._should_retry_shared_connection_error(
+                                reconnect_error, attempt, max_attempts
+                            ):
+                                logger.warning(
+                                    f"Transient Memgraph reconnect failure (attempt {attempt}/{max_attempts}), retrying: {reconnect_error}"
+                                )
+                                time.sleep(self._retry_delay_seconds(attempt))
+                                continue
+                            raise
+                    with self._get_cursor() as shared_cursor:
+                        shared_cursor.execute(
+                            wrap_with_unwind(query), BatchWrapper(batch=params_list)
+                        )
+                        return self._cursor_to_results(shared_cursor)
+                cursor = conn.cursor()
                 cursor.execute(wrap_with_unwind(query), BatchWrapper(batch=params_list))
                 return self._cursor_to_results(cursor)
             except Exception as e:
                 if (
-                    current_conn is self.conn
-                    and self._should_retry_shared_connection_error(
-                        e, attempt, max_attempts
-                    )
+                    use_shared_connection
+                    and self._should_retry_shared_connection_error(e, attempt, max_attempts)
                 ):
                     logger.warning(
                         f"Transient Memgraph batch-return failure (attempt {attempt}/{max_attempts}), reconnecting: {e}"
                     )
-                    self._reset_shared_connection()
-                    current_conn = self.conn
+                    try:
+                        self._reset_shared_connection()
+                    except Exception as reconnect_error:
+                        if self._should_retry_shared_connection_error(
+                            reconnect_error, attempt, max_attempts
+                        ):
+                            logger.warning(
+                                f"Transient Memgraph reconnect failure (attempt {attempt}/{max_attempts}), retrying: {reconnect_error}"
+                            )
+                            time.sleep(self._retry_delay_seconds(attempt))
+                            continue
+                        raise
                     time.sleep(self._retry_delay_seconds(attempt))
                     continue
                 logger.error(ls.MG_BATCH_ERROR.format(error=e))
@@ -510,6 +586,9 @@ class MemgraphIngestor:
             return NodeLabel.FUNCTION
 
         if rel_type == REL_TYPE_CALLS:
+            # Skip relationships to builtin functions (not part of indexed codebase)
+            if to_identifier.startswith("builtin."):
+                return
             # For CALLS relationships, try to determine if nodes are methods or functions
             from_label = _get_label(from_identifier)
             to_label = _get_label(to_identifier)
@@ -704,9 +783,9 @@ class MemgraphIngestor:
         if rel_type == REL_TYPE_CALLS:
             failed = len(params_list) - batch_successful
             if failed > 0:
-                logger.warning(ls.MG_CALLS_FAILED.format(count=failed))
+                logger.debug(ls.MG_CALLS_FAILED.format(count=failed))
                 for i, sample in enumerate(params_list[:3]):
-                    logger.warning(
+                    logger.debug(
                         ls.MG_CALLS_SAMPLE.format(
                             index=i + 1,
                             from_label=from_label,

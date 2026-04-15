@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from codebase_rag import constants as cs
+from codebase_rag import exceptions as ex
 from codebase_rag.graph_updater import GraphUpdater
 from codebase_rag.parser_loader import load_parsers
 from codebase_rag.services.graph_service import MemgraphIngestor
@@ -262,6 +263,52 @@ class TestGenerateSemanticEmbeddings:
 
         updater_with_query._generate_semantic_embeddings()
 
+        mock_store_batch.assert_not_called()
+
+    @patch("codebase_rag.graph_updater.has_semantic_dependencies", return_value=True)
+    @patch(
+        "codebase_rag.embedder.embed_code",
+        side_effect=ex.EmbeddingGenerationError(
+            "provider misconfigured",
+            provider="openai",
+            model="text-embedding-v4",
+        ),
+    )
+    @_PATCH_STORE_BATCH
+    @_PATCH_RECONCILE
+    def test_aborts_on_fatal_embedding_error(
+        self,
+        _mock_reconcile: MagicMock,
+        mock_store_batch: MagicMock,
+        mock_embed: MagicMock,
+        _mock_deps: MagicMock,
+        updater_with_query: GraphUpdater,
+        query_ingestor: MagicMock,
+        temp_repo: Path,
+    ) -> None:
+        (temp_repo / "a.py").write_text("def f1():\n    return 1\n")
+        (temp_repo / "b.py").write_text("def f2():\n    return 2\n")
+        rows: list[ResultRow] = [
+            {
+                cs.KEY_NODE_ID: 1,
+                cs.KEY_QUALIFIED_NAME: "proj.a.f1",
+                cs.KEY_START_LINE: 1,
+                cs.KEY_END_LINE: 2,
+                cs.KEY_PATH: "a.py",
+            },
+            {
+                cs.KEY_NODE_ID: 2,
+                cs.KEY_QUALIFIED_NAME: "proj.b.f2",
+                cs.KEY_START_LINE: 1,
+                cs.KEY_END_LINE: 2,
+                cs.KEY_PATH: "b.py",
+            },
+        ]
+        query_ingestor.fetch_all.return_value = rows
+
+        updater_with_query._generate_semantic_embeddings()
+
+        assert mock_embed.call_count == 1
         mock_store_batch.assert_not_called()
 
     @_PATCH_DEPS

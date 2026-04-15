@@ -26,3 +26,4 @@ PROJECT.md
 .pypi_cache.json
 .omc
 site/
+.logs/

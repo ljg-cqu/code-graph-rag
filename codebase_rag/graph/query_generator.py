@@ -109,7 +109,7 @@ class MemgraphQueryGenerator:
         try:
             test_query = """
                 CALL vector_search.search("test_index", 1, [1.0, 2.0])
-                YIELD node, similarity LIMIT 0
+                YIELD node, similarity
             """
             self._run_query(test_query)
             capabilities.supports_vector_search_procedure = True

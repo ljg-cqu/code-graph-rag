@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import sys
+import traceback
 from collections import OrderedDict, defaultdict
 from collections.abc import Callable, ItemsView, KeysView
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -12,6 +13,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from tree_sitter import Language, Node, Parser
 
 from . import constants as cs
+from . import exceptions as ex
 from . import logs as ls
 from .config import settings
 from .language_spec import LANGUAGE_FQN_SPECS, get_language_spec
@@ -250,7 +252,7 @@ def _load_hash_cache(cache_path: Path) -> FileHashCache:
             logger.info(ls.HASH_CACHE_LOADED, count=len(data), path=cache_path)
             return data
     except (json.JSONDecodeError, OSError) as e:
-        logger.warning(ls.HASH_CACHE_LOAD_FAILED, path=cache_path, error=e)
+        logger.warning(ls.HASH_CACHE_LOAD_FAILED, path=cache_path, error=str(e))
     return {}
 
 
@@ -261,7 +263,7 @@ def _save_hash_cache(cache_path: Path, hashes: FileHashCache) -> None:
             json.dump(hashes, f, indent=2)
         logger.info(ls.HASH_CACHE_SAVED, count=len(hashes), path=cache_path)
     except OSError as e:
-        logger.warning(ls.HASH_CACHE_SAVE_FAILED, path=cache_path, error=e)
+        logger.warning(ls.HASH_CACHE_SAVE_FAILED, path=cache_path, error=str(e))
 
 
 class GraphUpdater:
@@ -648,7 +650,14 @@ class GraphUpdater:
 
                     except Exception as e:
                         logger.error(
-                            f"Worker processing failed: {str(e)}", exc_info=True
+                            ls.WORKER_PROCESSING_FAILED.format(
+                                error=str(e),
+                                traceback="".join(
+                                    traceback.format_exception(
+                                        type(e), e, e.__traceback__
+                                    )
+                                ).rstrip(),
+                            )
                         )
 
         deleted_keys = set(old_hashes.keys()) - current_file_keys
@@ -951,6 +960,7 @@ class GraphUpdater:
             expected_ids: set[int] = set()
             batch_buffer: list[tuple[int, list[float], str]] = []
             batch_size = settings.VECTOR_EMBEDDING_BATCH_SIZE
+            fatal_embedding_error: ex.EmbeddingError | None = None
 
             for row in results:
                 parsed = self._parse_embedding_result(row)
@@ -1009,7 +1019,15 @@ class GraphUpdater:
                         )
 
                 except Exception as e:
-                    logger.warning(ls.EMBEDDING_FAILED, name=qualified_name, error=e)
+                    if self._is_fatal_embedding_error(e):
+                        fatal_embedding_error = e
+                        logger.warning(ls.EMBEDDING_GENERATION_FAILED, error=str(e))
+                        break
+                    logger.warning(
+                        ls.EMBEDDING_FAILED,
+                        name=qualified_name,
+                        error=str(e),
+                    )
 
             if batch_buffer:
                 logger.debug(
@@ -1017,6 +1035,11 @@ class GraphUpdater:
                     f"node_ids: {[p[0] for p in batch_buffer]}"
                 )
                 embedded_count += store_embedding_batch(batch_buffer)
+
+            if fatal_embedding_error is not None:
+                get_embedding_cache().save()
+                close_vector_backend()
+                return
 
             logger.info(ls.EMBEDDINGS_COMPLETE, count=embedded_count)
 
@@ -1026,7 +1049,14 @@ class GraphUpdater:
             close_vector_backend()
 
         except Exception as e:
-            logger.warning(ls.EMBEDDING_GENERATION_FAILED, error=e)
+            logger.warning(ls.EMBEDDING_GENERATION_FAILED, error=str(e))
+
+    @staticmethod
+    def _is_fatal_embedding_error(error: Exception) -> bool:
+        return isinstance(error, ex.EmbeddingError) and error.error_code not in {
+            ex.EmbeddingErrorCode.INPUT_VALIDATION,
+            ex.EmbeddingErrorCode.LENGTH_EXCEEDED,
+        }
 
     def _reconcile_embeddings(
         self,

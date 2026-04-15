@@ -34,6 +34,7 @@ from .services.protobuf_service import ProtobufFileIngestor
 from .tools.health_checker import HealthChecker
 from .tools.language import cli as language_cli
 from .types_defs import ResultRow
+from .vector_store_memgraph import MemgraphBackend
 
 app = typer.Typer(
     name=cs.PACKAGE_NAME,
@@ -41,6 +42,109 @@ app = typer.Typer(
     no_args_is_help=True,
     add_completion=False,
 )
+
+# Vector subcommand group
+vector_app = typer.Typer(help="Vector index management commands")
+app.add_typer(vector_app, name="vector")
+
+
+@vector_app.command(
+    "recreate-indexes",
+    help="Recreate vector indexes (use after switching embedding models)",
+)
+def vector_recreate_indexes(
+    dimension: int | None = typer.Option(
+        None,
+        help="New vector dimension (defaults to current embedding model dimension)",
+    ),
+    clear_embeddings: bool = typer.Option(
+        True, help="Clear existing incompatible embeddings during recreation"
+    ),
+    code: bool = typer.Option(True, help="Apply to code graph"),
+    docs: bool = typer.Option(False, help="Apply to document graph"),
+    json: bool = typer.Option(False, help="Apply to JSON graph"),
+):
+    """Recreate vector indexes with correct dimension for your current embedding model."""
+    if not any([code, docs, json]):
+        _error(
+            "You must select at least one graph type to apply to (--code, --docs, --json)"
+        )
+        raise typer.Exit(1)
+
+    if code:
+        _info("Recreating vector indexes for code graph...")
+        vector_store = MemgraphBackend(is_document=False)
+        vector_store.recreate_vector_indexes(
+            new_dimension=dimension, clear_existing_embeddings=clear_embeddings
+        )
+        vector_store.close()
+
+    if docs:
+        _info("Recreating vector indexes for document graph...")
+        vector_store = MemgraphBackend(is_document=True)
+        vector_store.recreate_vector_indexes(
+            new_dimension=dimension, clear_existing_embeddings=clear_embeddings
+        )
+        vector_store.close()
+
+    if json:
+        _info("Recreating vector indexes for JSON graph...")
+        # Create MemgraphBackend pointing to JSON graph instance
+        json_vector_store = MemgraphBackend(is_document=False)
+        # Override connection settings to use JSON graph port
+        json_vector_store._create_connection = lambda: type(
+            "obj",
+            (object,),
+            {
+                "host": settings.JSON_MEMGRAPH_HOST,
+                "port": settings.JSON_MEMGRAPH_PORT,
+                "username": settings.JSON_MEMGRAPH_USERNAME,
+                "password": settings.JSON_MEMGRAPH_PASSWORD,
+                "autocommit": True,
+            },
+        )()
+        # Or simpler: create a separate instance with custom connection
+        # We'll manually create the JSON vector indexes
+        capabilities = json_vector_store.query_generator.capabilities
+        effective_dim = dimension or settings.get_effective_vector_dim()
+
+        # JSON graph only has JsonEntity label for embeddings
+        json_label = "JsonEntity"
+        index_name = f"{json_label.lower()}_embedding_index"
+
+        if clear_embeddings:
+            json_vector_store._execute_query(
+                f"MATCH (n:{json_label}) SET n.embedding = NULL, n.embedding_model = NULL, n.embedding_version = NULL"
+            )
+
+        # Drop existing index
+        try:
+            json_vector_store._execute_query(f"DROP VECTOR INDEX {index_name};")
+        except Exception:
+            pass
+
+        # Create new index
+        if capabilities.supports_vector_index:
+            cypher, params = (
+                json_vector_store.query_generator.generate_vector_index_creation_query(
+                    index_name=index_name,
+                    node_label=json_label,
+                    vector_property="embedding",
+                    vector_dim=effective_dim,
+                    metric=settings.MEMGRAPH_VECTOR_METRIC,
+                    capacity=settings.MEMGRAPH_VECTOR_CAPACITY,
+                )
+            )
+            json_vector_store._execute_query(cypher, params)
+            logger.info(
+                f"Created JSON vector index {index_name} with dimension {effective_dim}"
+            )
+
+        json_vector_store.close()
+
+    _success(
+        "Vector indexes recreated successfully! Reindex your data to generate new compatible embeddings."
+    )
 
 
 def _version_callback(value: bool) -> None:
@@ -346,16 +450,88 @@ def _global_options(
         help="Suppress non-essential output (progress messages, banners, informational logs).",
         is_eager=True,
     ),
+    log_file: str | None = typer.Option(
+        None,
+        "--log-file",
+        help="Override default log file path.",
+        is_eager=True,
+    ),
+    log_level: str | None = typer.Option(
+        None,
+        "--log-level",
+        help="Set log level (DEBUG, INFO, WARNING, ERROR, CRITICAL).",
+        is_eager=True,
+    ),
+    no_log_file: bool = typer.Option(
+        False,
+        "--no-log-file",
+        help="Disable file logging entirely.",
+        is_eager=True,
+    ),
+    debug_logs: bool = typer.Option(
+        False,
+        "--debug-logs",
+        help="Shortcut to enable DEBUG log level and console logging.",
+        is_eager=True,
+    ),
 ) -> None:
     settings.QUIET = quiet
-    if quiet:
-        logger.remove()
-        logger.add(lambda msg: app_context.console.print(msg, end=""), level="ERROR")
+
+    # Apply logging CLI flag overrides
+    if no_log_file:
+        settings.LOG_TO_FILE = False
+    if log_file:
+        settings.LOG_FILE_PATH = log_file
+    if log_level:
+        # Validate and set log level
+        settings.LOG_LEVEL = log_level
+    if debug_logs:
+        settings.LOG_LEVEL = "DEBUG"
+        settings.LOG_TO_CONSOLE = True
+
+    # Remove all existing logger handlers to reconfigure from scratch
+    logger.remove()
+
+    # Add console handler if enabled
+    if settings.LOG_TO_CONSOLE:
+        # In quiet mode, only show ERROR level logs on console
+        console_log_level = "ERROR" if quiet else settings.LOG_LEVEL
+        logger.add(
+            lambda msg: app_context.console.print(msg, end=""),
+            level=console_log_level
+        )
+
+    # Add file handler if enabled
+    if settings.LOG_TO_FILE:
+        log_path = Path(settings.LOG_FILE_PATH)
+        # Create parent directory if it doesn't exist
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        logger.add(
+            str(log_path),
+            level=settings.LOG_LEVEL,
+            rotation=settings.LOG_ROTATION,
+            retention=settings.LOG_RETENTION,
+            compression=settings.LOG_COMPRESSION,
+            enqueue=True,  # Async-safe logging
+        )
+    # If no logging handlers are configured, add a null handler to avoid loguru warnings
+    elif not settings.LOG_TO_CONSOLE:
+        logger.add(lambda _: None)
 
 
 def _info(msg: str) -> None:
     if not settings.QUIET:
         app_context.console.print(msg)
+
+
+def _error(msg: str) -> None:
+    if not settings.QUIET:
+        app_context.console.print(style(msg, cs.Color.RED))
+
+
+def _success(msg: str) -> None:
+    if not settings.QUIET:
+        app_context.console.print(style(msg, cs.Color.GREEN))
 
 
 def _delete_hash_cache(repo_path: Path) -> None:

@@ -120,11 +120,9 @@ class GraphAlgorithms:
                 (
                     "Leiden",
                     """
-                    CALL graph_algorithms.leiden(
-                        "CALLS",
-                        "OUTGOING",
-                        { community_property: "community_id", weight_property: "weight" }
-                    ) YIELD node, community_id
+                    CALL leiden_community_detection.get()
+                    YIELD node, community_id
+                    SET node.community_id = community_id
                     RETURN count(node) AS updated_count;
                     """,
                 )
@@ -133,11 +131,9 @@ class GraphAlgorithms:
             (
                 "Louvain",
                 """
-                CALL graph_algorithms.louvain(
-                    "CALLS",
-                    "OUTGOING",
-                    { community_property: "community_id", weight_property: "weight" }
-                ) YIELD node, community_id
+                CALL community_detection.get()
+                YIELD node, community_id
+                SET node.community_id = community_id
                 RETURN count(node) AS updated_count;
                 """,
             )

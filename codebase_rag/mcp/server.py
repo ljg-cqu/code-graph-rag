@@ -20,11 +20,31 @@ from codebase_rag.types_defs import MCPToolArguments
 
 def setup_logging() -> None:
     logger.remove()
-    logger.add(
-        sys.stderr,
-        level=cs.MCP_LOG_LEVEL_INFO,
-        format=cs.MCP_LOG_FORMAT,
-    )
+
+    # Add console handler if enabled (MCP logs go to stderr to not interfere with stdio transport)
+    if settings.LOG_TO_CONSOLE:
+        logger.add(
+            sys.stderr,
+            level=cs.MCP_LOG_LEVEL_INFO,
+            format=cs.MCP_LOG_FORMAT,
+        )
+
+    # Add file handler if enabled
+    if settings.LOG_TO_FILE:
+        log_path = Path(settings.LOG_FILE_PATH)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        logger.add(
+            str(log_path),
+            level=settings.LOG_LEVEL,
+            rotation=settings.LOG_ROTATION,
+            retention=settings.LOG_RETENTION,
+            compression=settings.LOG_COMPRESSION,
+            enqueue=True,
+        )
+
+    # Add null handler if no logging enabled to avoid warnings
+    if not settings.LOG_TO_CONSOLE and not settings.LOG_TO_FILE:
+        logger.add(lambda _: None)
 
 
 def get_project_root() -> Path:

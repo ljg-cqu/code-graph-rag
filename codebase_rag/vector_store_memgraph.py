@@ -126,54 +126,100 @@ class MemgraphBackend(VectorBackend):
 
         Uses Memgraph's CREATE VECTOR INDEX syntax with required capacity.
         Index is created for each embeddable label (Function, Method, etc.)
+        Automatically recreates indexes if dimension mismatch is detected.
         """
         logger.info(ls.MG_VECTOR_INIT.format(index=settings.MEMGRAPH_VECTOR_INDEX_NAME))
-
+        effective_dim = settings.get_effective_vector_dim()
         capabilities = self.query_generator.capabilities
+
+        # Get existing index info upfront
+        existing_indexes = []
+        try:
+            existing_indexes = self._execute_query("SHOW VECTOR INDEX INFO;")
+        except Exception:
+            pass  # Ignore if command fails (older Memgraph versions without vector support)
+
         for label in self.LABELS_TO_INDEX:
             index_name = f"{label.lower()}_embedding_index"
 
-            try:
-                if capabilities.supports_vector_index:
-                    # Use query generator to create compatible index creation query
-                    cypher, params = (
-                        self.query_generator.generate_vector_index_creation_query(
-                            index_name=index_name,
-                            node_label=label,
-                            vector_property="embedding",
-                            vector_dim=settings.MEMGRAPH_VECTOR_DIM,
-                            metric=settings.MEMGRAPH_VECTOR_METRIC,
+            # Check if index exists and has correct dimension
+            existing_index = next(
+                (i for i in existing_indexes if i.get("index_name") == index_name), None
+            )
+            needs_recreate = False
+
+            if existing_index:
+                current_dim = existing_index.get("dimension")
+                if current_dim != effective_dim:
+                    logger.warning(
+                        f"Vector index {index_name} has dimension {current_dim}, but current embedding model "
+                        f"requires {effective_dim}. Recreating index and clearing old incompatible embeddings..."
+                    )
+                    needs_recreate = True
+
+            # Create index if it doesn't exist or needs recreation
+            if not existing_index or needs_recreate:
+                try:
+                    if capabilities.supports_vector_index:
+                        if needs_recreate:
+                            # Clear embeddings for this label only when recreating due to dimension mismatch
+                            try:
+                                clear_cypher = f"MATCH (n:{label}) SET n.embedding = NULL, n.embedding_model = NULL, n.embedding_version = NULL"
+                                self._execute_query(clear_cypher)
+                                logger.debug(
+                                    f"Cleared old embeddings for {label} nodes"
+                                )
+                            except Exception as e:
+                                logger.warning(
+                                    f"Failed to clear old embeddings for {label} nodes: {e}"
+                                )
+                            # Drop existing index
+                            try:
+                                self._execute_query(f"DROP VECTOR INDEX {index_name};")
+                            except Exception as e:
+                                logger.debug(f"Failed to drop index {index_name}: {e}")
+
+                        # Use query generator to create compatible index creation query
+                        cypher, params = (
+                            self.query_generator.generate_vector_index_creation_query(
+                                index_name=index_name,
+                                node_label=label,
+                                vector_property="embedding",
+                                vector_dim=effective_dim,
+                                metric=settings.MEMGRAPH_VECTOR_METRIC,
+                                capacity=settings.MEMGRAPH_VECTOR_CAPACITY,
+                            )
+                        )
+                        self._execute_query(cypher, params)
+                    else:
+                        # Fallback: no vector index support, just proceed without indexes
+                        logger.debug(
+                            f"Vector index not supported for label {label}, skipping index creation"
+                        )
+                        continue
+
+                    logger.info(
+                        ls.MG_VECTOR_INDEX_CREATED.format(
+                            index=index_name,
+                            label=label,
+                            dim=effective_dim,
                             capacity=settings.MEMGRAPH_VECTOR_CAPACITY,
                         )
                     )
-                    self._execute_query(cypher, params)
-                else:
-                    # Fallback: no vector index support, just proceed without indexes
-                    logger.debug(
-                        f"Vector index not supported for label {label}, skipping index creation"
-                    )
-                    continue
-
-                logger.info(
-                    ls.MG_VECTOR_INDEX_CREATED.format(
-                        index=index_name,
-                        label=label,
-                        dim=settings.MEMGRAPH_VECTOR_DIM,
-                        capacity=settings.MEMGRAPH_VECTOR_CAPACITY,
-                    )
-                )
-            except Exception as e:
-                error_str = str(e).lower()
-                if "already exists" in error_str or "duplicate" in error_str:
-                    logger.info(ls.MG_VECTOR_INDEX_EXISTS.format(index=index_name))
-                else:
-                    logger.error(
-                        ls.MG_VECTOR_INDEX_FAILED.format(
-                            index=index_name,
-                            error=e,
+                except Exception as e:
+                    error_str = str(e).lower()
+                    if "already exists" in error_str or "duplicate" in error_str:
+                        logger.info(ls.MG_VECTOR_INDEX_EXISTS.format(index=index_name))
+                    else:
+                        logger.error(
+                            ls.MG_VECTOR_INDEX_FAILED.format(
+                                index=index_name,
+                                error=e,
+                            )
                         )
-                    )
-                    raise
+                        raise
+            else:
+                logger.info(ls.MG_VECTOR_INDEX_EXISTS.format(index=index_name))
 
         # Check index info
         self._check_index_info()
@@ -210,8 +256,17 @@ class MemgraphBackend(VectorBackend):
             results = self._execute_query(cypher, params)
             return results[0].get("stored", 0) if results else 0
         except Exception as e:
+            error_str = str(e).lower()
+            extra_msg = ""
+            if (
+                "vector index property must have the same number of dimensions"
+                in error_str
+            ):
+                extra_msg = " This is likely due to a dimension mismatch between your embedding model and existing vector indexes. The vector store will automatically fix this on next initialization, or you can run the recreate-indexes command manually."
             logger.warning(
-                ls.EMBEDDING_STORE_FAILED.format(name=qualified_name, error=e)
+                ls.EMBEDDING_STORE_FAILED.format(
+                    name=qualified_name, error=f"{e}{extra_msg}"
+                )
             )
             return 0
 
@@ -568,41 +623,63 @@ class MemgraphBackend(VectorBackend):
         except Exception:
             return False
 
-    def recreate_vector_indexes(self, new_dimension: int) -> None:
+    def recreate_vector_indexes(
+        self, new_dimension: int | None = None, clear_existing_embeddings: bool = True
+    ) -> None:
         """Drop and recreate all vector indexes with new dimension.
 
         This is needed when switching embedding models with different dimensions.
-        WARNING: Existing embeddings will become incompatible after this operation.
 
         Args:
-            new_dimension: New vector dimension for the indexes.
+            new_dimension: New vector dimension for the indexes. Defaults to effective dimension from settings if not provided.
+            clear_existing_embeddings: If True, removes all existing embedding properties from nodes before recreating indexes.
+                This is required when changing dimensions to avoid index creation failures from incompatible old embeddings.
         """
+        if new_dimension is None:
+            new_dimension = settings.get_effective_vector_dim()
         logger.info(f"Recreating vector indexes with dimension {new_dimension}...")
+        capabilities = self.query_generator.capabilities
+
+        if clear_existing_embeddings:
+            logger.info("Clearing all existing embedding properties from nodes...")
+            for label in self.LABELS_TO_INDEX:
+                try:
+                    cypher = f"MATCH (n:{label}) SET n.embedding = NULL, n.embedding_model = NULL, n.embedding_version = NULL"
+                    self._execute_query(cypher)
+                    logger.debug(f"Cleared embeddings for {label} nodes")
+                except Exception as e:
+                    logger.warning(f"Failed to clear embeddings for {label} nodes: {e}")
 
         for label in self.LABELS_TO_INDEX:
             index_name = f"{label.lower()}_embedding_index"
 
-            # Drop existing index (Memgraph doesn't support IF EXISTS)
-            drop_cypher = f"DROP VECTOR INDEX {index_name};"
+            # Drop existing index
             try:
-                self._execute_query(drop_cypher)
+                self._execute_query(f"DROP VECTOR INDEX {index_name};")
                 logger.debug(f"Dropped index {index_name}")
             except Exception as e:
-                # Index may not exist, which is fine
                 logger.debug(f"Could not drop index {index_name}: {e}")
 
-            # Create new index with updated dimension
-            create_cypher = f"""
-            CREATE VECTOR INDEX {index_name}
-            ON :{label}(embedding)
-            WITH CONFIG {{
-                "dimension": {new_dimension},
-                "capacity": {settings.MEMGRAPH_VECTOR_CAPACITY},
-                "metric": "{settings.MEMGRAPH_VECTOR_METRIC}"
-            }};
-            """
+            # Create new index using the same query generator logic as initialize for consistency
             try:
-                self._execute_query(create_cypher)
+                if capabilities.supports_vector_index:
+                    cypher, params = (
+                        self.query_generator.generate_vector_index_creation_query(
+                            index_name=index_name,
+                            node_label=label,
+                            vector_property="embedding",
+                            vector_dim=new_dimension,
+                            metric=settings.MEMGRAPH_VECTOR_METRIC,
+                            capacity=settings.MEMGRAPH_VECTOR_CAPACITY,
+                        )
+                    )
+                    self._execute_query(cypher, params)
+                else:
+                    logger.debug(
+                        f"Vector index not supported for label {label}, skipping index creation"
+                    )
+                    continue
+
                 logger.info(
                     ls.MG_VECTOR_INDEX_CREATED.format(
                         index=index_name,
@@ -612,10 +689,17 @@ class MemgraphBackend(VectorBackend):
                     )
                 )
             except Exception as e:
-                logger.error(f"Failed to create index {index_name}: {e}")
+                logger.error(
+                    ls.MG_VECTOR_INDEX_FAILED.format(
+                        index=index_name,
+                        error=e,
+                    )
+                )
                 raise
 
-        logger.info(f"Vector indexes recreated with dimension {new_dimension}")
+        logger.info(
+            f"Vector indexes recreated successfully with dimension {new_dimension}"
+        )
 
     def add_item(self, id: int, embedding: list[float], metadata: dict) -> None:
         """Add a single entity embedding to the vector store.

@@ -14,6 +14,8 @@ def test_run_community_detection_falls_back_to_louvain() -> None:
         assert algo.run_community_detection() == 4
 
     assert mock_execute.call_count == 2
+    assert "CALL leiden_community_detection.get()" in mock_execute.call_args_list[0].args[0]
+    assert "CALL community_detection.get()" in mock_execute.call_args_list[1].args[0]
 
 
 def test_run_community_detection_skips_missing_procedures() -> None:
@@ -23,10 +25,26 @@ def test_run_community_detection_skips_missing_procedures() -> None:
         algo,
         "_execute_query",
         side_effect=[
-            Exception("There is no procedure named 'graph_algorithms.leiden'."),
-            Exception("There is no procedure named 'graph_algorithms.louvain'."),
+            Exception("There is no procedure named 'leiden_community_detection.get'."),
+            Exception("There is no procedure named 'community_detection.get'."),
         ],
     ) as mock_execute:
         assert algo.run_community_detection() == 0
 
     assert mock_execute.call_count == 2
+
+
+def test_run_community_detection_uses_memgraph_call_syntax() -> None:
+    algo = GraphAlgorithms()
+
+    with patch.object(
+        algo,
+        "_execute_query",
+        return_value=[{"updated_count": 3}],
+    ) as mock_execute:
+        assert algo.run_community_detection() == 3
+
+    assert mock_execute.call_count == 1
+    cypher = mock_execute.call_args.args[0]
+    assert "CALL leiden_community_detection.get()" in cypher
+    assert "weight_property:" not in cypher

@@ -81,6 +81,12 @@ HELP_REPO_PATH_OPTIMIZE = "Path to the repository to optimize"
 HELP_REPO_PATH_WATCH = "Path to the repository to watch."
 HELP_VERSION = "Show the version and exit."
 
+# Logging flags help text
+HELP_LOG_FILE = "Override default log file path"
+HELP_LOG_LEVEL = "Set log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)"
+HELP_NO_LOG_FILE = "Disable file logging entirely"
+HELP_DEBUG_LOGS = "Shortcut to enable DEBUG log level and console logging for troubleshooting"
+
 HELP_DEBOUNCE = "Debounce delay in seconds. Set to 0 to disable debouncing."
 HELP_MAX_WAIT = (
     "Maximum wait time in seconds before forcing an update during continuous edits."

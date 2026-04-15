@@ -153,3 +153,28 @@ def test_store_chunks_with_embeddings_persists_resolved_references(
     assert chunk_call[0][1]["resolved_code_references"] == [
         "proj.auth.authenticate_user"
     ]
+
+
+def test_delete_document_nodes_uses_separate_linear_deletes(tmp_path: Path) -> None:
+    provider = MagicMock()
+
+    with patch(
+        "codebase_rag.document.document_updater.get_embedding_provider",
+        return_value=provider,
+    ):
+        updater = DocumentGraphUpdater("localhost", 7688, tmp_path)
+
+    ingestor = MagicMock()
+
+    updater._delete_document_nodes("docs/guide.md", ingestor)
+
+    assert ingestor.execute_write.call_count == 4
+
+    queries = [call.args[0] for call in ingestor.execute_write.call_args_list]
+
+    assert "CONTAINS_SECTION" in queries[0]
+    assert "CONTAINS_CHUNK" not in queries[0]
+    assert "CONTAINS_CHUNK" in queries[1]
+    assert "CONTAINS_SECTION" not in queries[1]
+    assert "qualified_name STARTS WITH $path_prefix" in queries[2]
+    assert "qualified_name STARTS WITH $path_prefix" in queries[3]

@@ -1,9 +1,21 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal, TypedDict, Unpack
+
+
+def get_default_log_path() -> str:
+    """Get OS-specific default log file path"""
+    if sys.platform == "win32":
+        appdata = os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
+        return str(Path(appdata) / "cgr" / "cgr.log")
+    elif sys.platform == "darwin":
+        return str(Path.home() / "Library" / "Caches" / "cgr" / "cgr.log")
+    else: # Linux/Unix
+        return str(Path.home() / ".cache" / "cgr" / "cgr.log")
 
 from dotenv import load_dotenv
 from loguru import logger
@@ -226,6 +238,7 @@ class AppConfig(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        validate_assignment=True,
     )
 
     MEMGRAPH_HOST: str = "localhost"
@@ -562,6 +575,24 @@ class AppConfig(BaseSettings):
     _active_worker_llms: list[ModelConfig] | None = None
 
     QUIET: bool = Field(False, validation_alias="CGR_QUIET")
+
+    # Logging configuration
+    LOG_TO_FILE: bool = Field(True, validation_alias="CGR_LOG_TO_FILE")
+    LOG_FILE_PATH: str = Field(default_factory=get_default_log_path, validation_alias="CGR_LOG_FILE")
+    LOG_LEVEL: str = Field("INFO", validation_alias="CGR_LOG_LEVEL")
+    LOG_ROTATION: str = Field("10 MB", validation_alias="CGR_LOG_ROTATION")
+    LOG_RETENTION: str = Field("30 days", validation_alias="CGR_LOG_RETENTION")
+    LOG_COMPRESSION: str = Field("zip", validation_alias="CGR_LOG_COMPRESSION")
+    LOG_TO_CONSOLE: bool = Field(False, validation_alias="CGR_LOG_TO_CONSOLE")
+
+    @field_validator("LOG_LEVEL")
+    @classmethod
+    def validate_log_level(cls, v: str) -> str:
+        allowed_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+        upper_v = v.upper()
+        if upper_v not in allowed_levels:
+            raise ValueError(f"Invalid log level '{v}'. Must be one of: {', '.join(allowed_levels)}")
+        return upper_v
 
     # Yolo mode via environment (for MCP server and persistent settings)
     CGR_YOLO_MODE: bool = False
