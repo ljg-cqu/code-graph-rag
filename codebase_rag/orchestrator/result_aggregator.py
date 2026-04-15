@@ -171,8 +171,7 @@ class ResultAggregator:
         # Group results by content topic/entity for conflict detection
         grouped = defaultdict(list)
         for entry in results:
-            # Extract target entity from subtask if available
-            target = entry["subtask"].get(
+            target = entry.get("scope_key") or entry["subtask"].get(
                 "target_entity", entry["subtask"].get("relative_path", "unknown")
             )
             grouped[target].append(entry)
@@ -316,6 +315,9 @@ class ResultAggregator:
         lines.append(
             f"Total execution time: {self.metadata['total_execution_time']:.2f}s"
         )
+        lines.append(f"Worker count: {self.metadata['worker_count']}")
+        lines.append(f"Scheduling: {self.metadata['scheduling_strategy']}")
+        lines.append(f"Dry run: {self.metadata['dry_run']}")
         lines.append("")
 
         # Unresolved conflicts section
@@ -386,6 +388,9 @@ class ResultAggregator:
         lines.append(f"Failed: {self.metadata['failed_subtasks']}")
         lines.append(f"Unresolved conflicts: {self.metadata['unresolved_conflicts']}")
         lines.append(f"Total time: {self.metadata['total_execution_time']:.2f}s")
+        lines.append(f"Worker count: {self.metadata['worker_count']}")
+        lines.append(f"Scheduling: {self.metadata['scheduling_strategy']}")
+        lines.append(f"Dry run: {self.metadata['dry_run']}")
         lines.append("")
 
         if unresolved_conflicts:

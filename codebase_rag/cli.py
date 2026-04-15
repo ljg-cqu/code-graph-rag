@@ -16,6 +16,7 @@ from .graph_updater import GraphUpdater
 from .main import (
     _check_graph_freshness,
     _prompt_for_reindex,
+    ParallelExecutionConfig,
     app_context,
     connect_doc_memgraph,
     connect_memgraph,
@@ -489,9 +490,9 @@ def start(
         min=1,
     ),
     auto_split: bool = typer.Option(
-        False,
-        "--auto-split",
-        help="Automatically split parallelizable tasks into subtasks",
+        settings.CGR_AUTO_SPLIT_ENABLED,
+        "--auto-split/--no-auto-split",
+        help="Enable or disable automatic subtask generation for parallel execution",
     ),
     no_parallel: bool = typer.Option(
         False,
@@ -727,6 +728,15 @@ def start(
                     effective_with_docs = False
 
     # === Start chat session ===
+    parallel_config = ParallelExecutionConfig(
+        worker_count=parallel_workers,
+        auto_split=auto_split,
+        no_parallel=no_parallel,
+        dry_run=parallel_dry_run,
+        scheduling_strategy=scheduling_strategy,
+        doc_workspace=doc_workspace,
+    )
+
     try:
         if ask_agent:
             main_single_query(target_repo_path, effective_batch_size, ask_agent)
@@ -739,10 +749,17 @@ def start(
                     with_docs=effective_with_docs,
                     query_mode=query_mode,
                     doc_workspace=doc_workspace,
+                    parallel_config=parallel_config,
                 )
             )
         else:
-            asyncio.run(main_async(target_repo_path, effective_batch_size))
+            asyncio.run(
+                main_async(
+                    target_repo_path,
+                    effective_batch_size,
+                    parallel_config=parallel_config,
+                )
+            )
     except KeyboardInterrupt:
         app_context.console.print(style(cs.CLI_MSG_APP_TERMINATED, cs.Color.RED))
     except ValueError as e:

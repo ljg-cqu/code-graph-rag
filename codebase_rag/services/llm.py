@@ -244,18 +244,21 @@ class CypherGenerator:
 
 
 def create_rag_orchestrator_with_config(
-    config: ModelConfig, tools: list[Tool]
+    config: ModelConfig,
+    tools: list[Tool],
+    system_prompt: str | None = None,
+    output_type: object | None = None,
 ) -> Agent:
     try:
         llm = _create_provider_model(config)
 
         return Agent(
             model=llm,
-            system_prompt=build_rag_orchestrator_prompt(tools),
+            system_prompt=system_prompt or build_rag_orchestrator_prompt(tools),
             tools=tools,
             retries=settings.AGENT_RETRIES,
             output_retries=settings.ORCHESTRATOR_OUTPUT_RETRIES,
-            output_type=[str, DeferredToolRequests],
+            output_type=output_type or [str, DeferredToolRequests],
         )
     except Exception as e:
         raise ex.LLMGenerationError(ex.LLM_INIT_ORCHESTRATOR.format(error=e)) from e

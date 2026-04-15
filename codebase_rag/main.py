@@ -12,9 +12,9 @@ import uuid
 from collections import deque
 from collections.abc import Coroutine, Generator
 from contextlib import contextmanager
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 from prompt_toolkit import prompt
@@ -112,6 +112,16 @@ YOLO_WARNING = """
 All tool operations will be auto-approved without confirmation.
 Use with caution on production codebases.
 """
+
+
+@dataclass(frozen=True)
+class ParallelExecutionConfig:
+    worker_count: int | None = None
+    auto_split: bool = settings.CGR_AUTO_SPLIT_ENABLED
+    no_parallel: bool = False
+    dry_run: bool = False
+    scheduling_strategy: str = "fifo"
+    doc_workspace: str = "default"
 
 
 def _display_yolo_warning() -> None:
@@ -411,6 +421,7 @@ async def run_optimization_loop(
     language: str,
     tool_names: ConfirmationToolNames,
     reference_document: str | None = None,
+    parallel_config: ParallelExecutionConfig | None = None,
 ) -> None:
     app_context.console.print(cs.UI_OPTIMIZATION_START.format(language=language))
     document_info = (
@@ -441,6 +452,7 @@ async def run_optimization_loop(
         style(cs.PROMPT_YOUR_RESPONSE, cs.Color.CYAN),
         tool_names,
         initial_question,
+        parallel_config=parallel_config,
     )
 
 
@@ -848,7 +860,9 @@ Available modes:
         new_mode = QueryMode(arg)
 
         # Validate mode is available
-        if new_mode != QueryMode.CODE_ONLY and query_router is None:
+        if new_mode != QueryMode.CODE_ONLY and (
+            query_router is None or query_router.doc_graph is None
+        ):
             return current_mode, (
                 f"Mode '{new_mode.value}' requires document graph. "
                 "Restart with --with-docs flag."
@@ -865,6 +879,34 @@ Available modes:
         return current_mode, f"Invalid mode: {arg}. Use /mode help for options."
 
 
+def _has_write_intent(prompt: str) -> bool:
+    write_patterns = [
+        r"\b(create|write|edit|modify|update|delete|remove|refactor|rename|move|implement|fix|patch)\b",
+        r"\badd\b.{0,40}\b(file|files|code|test|tests|function|class|method|doc|docs|documentation|config)\b",
+    ]
+    lowered_prompt = prompt.lower()
+    return any(re.search(pattern, lowered_prompt) for pattern in write_patterns)
+
+
+def _normalize_parallel_config(
+    parallel_config: ParallelExecutionConfig | None,
+) -> ParallelExecutionConfig:
+    normalized = parallel_config or ParallelExecutionConfig()
+    scheduling_strategy = normalized.scheduling_strategy.lower()
+    if scheduling_strategy not in {"fifo", "round-robin"}:
+        raise ValueError(
+            "Invalid scheduling strategy. Use 'fifo' or 'round-robin'."
+        )
+    return ParallelExecutionConfig(
+        worker_count=normalized.worker_count,
+        auto_split=normalized.auto_split,
+        no_parallel=normalized.no_parallel,
+        dry_run=normalized.dry_run,
+        scheduling_strategy=scheduling_strategy,
+        doc_workspace=normalized.doc_workspace,
+    )
+
+
 async def _run_interactive_loop(
     rag_agent: Agent[None, str | DeferredToolRequests],
     message_history: list[ModelMessage],
@@ -875,6 +917,7 @@ async def _run_interactive_loop(
     initial_question: str | None = None,
     query_router: QueryRouter | None = None,
     current_mode: QueryMode | None = None,
+    parallel_config: ParallelExecutionConfig | None = None,
 ) -> None:
     from .shared.query_router import QueryMode
 
@@ -882,11 +925,17 @@ async def _run_interactive_loop(
     if current_mode is None:
         current_mode = QueryMode.CODE_ONLY
 
-    # Initialize automatic concurrency classifier (no user input needed)
+    normalized_parallel_config = _normalize_parallel_config(parallel_config)
     concurrency_classifier = ConcurrencyEligibilityClassifier()
-    # Initialize 10-worker round-robin subagent orchestrator (default config)
-    subagent_orchestrator = SubAgentOrchestrator()
-    task_splitter = TaskSplitter()
+    subagent_orchestrator = SubAgentOrchestrator(
+        worker_count=normalized_parallel_config.worker_count,
+        scheduling_strategy=normalized_parallel_config.scheduling_strategy,
+        repo_path=str(project_root),
+        enable_document_graph=query_router is not None and query_router.doc_graph is not None,
+        query_mode=current_mode,
+        doc_workspace=normalized_parallel_config.doc_workspace,
+    )
+    task_splitter = TaskSplitter(repo_path=str(project_root))
 
     # Set up signal handlers for graceful Ctrl+C handling
     # Note: We use a local flag and nested function because the processing task
@@ -1109,63 +1158,79 @@ async def _run_interactive_loop(
                     question_with_context, project_root
                 )
 
-                # === AUTOMATIC CONCURRENCY DETECTION (NO USER INPUT NEEDED) ===
-                # First check if task is eligible for parallel execution
-                (
-                    eligible,
-                    task_type,
-                    confidence,
-                ) = await concurrency_classifier.is_eligible(question_with_context)
-                use_parallel = eligible
-                parallel_result = None
+                subagent_orchestrator.query_mode = current_mode
 
-                if use_parallel:
-                    app_context.console.print(
-                        style(
-                            f"\n✅ Auto-activating parallel execution: {task_type} (confidence: {confidence:.2f})",
-                            cs.Color.GREEN,
-                        )
-                    )
-                    app_context.console.print(
-                        style(
-                            "🔄 Using 10 workers with round-robin scheduling",
-                            cs.Color.CYAN,
-                        )
-                    )
+                has_write_operations = _has_write_intent(question_with_context)
+                preview_subtasks: list[dict[str, Any]] = []
+                preview_count: int | None = None
 
-                    # Split the task into independent subtasks
-                    subtasks = task_splitter.split_task(
-                        question_with_context, max_subtasks=10
+                if normalized_parallel_config.auto_split:
+                    preview_subtasks = task_splitter.split_task(question_with_context)
+                    preview_count = len(preview_subtasks)
+
+                if normalized_parallel_config.no_parallel:
+                    logger.info("Parallel execution skipped due to explicit sequential override")
+                elif preview_count is not None and preview_count > settings.CGR_PARALLEL_MAX_QUEUE_SIZE:
+                    logger.info(
+                        f"Parallel execution skipped because preview split exceeded queue limit ({preview_count} > {settings.CGR_PARALLEL_MAX_QUEUE_SIZE})"
                     )
-                    app_context.console.print(
-                        style(
-                            f"📋 Split into {len(subtasks)} independent subtasks",
-                            cs.Color.CYAN,
-                        )
+                else:
+                    eligible, task_type, confidence = await concurrency_classifier.is_eligible(
+                        question_with_context,
+                        subtask_count=preview_count,
+                        has_write_operations=has_write_operations,
                     )
 
-                    if len(subtasks) >= 2:
-                        # Execute subtasks in parallel with round-robin workers
-                        aggregator = subagent_orchestrator.execute_tasks(subtasks)
-                        parallel_result = aggregator.consolidate()
-                        app_context.console.print(
-                            style(
-                                f"⚡ Parallel execution completed in {aggregator.metadata['total_execution_time']:.2f}s",
-                                cs.Color.GREEN,
-                            )
+                    if not eligible:
+                        logger.info(
+                            f"Parallel execution skipped: task_type={task_type}, confidence={confidence:.2f}"
                         )
-                        # Add parallel result to context for final response
-                        question_with_context += (
-                            f"\n\n### Parallel Execution Results:\n{parallel_result}"
+                    elif not normalized_parallel_config.auto_split:
+                        logger.info("Parallel execution skipped because auto-splitting is disabled")
+                    elif preview_count is None or preview_count < 2:
+                        logger.info(
+                            f"Parallel execution downgraded to sequential because only {preview_count or 0} safe subtasks were found"
                         )
                     else:
                         app_context.console.print(
                             style(
-                                "⚠️ Not enough subtasks for parallel execution, falling back to sequential",
-                                cs.Color.YELLOW,
+                                f"\n✅ Auto-activating parallel execution: {task_type} (confidence: {confidence:.2f})",
+                                cs.Color.GREEN,
                             )
                         )
-                        use_parallel = False
+                        app_context.console.print(
+                            style(
+                                f"🔄 Using {subagent_orchestrator.dynamic_controller.get_effective_worker_count(normalized_parallel_config.worker_count, preview_count)} workers with {normalized_parallel_config.scheduling_strategy} scheduling",
+                                cs.Color.CYAN,
+                            )
+                        )
+                        app_context.console.print(
+                            style(
+                                f"📋 Split into {preview_count} independent subtasks",
+                                cs.Color.CYAN,
+                            )
+                        )
+
+                        aggregator = subagent_orchestrator.execute_tasks(
+                            preview_subtasks,
+                            dry_run=normalized_parallel_config.dry_run,
+                        )
+                        parallel_result = aggregator.consolidate()
+                        summary_label = "plan generated" if normalized_parallel_config.dry_run else "completed"
+                        app_context.console.print(
+                            style(
+                                f"⚡ Parallel execution {summary_label} in {aggregator.metadata['total_execution_time']:.2f}s",
+                                cs.Color.GREEN,
+                            )
+                        )
+                        context_header = (
+                            "### Parallel Execution Plan"
+                            if normalized_parallel_config.dry_run
+                            else "### Parallel Execution Results"
+                        )
+                        question_with_context += (
+                            f"\n\n{context_header}:\n{parallel_result}"
+                        )
 
                 # Create a task for the agent response loop so it can be cancelled
                 _current_processing_task = asyncio.create_task(
@@ -1214,6 +1279,7 @@ async def run_chat_loop(
     tool_names: ConfirmationToolNames,
     query_router: QueryRouter | None = None,
     current_mode: QueryMode | None = None,
+    parallel_config: ParallelExecutionConfig | None = None,
 ) -> None:
     await _run_interactive_loop(
         rag_agent,
@@ -1224,6 +1290,7 @@ async def run_chat_loop(
         tool_names,
         query_router=query_router,
         current_mode=current_mode,
+        parallel_config=parallel_config,
     )
 
 
@@ -1811,7 +1878,11 @@ def main_single_query(repo_path: str, batch_size: int, question: str) -> None:
         print(response.output)  # noqa: T201
 
 
-async def main_async(repo_path: str, batch_size: int) -> None:
+async def main_async(
+    repo_path: str,
+    batch_size: int,
+    parallel_config: ParallelExecutionConfig | None = None,
+) -> None:
     """Original main_async - unchanged for backward compatibility.
 
     Calls main_unified_async with default parameters.
@@ -1821,6 +1892,7 @@ async def main_async(repo_path: str, batch_size: int) -> None:
         batch_size=batch_size,
         with_docs=False,
         query_mode=QueryMode.CODE_ONLY,
+        parallel_config=parallel_config,
     )
 
 
@@ -1830,6 +1902,7 @@ async def main_unified_async(
     with_docs: bool = False,
     query_mode: QueryMode | None = None,
     doc_workspace: str = "default",
+    parallel_config: ParallelExecutionConfig | None = None,
     _fallback_attempted: bool = False,
 ) -> None:
     """Main async entry point with dual-graph support.
@@ -1900,6 +1973,7 @@ async def main_unified_async(
                     tool_names,
                     query_router=query_router,
                     current_mode=query_mode,
+                    parallel_config=parallel_config,
                 )
 
         except Exception as e:
@@ -1916,6 +1990,7 @@ async def main_unified_async(
                     repo_path,
                     batch_size,
                     with_docs=False,
+                    parallel_config=parallel_config,
                     _fallback_attempted=True,
                 )
             else:
@@ -1936,7 +2011,12 @@ async def main_unified_async(
                 repo_path, ingestor
             )
             await run_chat_loop(
-                rag_agent, [], project_root, tool_names, query_router=query_router
+                rag_agent,
+                [],
+                project_root,
+                tool_names,
+                query_router=query_router,
+                parallel_config=parallel_config,
             )
 
 

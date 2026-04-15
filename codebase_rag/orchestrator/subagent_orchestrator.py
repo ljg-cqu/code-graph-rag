@@ -14,14 +14,12 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from typing import Any
 
 from loguru import logger
-from pydantic_ai import Agent, DeferredToolRequests, Tool
+from pydantic_ai import Agent, Tool
 from rich.console import Console
 
 from codebase_rag.config import ModelConfig, settings
-from codebase_rag.prompts import build_rag_orchestrator_prompt
-from codebase_rag.providers import get_provider_from_config
 from codebase_rag.services.graph_service import MemgraphIngestor
-from codebase_rag.services.llm import CypherGenerator
+from codebase_rag.services.llm import CypherGenerator, create_rag_orchestrator_with_config
 from codebase_rag.shared.query_router import QueryMode, QueryRouter
 from codebase_rag.tools.code_retrieval import CodeRetriever, create_code_retrieval_tool
 from codebase_rag.tools.codebase_query import create_query_tool
@@ -50,6 +48,18 @@ from codebase_rag.tools.semantic_search import (
 
 from .dynamic_concurrency_controller import DynamicConcurrencyController
 from .result_aggregator import ResultAggregator
+
+
+READ_ONLY_SUBAGENT_PROMPT = """
+You are a read-only parallel analysis worker for a codebase RAG system.
+
+Rules:
+- Investigate only the scope described in the user request and any literal file path attached to it.
+- Use only the tools you were given.
+- Do not claim to have modified files, executed shell commands, or applied fixes.
+- Return evidence-based findings only. If a tool fails or no evidence is available, say so plainly.
+- Summaries must stay scoped to the assigned subtask rather than the whole repository.
+""".strip()
 
 
 class ReadOnlySubAgent:
@@ -105,19 +115,15 @@ class ReadOnlySubAgent:
 
             self.cypher_generator = CypherGenerator()
             tools = self._build_tools()
-            provider = get_provider_from_config(self.llm_config)
-            model = provider.create_model(self.llm_config.model_id)
             system_prompt = (
-                "You are a read-only parallel sub-agent. Investigate only your assigned scope, use tools to gather evidence, and summarize only what you can verify. You cannot modify files or execute shell commands.\n\n"
-                f"{build_rag_orchestrator_prompt(tools)}"
+                READ_ONLY_SUBAGENT_PROMPT
+                + "\n\nUse the available graph, file, document, and search tools to gather evidence before answering."
             )
-            self.agent = Agent(
-                model=model,
+            self.agent = create_rag_orchestrator_with_config(
+                self.llm_config,
+                tools,
                 system_prompt=system_prompt,
-                tools=tools,
-                retries=settings.AGENT_RETRIES,
-                output_retries=settings.ORCHESTRATOR_OUTPUT_RETRIES,
-                output_type=[str, DeferredToolRequests],
+                output_type=str,
             )
         except Exception:
             self.shutdown()
@@ -127,7 +133,9 @@ class ReadOnlySubAgent:
         if self.code_graph is None or self.cypher_generator is None:
             raise RuntimeError("Parallel sub-agent dependencies are not initialized")
 
-        code_retriever = CodeRetriever(project_root=self.repo_path, ingestor=self.code_graph)
+        code_retriever = CodeRetriever(
+            project_root=self.repo_path, ingestor=self.code_graph
+        )
         file_reader = FileReader(project_root=self.repo_path)
         directory_lister = DirectoryLister(project_root=self.repo_path)
         document_analyzer = DocumentAnalyzer(
@@ -167,11 +175,7 @@ class ReadOnlySubAgent:
         if self.agent is None:
             raise RuntimeError("Parallel sub-agent was not initialized")
 
-        response = asyncio.run(
-            self.agent.run(subtask.get("prompt", ""), message_history=[])
-        )
-        if isinstance(response.output, DeferredToolRequests):
-            raise RuntimeError("Read-only sub-agent requested an unsupported approval flow")
+        response = asyncio.run(self.agent.run(subtask.get("prompt", ""), message_history=[]))
         if not isinstance(response.output, str):
             return str(response.output)
         return response.output
@@ -473,17 +477,19 @@ class SubAgentOrchestrator:
         """
         start_time = time.time()
         timeout = settings.CGR_SUBAGENT_TIMEOUT
+        task_executor = ThreadPoolExecutor(max_workers=1)
+        future = task_executor.submit(worker.execute, subtask)
 
         try:
-            with ThreadPoolExecutor(max_workers=1) as task_executor:
-                future = task_executor.submit(worker.execute, subtask)
-                result = future.result(timeout=timeout)
-
+            result, _ = future.result(timeout=timeout)
             execution_time = time.time() - start_time
             return result, execution_time
 
         except TimeoutError as e:
+            future.cancel()
             raise TimeoutError(f"Subtask exceeded timeout of {timeout}s") from e
+        finally:
+            task_executor.shutdown(wait=False, cancel_futures=True)
 
     def _handle_shutdown(self, signum, frame):
         """Handle shutdown signals to gracefully terminate all workers."""
@@ -520,9 +526,9 @@ class SubAgentOrchestrator:
         self.worker_count = new_count
 
     def _build_worker_id(self, index: int) -> str:
-        if index < self.dynamic_controller.permanent_base_workers:
+        if index < self.dynamic_controller.default_workers:
             return f"base-{index}"
-        return f"burst-{index - self.dynamic_controller.permanent_base_workers}"
+        return f"burst-{index - self.dynamic_controller.default_workers}"
 
     def _get_available_worker(self) -> SubAgentWorker | None:
         available_workers = [worker for worker in self.workers if not worker.busy]
