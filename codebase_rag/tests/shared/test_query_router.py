@@ -1,6 +1,6 @@
 """Tests for QueryRouter and QueryMode."""
 
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -244,6 +244,37 @@ class TestQueryRouter:
         response = router.query(request)
         assert "not available" in response.answer.lower()
 
+    def test_document_only_includes_resolved_code_references(self):
+        """DOCUMENT_ONLY surfaces resolved code references from document results."""
+        router = QueryRouter(
+            doc_graph=Mock(),
+            doc_vector=Mock(),
+            code_vector=Mock(),
+        )
+        request = QueryRequest(question="auth flow", mode=QueryMode.DOCUMENT_ONLY)
+
+        with patch(
+            "codebase_rag.document.tools.document_search.document_semantic_search",
+            return_value=[
+                {
+                    "document_path": "docs/auth.md",
+                    "section_title": "Authentication",
+                    "content": "Use authenticate_user before session creation.",
+                    "similarity": 0.91,
+                    "chunk_qn": "docs/auth.md#chunk_0",
+                    "chunk_start_line": 12,
+                    "chunk_end_line": 16,
+                    "resolved_code_references": [
+                        "proj.auth.authenticate_user",
+                    ],
+                }
+            ],
+        ):
+            response = router.query(request)
+
+        assert "References:" in response.answer
+        assert "proj.auth.authenticate_user" in response.answer
+
     def test_both_merged_without_graphs(self):
         """BOTH_MERGED handles missing graphs."""
         router = QueryRouter()
@@ -293,3 +324,38 @@ class TestQueryRouterIsolation:
 
         # Response should come from document graph only
         assert response.mode == QueryMode.DOCUMENT_ONLY
+
+    def test_build_document_reference_context_returns_code_sources(self):
+        """Merged mode can expand document references into code sources."""
+        mock_code = Mock()
+        mock_code.fetch_all.return_value = [
+            {
+                "qualified_name": "proj.auth.authenticate_user",
+                "file_path": "src/auth.py",
+                "start_line": 40,
+                "end_line": 68,
+                "labels": ["Function"],
+            }
+        ]
+        router = QueryRouter(
+            code_graph=mock_code,
+            doc_graph=Mock(),
+            code_vector=Mock(),
+            doc_vector=Mock(),
+        )
+
+        summary, sources, warnings = router._build_document_reference_context(
+            [
+                {
+                    "resolved_code_references": [
+                        "proj.auth.authenticate_user",
+                    ]
+                }
+            ]
+        )
+
+        assert warnings == []
+        assert "proj.auth.authenticate_user" in summary
+        assert len(sources) == 1
+        assert sources[0].type == "code"
+        assert sources[0].path == "src/auth.py"

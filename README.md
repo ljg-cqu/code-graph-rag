@@ -1105,7 +1105,7 @@ Code-Graph-RAG supports multiple embedding providers for semantic search:
 - `EMBEDDING_PROVIDER`: Provider name (`local`, `openai`, `google`, `ollama`) - default: `local`
 - `EMBEDDING_MODEL`: Model identifier (e.g., `microsoft/unixcoder-base`, `text-embedding-3-small`, `nomic-embed-text`)
 - `EMBEDDING_API_KEY`: API key for external providers (optional if set via provider-specific env vars)
-- `EMBEDDING_ENDPOINT`: Custom endpoint URL (optional)
+- `EMBEDDING_ENDPOINT`: Custom endpoint or base URL for embedding APIs (optional)
 - `EMBEDDING_DEVICE`: Device for local models (`auto`, `cpu`, `cuda`) - default: `auto`
 - `EMBEDDING_KEEP_ALIVE`: Ollama model keep-alive duration (e.g., `5m`)
 - `EMBEDDING_PROJECT_ID`: Google Cloud project ID (for Vertex AI)
@@ -1117,7 +1117,7 @@ Code-Graph-RAG supports multiple embedding providers for semantic search:
 | Provider | Models | Dimension | API Key Required |
 |----------|--------|-----------|------------------|
 | `local` | `microsoft/unixcoder-base` (default) | 768 | No |
-| `openai` | `text-embedding-3-small`, `text-embedding-3-large` | 1536, 3072 | Yes |
+| `openai` | `text-embedding-3-small`, `text-embedding-3-large`, `text-embedding-v4` | 1536, 3072, 1024 | Yes |
 | `google` | `text-embedding-004`, `embedding-001` | 768 | Yes (GLA) or Service Account (Vertex) |
 | `ollama` | `nomic-embed-text`, `mxbai-embed-large`, etc. | Varies | No |
 

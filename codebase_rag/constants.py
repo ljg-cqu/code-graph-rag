@@ -692,6 +692,37 @@ RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
        n.start_line AS start_line, n.end_line AS end_line, n.path AS path
 """
 
+CYPHER_REPAIR_LEGACY_FUNCTION_DEFINES = """
+MATCH (f:Function)
+WHERE f.qualified_name STARTS WITH ($project_name + '.')
+  AND NOT EXISTS {
+      MATCH (:Module)-[:DEFINES]->(f)
+  }
+  AND NOT EXISTS {
+      MATCH (:Function)-[:DEFINES]->(f)
+  }
+WITH f, split(f.qualified_name, '.') AS parts
+WITH f, parts, last(parts) AS leaf_name
+WHERE size(parts) > 1
+WITH f,
+     substring(
+         f.qualified_name,
+         0,
+         size(f.qualified_name) - size(leaf_name) - 1
+     ) AS parent_qn
+OPTIONAL MATCH (parent_function:Function {qualified_name: parent_qn})
+OPTIONAL MATCH (parent_module:Module {qualified_name: parent_qn})
+WITH f, parent_function, parent_module
+WHERE parent_function IS NOT NULL OR parent_module IS NOT NULL
+FOREACH (_ IN CASE WHEN parent_function IS NOT NULL THEN [1] ELSE [] END |
+    MERGE (parent_function)-[:DEFINES]->(f)
+)
+FOREACH (_ IN CASE WHEN parent_function IS NULL AND parent_module IS NOT NULL THEN [1] ELSE [] END |
+    MERGE (parent_module)-[:DEFINES]->(f)
+)
+RETURN count(f) AS repaired_count
+"""
+
 CYPHER_QUERY_PROJECT_NODE_IDS = """
 MATCH (m:Module)
 WHERE m.qualified_name STARTS WITH ($project_name + '.')

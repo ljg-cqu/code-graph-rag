@@ -140,12 +140,22 @@ class TestOpenAIEmbeddingProvider:
         provider.validate_config()
 
     def test_custom_endpoint(self) -> None:
-        """Should accept custom endpoint."""
+        """Should preserve a full custom embeddings endpoint."""
         provider = get_embedding_provider(
             "openai",
             "text-embedding-3-small",
             api_key="test-key",
             endpoint="https://custom.openai.com/v1/embeddings",
+        )
+        assert provider._endpoint == "https://custom.openai.com/v1/embeddings"
+
+    def test_base_url_endpoint_is_normalized_to_embeddings_path(self) -> None:
+        """Should accept an OpenAI-compatible base URL and append /embeddings."""
+        provider = get_embedding_provider(
+            "openai",
+            "text-embedding-3-small",
+            api_key="test-key",
+            endpoint="https://custom.openai.com/v1",
         )
         assert provider._endpoint == "https://custom.openai.com/v1/embeddings"
 

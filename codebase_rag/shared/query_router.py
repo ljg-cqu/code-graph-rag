@@ -226,6 +226,155 @@ class QueryRouter:
         else:
             raise ValueError(f"Unknown query mode: {request.mode}")
 
+    @staticmethod
+    def _normalize_reference_list(value: object) -> list[str]:
+        if not isinstance(value, list | tuple):
+            return []
+        return [item for item in value if isinstance(item, str) and item]
+
+    def _fetch_document_results(self, request: QueryRequest) -> list[dict]:
+        from ..document.tools.document_search import document_semantic_search
+
+        return document_semantic_search(
+            query=request.question,
+            ingestor=self.doc_graph,
+            vector_backend=self.doc_vector,
+            workspace="default",
+            limit=request.top_k,
+            min_similarity=0.5,
+        )
+
+    def _build_document_response(
+        self,
+        request: QueryRequest,
+        results: list[dict],
+    ) -> QueryResponse:
+        from pathlib import Path
+
+        if not results:
+            return QueryResponse(
+                answer=f"No relevant documents found for: {request.question}",
+                sources=[],
+                mode=request.mode,
+            )
+
+        sources: list[Source] = []
+        answer_parts: list[str] = ["**Relevant Documentation:**\n"]
+
+        for i, result in enumerate(results, 1):
+            doc_path = result.get("document_path", "unknown")
+            section_title = result.get("section_title", "Unknown Section")
+            content = result.get("content", "")
+            similarity = result.get("similarity", 0.0)
+            content_preview = content[:200] + "..." if len(content) > 200 else content
+            resolved_refs = self._normalize_reference_list(
+                result.get("resolved_code_references")
+            )
+
+            answer_parts.append(
+                f"\n{i}. **{section_title}** ({Path(doc_path).name}) [Similarity: {similarity:.2f}]"
+            )
+            answer_parts.append(f"   {content_preview}")
+            if resolved_refs:
+                answer_parts.append(
+                    f"   References: {', '.join(resolved_refs[:3])}"
+                )
+
+            chunk_start_line = result.get("chunk_start_line", 0)
+            chunk_end_line = result.get("chunk_end_line", chunk_start_line)
+            if not isinstance(chunk_start_line, int):
+                chunk_start_line = 0
+            if not isinstance(chunk_end_line, int):
+                chunk_end_line = chunk_start_line
+
+            sources.append(
+                Source(
+                    type="document",
+                    path=doc_path,
+                    node_type="Chunk",
+                    qualified_name=result.get("section_qn")
+                    or result.get("chunk_qn"),
+                    line_range=(chunk_start_line, chunk_end_line),
+                )
+            )
+
+        return QueryResponse(
+            answer="\n".join(answer_parts),
+            sources=sources,
+            mode=request.mode,
+        )
+
+    def _build_document_reference_context(
+        self,
+        document_results: list[dict],
+    ) -> tuple[str, list[Source], list[str]]:
+        if not self.code_graph:
+            return "", [], []
+
+        qualified_names: list[str] = []
+        seen: set[str] = set()
+
+        for result in document_results:
+            for reference in self._normalize_reference_list(
+                result.get("resolved_code_references")
+            ):
+                if reference in seen:
+                    continue
+                seen.add(reference)
+                qualified_names.append(reference)
+
+        if not qualified_names:
+            return "", [], []
+
+        try:
+            rows = self.code_graph.fetch_all(
+                """
+                MATCH (n)
+                WHERE n.qualified_name IN $qualified_names
+                RETURN n.qualified_name AS qualified_name,
+                       coalesce(n.path, 'unknown') AS file_path,
+                       coalesce(n.start_line, 0) AS start_line,
+                       coalesce(n.end_line, 0) AS end_line,
+                       labels(n) AS labels
+                ORDER BY n.qualified_name
+                """,
+                {"qualified_names": qualified_names[:20]},
+            )
+        except Exception as e:
+            return "", [], [f"Cross-graph reference resolution failed: {e}"]
+
+        lines: list[str] = []
+        sources: list[Source] = []
+
+        for row in rows:
+            qualified_name = row.get("qualified_name", "unknown")
+            file_path = row.get("file_path", "unknown")
+            labels = row.get("labels", ["Unknown"])
+            node_type = labels[0] if isinstance(labels, list) and labels else "Unknown"
+            start_line = row.get("start_line", 0)
+            end_line = row.get("end_line", 0)
+
+            if not isinstance(start_line, int):
+                start_line = 0
+            if not isinstance(end_line, int):
+                end_line = start_line
+
+            lines.append(f"- **{qualified_name}** ({node_type}) in {file_path}")
+            sources.append(
+                Source(
+                    type="code",
+                    path=file_path,
+                    node_type=node_type,
+                    qualified_name=qualified_name,
+                    line_range=(start_line, end_line),
+                )
+            )
+
+        if not lines:
+            return "", [], []
+
+        return "\n".join(lines), sources, []
+
     def _query_code_only(self, request: QueryRequest) -> QueryResponse:
         """
         Query CODE graph/vector ONLY.
@@ -390,60 +539,9 @@ class QueryRouter:
 
         logger.info(f"Querying document graph: {request.question}")
 
-        from pathlib import Path
-
-        from ..document.tools.document_search import document_semantic_search
-
-        sources: list[Source] = []
-        answer_parts: list[str] = ["**Relevant Documentation:**\n"]
-
         try:
-            # Use semantic search for document queries
-            results = document_semantic_search(
-                query=request.question,
-                ingestor=self.doc_graph,
-                vector_backend=self.doc_vector,
-                workspace="default",
-                limit=request.top_k,
-                min_similarity=0.5,
-            )
-
-            if not results:
-                return QueryResponse(
-                    answer=f"No relevant documents found for: {request.question}",
-                    sources=[],
-                    mode=request.mode,
-                )
-
-            for i, result in enumerate(results, 1):
-                doc_path = result.get("document_path", "unknown")
-                section_title = result.get("section_title", "Unknown Section")
-                content = result.get("content", "")
-                similarity = result.get("similarity", 0.0)
-
-                # Truncate content for display
-                content_preview = (
-                    content[:200] + "..." if len(content) > 200 else content
-                )
-
-                answer_parts.append(
-                    f"\n{i}. **{section_title}** ({Path(doc_path).name}) [Similarity: {similarity:.2f}]"
-                )
-                answer_parts.append(f"   {content_preview}")
-
-                sources.append(
-                    Source(
-                        type="document",
-                        path=doc_path,
-                        node_type="Chunk",
-                        qualified_name=result.get("section_qn")
-                        or result.get("chunk_qn"),
-                        line_range=(
-                            result.get("chunk_start_line", 0),
-                            result.get("chunk_start_line", 0),
-                        ),
-                    )
-                )
+            results = self._fetch_document_results(request)
+            return self._build_document_response(request, results)
 
         except Exception as e:
             logger.error(f"Document semantic search failed: {e}")
@@ -454,12 +552,6 @@ class QueryRouter:
                 warnings=[f"Search error: {e}"],
             )
 
-        return QueryResponse(
-            answer="\n".join(answer_parts),
-            sources=sources,
-            mode=request.mode,
-        )
-
     def _query_both_merged(self, request: QueryRequest) -> QueryResponse:
         """
         Query BOTH graphs, merge results.
@@ -468,16 +560,46 @@ class QueryRouter:
         """
         code_response = self._query_code_only(request)
         doc_response = self._query_document_only(request)
+        cross_reference_summary = ""
+        cross_reference_sources: list[Source] = []
+        cross_reference_warnings: list[str] = []
+
+        if self.code_graph and self.doc_graph and self.doc_vector:
+            try:
+                document_results = self._fetch_document_results(request)
+                (
+                    cross_reference_summary,
+                    cross_reference_sources,
+                    cross_reference_warnings,
+                ) = self._build_document_reference_context(document_results)
+            except Exception as e:
+                cross_reference_warnings.append(
+                    f"Cross-graph reference expansion failed: {e}"
+                )
 
         # Merge responses
-        merged_sources = code_response.sources + doc_response.sources
-        merged_answer = f"**Code Results:**\n{code_response.answer}\n\n**Document Results:**\n{doc_response.answer}"
+        merged_sources = (
+            code_response.sources + doc_response.sources + cross_reference_sources
+        )
+        merged_answer = (
+            f"**Code Results:**\n{code_response.answer}\n\n"
+            f"**Document Results:**\n{doc_response.answer}"
+        )
+        if cross_reference_summary:
+            merged_answer += (
+                "\n\n**Document References Resolved In Code:**\n"
+                f"{cross_reference_summary}"
+            )
 
         return QueryResponse(
             answer=merged_answer,
             sources=merged_sources,
             mode=request.mode,
-            warnings=code_response.warnings + doc_response.warnings,
+            warnings=(
+                code_response.warnings
+                + doc_response.warnings
+                + cross_reference_warnings
+            ),
         )
 
     def _validate_code_against_doc(self, request: QueryRequest) -> QueryResponse:

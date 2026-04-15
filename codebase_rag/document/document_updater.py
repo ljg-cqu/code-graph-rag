@@ -25,6 +25,7 @@ from .error_handling import (
     ExtractionException,
 )
 from .extractors import ExtractedDocument, ExtractedSection, get_extractor_for_file
+from .utils.reference_extractor import extract_code_references
 from .versioning import ContentVersionTracker, VersionCache
 
 # Workspace must be a safe identifier (alphanumeric, underscore, hyphen)
@@ -123,6 +124,8 @@ class DocumentGraphUpdater:
 
         # Cache supported extensions from config
         self._supported_extensions = set(settings.DOC_SUPPORTED_EXTENSIONS)
+        self._code_reference_qns: set[str] = set()
+        self._code_reference_simple_lookup: dict[str, tuple[str, ...]] = {}
 
     def _is_excluded_path(self, file_path: Path) -> bool:
         return any(
@@ -201,6 +204,7 @@ class DocumentGraphUpdater:
             ingestor.ensure_constraints()
             self._ensure_vector_index(ingestor)
             self._ensure_document_indexes(ingestor)
+            self._refresh_code_reference_index()
             documents = self._collect_documents()
             stats["total_documents"] = len(documents)
 
@@ -305,6 +309,7 @@ class DocumentGraphUpdater:
             await asyncio.to_thread(ingestor.ensure_constraints)
             await asyncio.to_thread(self._ensure_vector_index, ingestor)
             await asyncio.to_thread(self._ensure_document_indexes, ingestor)
+            await asyncio.to_thread(self._refresh_code_reference_index)
             documents = await asyncio.to_thread(self._collect_documents)
             stats["total_documents"] = len(documents)
 
@@ -561,6 +566,83 @@ class DocumentGraphUpdater:
 
         return documents
 
+    def _refresh_code_reference_index(self) -> None:
+        self._code_reference_qns = set()
+        self._code_reference_simple_lookup = {}
+
+        try:
+            with MemgraphIngestor(
+                host=settings.MEMGRAPH_HOST,
+                port=settings.MEMGRAPH_PORT,
+                batch_size=self.batch_size,
+                username=settings.MEMGRAPH_USERNAME,
+                password=settings.MEMGRAPH_PASSWORD,
+            ) as code_ingestor:
+                rows = code_ingestor.fetch_all(
+                    """
+                    MATCH (n)
+                    WHERE n:Function OR n:Method OR n:Class OR n:Module
+                    RETURN n.qualified_name AS qualified_name, n.name AS name
+                    """
+                )
+        except Exception as e:
+            logger.warning(f"Could not load code reference index from code graph: {e}")
+            return
+
+        simple_lookup: dict[str, set[str]] = {}
+
+        for row in rows:
+            qualified_name = row.get("qualified_name")
+            if not isinstance(qualified_name, str) or not qualified_name:
+                continue
+
+            self._code_reference_qns.add(qualified_name)
+
+            simple_name = qualified_name.rsplit(".", 1)[-1]
+            if simple_name:
+                simple_lookup.setdefault(simple_name, set()).add(qualified_name)
+
+            display_name = row.get("name")
+            if isinstance(display_name, str) and display_name:
+                simple_lookup.setdefault(display_name, set()).add(qualified_name)
+
+        self._code_reference_simple_lookup = {
+            name: tuple(sorted(values)) for name, values in simple_lookup.items()
+        }
+
+    def _resolve_code_reference_names(self, reference_names: list[str]) -> list[str]:
+        resolved: list[str] = []
+        seen: set[str] = set()
+
+        for reference_name in reference_names:
+            candidate = reference_name.strip()
+            if not candidate:
+                continue
+
+            resolved_qn: str | None = None
+            if candidate in self._code_reference_qns:
+                resolved_qn = candidate
+            else:
+                matches = self._code_reference_simple_lookup.get(candidate, ())
+                if len(matches) == 1:
+                    resolved_qn = matches[0]
+                else:
+                    simple_name = candidate.rsplit(".", 1)[-1]
+                    simple_matches = self._code_reference_simple_lookup.get(
+                        simple_name, ()
+                    )
+                    if len(simple_matches) == 1:
+                        resolved_qn = simple_matches[0]
+
+            if resolved_qn and resolved_qn not in seen:
+                seen.add(resolved_qn)
+                resolved.append(resolved_qn)
+
+        return resolved
+
+    def _extract_chunk_reference_names(self, content: str) -> list[str]:
+        return [reference.qualified_name for reference in extract_code_references(content)]
+
     def _process_document(
         self,
         file_path: Path,
@@ -591,6 +673,7 @@ class DocumentGraphUpdater:
 
         # Extract content
         doc = extractor.extract(file_path)
+        resolved_code_references = self._resolve_code_reference_names(doc.code_references)
 
         # Generate embeddings BEFORE deleting existing nodes
         # This ensures rollback safety: if embedding fails, old data is preserved
@@ -601,7 +684,11 @@ class DocumentGraphUpdater:
         self._delete_document_nodes(doc.path, ingestor)
 
         # Store document and sections in graph, get section info for chunk matching
-        store_stats, section_info, indexed_at = self._store_document(doc, ingestor)
+        store_stats, section_info, indexed_at = self._store_document(
+            doc,
+            ingestor,
+            resolved_code_references,
+        )
 
         # Store pre-computed chunks with embeddings and section relationships
         chunk_count = self._store_chunks_with_embeddings(
@@ -702,6 +789,7 @@ class DocumentGraphUpdater:
 
         # Async extraction
         doc = await extractor.extract_async(file_path)
+        resolved_code_references = self._resolve_code_reference_names(doc.code_references)
 
         # Generate embeddings BEFORE deleting existing nodes (rollback safety)
         chunks = list(self.chunker.chunk_document(doc))
@@ -712,7 +800,10 @@ class DocumentGraphUpdater:
 
         # Store document and sections (run in thread to avoid blocking)
         store_stats, section_info, indexed_at = await asyncio.to_thread(
-            self._store_document, doc, ingestor
+            self._store_document,
+            doc,
+            ingestor,
+            resolved_code_references,
         )
         chunk_count = await asyncio.to_thread(
             self._store_chunks_with_embeddings,
@@ -733,7 +824,10 @@ class DocumentGraphUpdater:
         return "indexed"
 
     def _store_document(
-        self, doc: ExtractedDocument, ingestor: MemgraphIngestor
+        self,
+        doc: ExtractedDocument,
+        ingestor: MemgraphIngestor,
+        resolved_code_references: list[str],
     ) -> tuple[dict, list[dict], str]:
         """Store document and sections in graph.
 
@@ -788,6 +882,8 @@ class DocumentGraphUpdater:
                 + preamble_count,
                 "code_block_count": len(doc.code_blocks),
                 "code_references": doc.code_references,
+                "resolved_code_references": resolved_code_references,
+                "resolved_code_reference_count": len(resolved_code_references),
                 "word_count": doc.word_count,
                 "modified_date": doc.modified_date,
                 "indexed_at": indexed_at,
@@ -1146,6 +1242,10 @@ class DocumentGraphUpdater:
         fallback_section = section_info[0]
 
         for chunk, embedding in zip(non_empty_chunks, embeddings):
+            chunk_reference_names = self._extract_chunk_reference_names(chunk.content)
+            resolved_chunk_references = self._resolve_code_reference_names(
+                chunk_reference_names
+            )
             ingestor.ensure_node_batch(
                 cs.NodeLabel.CHUNK.value,
                 {
@@ -1156,6 +1256,9 @@ class DocumentGraphUpdater:
                     "section_title": chunk.section_title,
                     "start_line": chunk.start_line,
                     "end_line": chunk.end_line,
+                    "code_references": chunk_reference_names,
+                    "resolved_code_references": resolved_chunk_references,
+                    "resolved_code_reference_count": len(resolved_chunk_references),
                     "embedding": embedding,
                     "indexed_at": indexed_at,
                 },

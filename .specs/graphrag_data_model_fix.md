@@ -1,72 +1,60 @@
 # GraphRAG Data Model & Ingestion Fix Design Specification
 ## Executive Summary
-This spec addresses critical data modeling and ingestion gaps identified across the entire GraphRAG lifecycle (code/doc/JSON ingestion, graph modeling, vector-graph correlation, cross-modal query support). The fixes are fully aligned with the existing codebase structure, leveraging already implemented ingestion pipelines for JSON and documents. The implementation will eliminate data silos, orphan nodes, and disconnect between graph and vector stores, ensuring 100% accurate, context-rich LLM query responses.
+This repository already uses three separate Memgraph backends: the code graph on `MEMGRAPH_HOST`/`MEMGRAPH_PORT`, the document graph on `DOC_MEMGRAPH_HOST`/`DOC_MEMGRAPH_PORT`, and the JSON graph on `JSON_MEMGRAPH_HOST`/`JSON_MEMGRAPH_PORT`. Embeddings are stored directly on graph nodes. The optimal design therefore is not to add embedding nodes, UUID join tables, or direct cross-database edges. The correct fix is to preserve the split-graph architecture, repair legacy graph inconsistencies, and add orchestration metadata that lets the query layer correlate results safely.
 
-### Alignment with Existing Codebase Confirmation
-✅ **Dedicated Memgraph instances already in place**: JSON ingestion uses a separate dedicated Memgraph instance (configured via `JSON_MEMGRAPH_HOST`/`PORT` settings), matching the requirement for separate backends for code, doc, and JSON data
-✅ **Existing JSON ingestion pipeline**: Fully implemented JSON parser, entity/relationship modeling, embedding generation, and vector index support already exists in `codebase_rag/json_ingestion.py`
-✅ **Existing document ingestion pipeline**: Document chunking, parsing, and versioning modules already exist in `codebase_rag/document/`
-✅ **Vector store layer already implemented**: Embedding generation, caching, and vector index infrastructure already exists for all data types
+## Ground Truth Alignment
+- Code ingestion already creates `Project`, `Package`, `Folder`, `File`, `Module`, `Function`, `Class`, and `Method` nodes through `GraphUpdater` and the parser processors.
+- Document ingestion already creates `Document`, `Section`, and `Chunk` nodes through `DocumentGraphUpdater`.
+- JSON ingestion already ingests canonical `metadata/entities/relationships` payloads into a dedicated JSON graph as `JsonEntity` nodes and typed relationships.
+- Code and document vector retrieval already operate on node-owned `embedding` properties; there is no external embedding identity layer to reconcile.
 
-## Identified Issues & Root Causes
-| Issue ID | Issue Description | Root Cause | Business Impact |
-|----------|-------------------|------------|-----------------|
-| 1 | **Missing Document Graph Entities**: 64 .md / 1 .pdf files exist only as raw `File` nodes, no parsed `Document`/`Section`/`Chunk` entities in graph | Document ingestion pipeline only creates raw file nodes, no content parsing, splitting, or graph modeling of unstructured document content | LLM cannot query relationships between documentation and code, no cross-reference between implementation and docs |
-| 2 | **Missing Structured JSON Entities**: 53 .json files exist only as raw `File` nodes, no structured parsing of JSON content into graph entities | JSON ingestion pipeline does not parse JSON schema, objects, fields into graph nodes, no linkage to code that consumes JSON config/data | No visibility into how code uses JSON configuration/inputs, cannot trace config changes to code behavior |
-| 3 | **Massive Orphan Node Problem**: 20,880 disconnected orphan nodes detected (2.3x total known code entity count) | Failed ingestion artifacts / unlinked embedding records are written to graph without relationships to source entities; all 2057 `Function` nodes have no linkage to parent `Module`/`File` nodes | Broken graph structure, query inaccuracies, wasted storage, inability to traverse full code dependency chains |
-| 4 | **Broken Code Entity Relationships**: 100% of `Function` nodes have no parent `Module`/`File` linkage | Tree-sitter parsing/ingestion logic misses relationship creation for top-level functions, only handles class-method relationships | Incomplete code call chain visibility, cannot locate function definitions or trace function usage across files |
-| 5 | **Vector-Graph Complete Disconnect**: 0 entities have linked embedding/vector properties, no dedicated embedding nodes linked to graph entities | Embedding generation pipeline writes vectors to separate vector store without foreign key linkage to corresponding graph entities | Graph queries cannot leverage semantic similarity, vector search cannot pull related graph context, GraphRAG loses all combined graph+vector benefits |
-| 6 | **Missing Cross-Modal Relationships**: 0 relationships between code entities <-> doc files, code entities <-> JSON files | Ingestion pipeline does not generate cross-reference relationships (e.g., "Function X references config field Y in config.json", "Class Z is documented in docs/architecture.md") | LLM cannot correlate code, docs, and config data, leading to incomplete answers without full context |
+## Root-Cause Gaps
+| ID | Gap | Current State | Root Cause | Required Fix |
+|----|-----|---------------|------------|--------------|
+| 1 | Legacy code graphs can still contain `Function` nodes without incoming `DEFINES` relationships. | Current ingestion creates parent relationships, but old data is not repaired automatically. | Historical ingestion drift and partial re-indexes. | Add an idempotent post-ingestion repair query scoped to the current project. |
+| 2 | Document extraction finds code references, but indexing stores only raw reference text on `Document` nodes. | `Chunk` nodes do not carry resolved code metadata, so semantic document hits cannot bridge back into code. | No resolution step against the code graph during document indexing. | Build a code reference index from the code graph and persist resolved references on documents and chunks. |
+| 3 | `BOTH_MERGED` mode merges code and document answers, but does not expand document hits into referenced code entities. | The query layer ignores document-side reference metadata. | The merged response has no code-context bridge from document chunks. | Expose resolved references in document search results and append code context by `qualified_name` lookup. |
+| 4 | `validate_ingestion_quality` accepts multi-label input but emits invalid Memgraph syntax. | `GraphUpdater.run()` passes `Function|Method|Class`, which produces `MATCH (n:Function|Method|Class)` in the health checker. | Validation drift from Memgraph query constraints already enforced elsewhere in the repo. | Convert label expressions to `ANY(label IN labels(n) ...)` filters. |
+| 5 | The original spec assumed arbitrary JSON object decomposition into `JSONObject` / `JSONField` / `JSONValue` nodes. | The shipped JSON pipeline intentionally models canonical entity/relationship datasets in a dedicated JSON graph. | Spec mismatch, not an implementation bug. | Keep the current JSON data model unless product requirements explicitly change. |
 
-## Optimal Fixing Approach
-The fix is implemented in 5 non-breaking phases, with backward compatibility for existing correctly ingested entities:
-1. **Cleanup Phase**: Remove all orphan nodes that are not linked to any valid source entity, deduplicate existing nodes
-2. **Code Model Fix Phase**: Patch ingestion to create parent relationships for all `Function` nodes to their containing `Module`/`File`
-3. **Document Ingestion Overhaul**: Implement document parsing, chunking, and graph modeling pipeline with automatic cross-reference to code entities
-4. **JSON Ingestion Overhaul**: Implement structured JSON parsing pipeline that creates entities for JSON objects/fields, with relationships to code entities that consume the JSON
-5. **Vector-Graph Correlation Layer**: Add bidirectional linkage between graph entities and vector embeddings, with shared unique ID mapping across graph and vector stores
+## Implemented Design
+### 1. Code Graph Repair
+- Add an idempotent repair pass after code ingestion flushes to Memgraph.
+- For each `Function` without an incoming `DEFINES`, derive the parent from `qualified_name`.
+- Reattach to a parent `Function` when the function is nested, otherwise to the containing `Module`.
+- Scope the repair by `project_name` so unrelated projects are untouched.
 
-## Implementation Roadmap
-### Phase 1: Orphan Node Cleanup (1 story point)
-- Run graph query to delete all 20,880 orphan nodes that have no incoming/outgoing relationships and are not valid code/doc/JSON entities
-- Add ingestion guardrail to reject writing nodes to graph without at least one relationship to a valid existing entity
+### 2. Document-to-Code Bridge Metadata
+- Load a code reference index from the code graph using existing `qualified_name` and `name` properties.
+- Resolve only unambiguous references.
+- Persist on `Document` nodes:
+  - `code_references`
+  - `resolved_code_references`
+  - `resolved_code_reference_count`
+- Persist the same metadata on `Chunk` nodes so semantic document hits can bridge back to code at retrieval time.
 
-### Phase 2: Code Entity Relationship Fix (2 story points)
-- Patch Tree-sitter ingestion logic to create `DEFINES` relationship between parent `Module`/`File` nodes and all top-level `Function` nodes defined in the module/file
-- Backfill missing relationships for all existing 2057 orphan `Function` nodes
+### 3. Query Orchestration
+- Extend document search results to return resolved code references and chunk end lines.
+- In `DOCUMENT_ONLY`, surface resolved code references as document metadata without querying the code graph.
+- In `BOTH_MERGED`, look up the resolved `qualified_name` values in the code graph and append the referenced code entities as explicit cross-graph context.
 
-### Phase 3: Document Ingestion Pipeline (3 story points)
-- Add unstructured document parser for .md/.pdf files: split into `Document` (root per file), `Section` (per heading), `Chunk` (per 512-token semantic chunk) nodes
-- Add NER-based cross-reference logic: detect mentions of code entities (function/class names) in document chunks, create `DOCUMENTS` relationship between chunk and mentioned code entity
-- Ingest all existing 65 document files into the graph with full relationships
+### 4. Validation
+- Fix ingestion quality checks to support multi-label validation without invalid Cypher syntax.
+- Continue using node-owned embeddings. No `HAS_EMBEDDING` nodes, UUID joins, or separate embedding records are introduced.
 
-### Phase 4: Structured JSON Ingestion Pipeline (3 story points)
-- Add JSON parser that creates `JSONObject`, `JSONField`, `JSONValue` nodes per JSON file, with `CONTAINS` relationships between nested JSON entities
-- Add cross-reference logic: detect references to JSON fields/paths in code, create `USES_CONFIG` relationship between code entity and corresponding `JSONField` node
-- Ingest all existing 53 JSON files into the graph with full relationships
-
-### Phase 5: Vector-Graph Correlation (2 story points)
-- Add shared UUID field for all graph entities that is used as the primary key in the vector store
-- For every chunk/entity with an embedding, add `HAS_EMBEDDING` relationship from graph entity to embedding record, store embedding ID as property on the graph entity
-- Add query orchestration layer that automatically joins vector search results with graph traversal:
-  1. Run semantic vector search to get relevant entity UUIDs
-  2. Fetch full entity context and related entities from graph using UUIDs
-  3. Pass combined structured graph context + unstructured chunk content to LLM for answer generation
+## Non-Goals
+- No direct `REFERENCES_CODE` edges between the document graph and the code graph, because those graphs live in separate Memgraph instances.
+- No separate embedding nodes or shared UUID mapping layer.
+- No arbitrary JSON object decomposition for the canonical JSON ingestion payload format.
 
 ## Validation & Success Criteria
-All fixes are validated against these mandatory pass criteria:
-1. 0 orphan nodes in the graph post-cleanup
-2. 100% of `Function` nodes have valid parent `Module`/`File` relationships
-3. 100% of .md/.pdf files have corresponding `Document` entities with at least 1 `Chunk` child node
-4. 100% of .json files have corresponding `JSONObject` root entities
-5. Minimum 90% of cross-reference relationships between code<->doc, code<->JSON are correctly generated
-6. 100% of entities with embeddings have valid linkage between graph entity and vector store record
-7. Cross-modal queries (e.g. "What configuration options are used by the authentication function and where are they documented?") return complete, accurate results
+1. A code re-index repairs legacy missing `Module` / `Function` -> `DEFINES` -> `Function` relationships for the indexed project.
+2. Document and chunk nodes retain both raw references and resolved code qualified names when resolution is unambiguous.
+3. Document semantic search returns resolved code references alongside chunk content and line metadata.
+4. `BOTH_MERGED` mode surfaces code context referenced by matching document chunks.
+5. Ingestion quality checks run without invalid multi-label Cypher.
 
-## Query Strategy Optimization
-The optimized query execution flow for LLM responses:
-1. For user query, first run semantic vector search across all embedded entities to get top 10 relevant matches
-2. Traverse graph 2 levels deep from each matched entity to pull all related context (dependencies, documentation, config references)
-3. Fetch raw source file content for entities where additional implementation context is needed
-4. Synthesize all context into a single prompt for LLM, ensuring full context coverage without missing relevant data
-5. Return answer with citations to all source entities and files used
+## Rollout
+1. Re-index the code graph once to apply the legacy relationship repair pass.
+2. Re-index documents to populate resolved code reference metadata on `Document` and `Chunk` nodes.
+3. Use merged query mode for cross-modal investigation. JSON ingestion remains unchanged.

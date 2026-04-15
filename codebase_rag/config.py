@@ -407,9 +407,9 @@ class AppConfig(BaseSettings):
     EMBEDDING_PROVIDER: str = "local"  # Options: local, openai, google, ollama
     EMBEDDING_MODEL: str = "microsoft/unixcoder-base"
     EMBEDDING_API_KEY: str | None = None
-    EMBEDDING_ENDPOINT: str | None = None  # Custom endpoint URL
+    EMBEDDING_ENDPOINT: str | None = None  # Custom endpoint or base URL
     EMBEDDING_BASE_URL: str | None = (
-        None  # Alias for EMBEDDING_ENDPOINT (OpenAI-compatible APIs)
+        None  # Alias for EMBEDDING_ENDPOINT (OpenAI-compatible APIs, root or /embeddings URL)
     )
     EMBEDDING_KEEP_ALIVE: str | None = (
         None  # Ollama: keep model loaded duration (e.g., "5m")

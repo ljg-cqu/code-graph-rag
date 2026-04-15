@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 from loguru import logger
 
+from codebase_rag import constants as cs
 from codebase_rag.graph_updater import GraphUpdater
 from codebase_rag.parser_loader import load_parsers
 from codebase_rag.services.graph_service import MemgraphIngestor
@@ -92,3 +93,15 @@ class TestReconcileEmbeddings:
 
         combined = "\n".join(log_messages)
         assert "20 of 20 embeddings missing" in combined
+
+
+class TestLegacyFunctionParentRepair:
+    def test_repairs_with_project_scoped_query(self, updater: GraphUpdater) -> None:
+        updater.ingestor.fetch_all.return_value = [{"repaired_count": 2}]
+
+        updater._repair_legacy_function_parent_relationships()
+
+        updater.ingestor.fetch_all.assert_called_once_with(
+            cs.CYPHER_REPAIR_LEGACY_FUNCTION_DEFINES,
+            {cs.KEY_PROJECT_NAME: updater.project_name},
+        )

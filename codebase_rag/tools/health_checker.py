@@ -18,6 +18,11 @@ class HealthChecker:
     def __init__(self):
         self.results: list[HealthCheckResult] = []
 
+    @staticmethod
+    def _parse_label_expression(label_expression: str) -> list[str]:
+        labels = [label.strip() for label in label_expression.split("|") if label.strip()]
+        return labels or [label_expression]
+
     def check_docker(self) -> HealthCheckResult:
         try:
             result = subprocess.run(
@@ -521,6 +526,8 @@ class HealthChecker:
         if vector_dim is None:
             vector_dim = settings.get_effective_vector_dim()
 
+        embedded_labels = self._parse_label_expression(embedded_node_label)
+
         try:
             conn = mgclient.connect(
                 host=settings.MEMGRAPH_HOST,
@@ -599,13 +606,24 @@ class HealthChecker:
                 )
 
             # 3. Check missing embeddings
-            cursor.execute(f"""
-                MATCH (n:{embedded_node_label})
-                WHERE n.{embedding_property} IS NULL
+            cursor.execute(
+                f"""
+                MATCH (n)
+                WHERE ANY(label IN labels(n) WHERE label IN $embedded_labels)
+                  AND n.{embedding_property} IS NULL
                 RETURN count(n) AS count
-            """)
+            """,
+                {"embedded_labels": embedded_labels},
+            )
             missing_embeddings_count = cursor.fetchone()[0]
-            cursor.execute(f"MATCH (n:{embedded_node_label}) RETURN count(n) AS count")
+            cursor.execute(
+                """
+                MATCH (n)
+                WHERE ANY(label IN labels(n) WHERE label IN $embedded_labels)
+                RETURN count(n) AS count
+            """,
+                {"embedded_labels": embedded_labels},
+            )
             embedded_node_count = cursor.fetchone()[0]
             missing_embeddings_passed = missing_embeddings_count == 0
             results.append(
@@ -627,12 +645,16 @@ class HealthChecker:
 
             # 4. Check invalid embeddings dimension
             if missing_embeddings_count < embedded_node_count:
-                cursor.execute(f"""
-                    MATCH (n:{embedded_node_label})
-                    WHERE n.{embedding_property} IS NOT NULL
+                cursor.execute(
+                    f"""
+                    MATCH (n)
+                    WHERE ANY(label IN labels(n) WHERE label IN $embedded_labels)
+                      AND n.{embedding_property} IS NOT NULL
                     RETURN size(n.{embedding_property}) AS dim
                     LIMIT 1
-                """)
+                """,
+                    {"embedded_labels": embedded_labels},
+                )
                 result = cursor.fetchone()
                 if result:
                     actual_dim = result[0]

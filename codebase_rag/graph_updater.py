@@ -334,6 +334,8 @@ class GraphUpdater:
         logger.info(ls.ANALYSIS_COMPLETE)
         self.ingestor.flush_all()
 
+        self._repair_legacy_function_parent_relationships()
+
         self._prune_orphan_nodes()
 
         self._generate_semantic_embeddings()
@@ -862,6 +864,28 @@ class GraphUpdater:
             logger.info(ls.PRUNE_COMPLETE, count=total_pruned)
         else:
             logger.info(ls.PRUNE_SKIP)
+
+    def _repair_legacy_function_parent_relationships(self) -> None:
+        if not isinstance(self.ingestor, QueryProtocol):
+            return
+
+        try:
+            results = self.ingestor.fetch_all(
+                cs.CYPHER_REPAIR_LEGACY_FUNCTION_DEFINES,
+                {cs.KEY_PROJECT_NAME: self.project_name},
+            )
+            if not results:
+                return
+
+            repaired_count = results[0].get("repaired_count", 0)
+            if isinstance(repaired_count, int) and repaired_count > 0:
+                logger.info(
+                    f"Repaired {repaired_count} legacy Function parent relationships"
+                )
+        except Exception as e:
+            logger.warning(
+                f"Legacy Function parent relationship repair failed: {e}"
+            )
 
     def _generate_semantic_embeddings(self) -> None:
         if not has_semantic_dependencies():

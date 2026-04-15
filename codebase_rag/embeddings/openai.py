@@ -63,6 +63,18 @@ def _get_batch_limit_for_endpoint(endpoint: str) -> int:
     return MAX_BATCH_SIZE
 
 
+def _normalize_embedding_endpoint(endpoint: str) -> str:
+    """Normalize an OpenAI-compatible embedding endpoint.
+
+    Accepts either a full embeddings endpoint or a provider base URL ending in a
+    version path such as `/v1`.
+    """
+    normalized = endpoint.rstrip("/")
+    if normalized.endswith("/embeddings"):
+        return normalized
+    return f"{normalized}/embeddings"
+
+
 class OpenAIEmbeddingProvider(EmbeddingProvider):
     """OpenAI embedding provider using text-embedding models.
 
@@ -101,7 +113,9 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
 
         super().__init__(model_id, dimension, api_key=api_key, endpoint=endpoint)
         self._api_key = api_key
-        self._endpoint = endpoint or "https://api.openai.com/v1/embeddings"
+        self._endpoint = _normalize_embedding_endpoint(
+            endpoint or "https://api.openai.com/v1/embeddings"
+        )
         self._client: httpx.Client | None = None
         self._ssl_verify = ssl_verify
         self._proxy = proxy
