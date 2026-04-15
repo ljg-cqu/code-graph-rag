@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 from typing import Any
 
+from loguru import logger
+
 from ..config import settings
 from ..providers import get_provider_from_config
 from ..services.graph_service import MemgraphIngestor
@@ -23,6 +25,13 @@ class CommunitySummary:
 class CommunityQFS:
     """Query-Focused Summarization using community detection."""
 
+    @staticmethod
+    def _is_missing_procedure_error(error: Exception) -> bool:
+        message = str(error).lower()
+        return "there is no procedure named" in message or (
+            "procedure" in message and "not found" in message
+        )
+
     def __init__(self):
         self.provider = get_provider_from_config(settings.active_orchestrator_config)
         self.llm = self.provider.create_model(
@@ -41,7 +50,7 @@ class CommunityQFS:
         """
         cypher = """
         // First, ensure communities are detected
-        CALL community_detection.leiden(
+        CALL graph_algorithms.leiden(
             "CALLS",
             "OUTGOING",
             { community_property: "community_id", weight_property: "weight" }
@@ -80,7 +89,15 @@ class CommunityQFS:
             username=settings.MEMGRAPH_USERNAME,
             password=settings.MEMGRAPH_PASSWORD,
         ) as ingestor:
-            records = ingestor.fetch_all(cypher, params)
+            try:
+                records = ingestor.fetch_all(cypher, params)
+            except Exception as exc:
+                if self._is_missing_procedure_error(exc):
+                    logger.info(
+                        "Skipping community summaries (community detection is not supported in your Memgraph edition)"
+                    )
+                    return []
+                raise
 
         summaries = []
         for record in records:
@@ -133,6 +150,8 @@ class CommunityQFS:
         """
         # First get all community summaries
         all_communities = self.build_community_summaries(min_size=min_community_size)
+        if not all_communities:
+            return "No code communities are available for summarization in the current graph."
 
         # Rank communities by relevance to question
         ranked_communities = self._rank_communities_by_relevance(

@@ -213,14 +213,19 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
                     # Initialize fallback provider if not already done
                     if not self._fallback_provider:
                         self._fallback_provider = LocalEmbeddingProvider(
-                            model_id=self._fallback_model, dimension=self.dimension
+                            model_id=self._fallback_model
                         )
-                        # Verify fallback dimension matches expected dimension
-                        if self._fallback_provider.dimension != self.dimension:
-                            logger.warning(
-                                f"Fallback model {self._fallback_model} has dimension {self._fallback_provider.dimension}, "
-                                f"expected {self.dimension}. This may cause errors when storing embeddings."
-                            )
+
+                    if self._fallback_provider.dimension != self.dimension:
+                        raise EmbeddingGenerationError(
+                            "OpenAI embedding request failed and the configured local fallback model "
+                            f"{self._fallback_model} produces {self._fallback_provider.dimension}-dim embeddings, "
+                            f"but {self.model_id} expects {self.dimension}. "
+                            "Disable local fallback or use a fallback model and vector index with matching dimensions.",
+                            provider="openai",
+                            model=self.model_id,
+                            original_error=e,
+                        ) from e
                     # Use fallback provider for this batch
                     return self._fallback_provider.embed_batch(texts)
                 else:

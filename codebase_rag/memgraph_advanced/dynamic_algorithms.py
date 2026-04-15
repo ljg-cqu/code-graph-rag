@@ -9,6 +9,13 @@ from ..services.graph_service import MemgraphIngestor
 class DynamicGraphAlgorithms:
     """Wrapper for dynamic MAGE algorithms."""
 
+    @staticmethod
+    def _is_missing_procedure_error(error: Exception) -> bool:
+        message = str(error).lower()
+        return "there is no procedure named" in message or (
+            "procedure" in message and "not found" in message
+        )
+
     def __init__(self, use_dynamic: bool | None = None):
         """
         Initialize dynamic algorithms wrapper.
@@ -167,7 +174,7 @@ class DynamicGraphAlgorithms:
     def _full_community_recalculation(self) -> dict:
         """Fallback: Full community detection recalculation."""
         cypher = """
-        CALL community_detection.leiden(
+        CALL graph_algorithms.leiden(
             "CALLS",
             "OUTGOING",
             { community_property: "community_id", weight_property: "weight" }
@@ -183,9 +190,21 @@ class DynamicGraphAlgorithms:
             username=settings.MEMGRAPH_USERNAME,
             password=settings.MEMGRAPH_PASSWORD,
         ) as ingestor:
-            results = ingestor.fetch_all(cypher)
-            return {
-                "updated_communities": len(results),
-                "total_nodes_updated": sum(r["size"] for r in results),
-                "method": "full",
-            }
+            try:
+                results = ingestor.fetch_all(cypher)
+                return {
+                    "updated_communities": len(results),
+                    "total_nodes_updated": sum(r["size"] for r in results),
+                    "method": "full",
+                }
+            except Exception as exc:
+                if self._is_missing_procedure_error(exc):
+                    logger.info(
+                        "Skipping community recalculation (not supported in your Memgraph edition)"
+                    )
+                    return {
+                        "updated_communities": 0,
+                        "total_nodes_updated": 0,
+                        "method": "unavailable",
+                    }
+                raise

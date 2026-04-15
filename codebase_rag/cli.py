@@ -94,6 +94,7 @@ def _handle_indexing(
     json_path: str | None = None,
     json_skip_invalid: bool = True,
     json_parallel_workers: int = 10,
+    json_exclude: list[str] | None = None,
 ) -> tuple[bool, bool, bool]:
     """Handle code and document indexing before chat.
 
@@ -111,6 +112,11 @@ def _handle_indexing(
         doc_workspace: Document workspace identifier (default: 'default')
         output: Output path for graph export (optional)
         index_timeout: Maximum seconds for indexing operations (default: 300s)
+        ingest_json: Whether to enable JSON ingestion during indexing
+        json_path: Path to JSON file/directory to ingest
+        json_skip_invalid: Whether to skip invalid JSON files (or fail)
+        json_parallel_workers: Number of parallel workers for JSON ingestion
+        json_exclude: Patterns of JSON files to exclude from ingestion
 
     Returns:
         Tuple of (code_indexed, docs_indexed, effective_with_docs)
@@ -218,89 +224,6 @@ def _handle_indexing(
 
             app_context.console.print(table)
 
-            # === Optional JSON Ingestion (10 Parallel Workers by Default) ===
-            if ingest_json:
-                from codebase_rag.json_ingestion import ingest_json_data
-
-                _info(
-                    style(
-                        f"Running JSON ingestion with {json_parallel_workers} parallel workers...",
-                        cs.Color.CYAN,
-                    )
-                )
-
-                # Resolve target JSON path (user-provided or repo root)
-                target_json_path = json_path or str(repo_path)
-
-                try:
-                    ingest_result = ingest_json_data(
-                        input_path=target_json_path,
-                        skip_existing=True,
-                        batch_size=batch_size,
-                        incremental=True,
-                        dry_run=False,
-                        parallel_workers=json_parallel_workers,
-                        # Link ingested data to active document workspace for isolation
-                        metadata_override={"workspace": doc_workspace},
-                    )
-
-                    # Display ingestion results
-                    json_table = Table(
-                        title=style("JSON Ingestion Results", cs.Color.GREEN),
-                        show_header=True,
-                        header_style=f"{cs.StyleModifier.BOLD} {cs.Color.MAGENTA}",
-                    )
-                    json_table.add_column("Metric", style=cs.Color.CYAN)
-                    json_table.add_column(
-                        "Count", style=cs.Color.YELLOW, justify="right"
-                    )
-
-                    json_table.add_row(
-                        "JSON files processed",
-                        str(getattr(ingest_result, "files_processed", 0)),
-                    )
-                    json_table.add_row(
-                        "Invalid JSON files skipped",
-                        str(getattr(ingest_result, "files_skipped", 0)),
-                    )
-                    json_table.add_row(
-                        "Entities ingested", str(ingest_result.entities_ingested)
-                    )
-                    json_table.add_row(
-                        "Relationships ingested",
-                        str(ingest_result.relationships_ingested),
-                    )
-
-                    app_context.console.print(json_table)
-
-                    # Handle errors if fail-on-invalid is enabled
-                    if ingest_result.errors:
-                        _info(
-                            style(
-                                f"Ingestion completed with {len(ingest_result.errors)} errors:",
-                                cs.Color.YELLOW,
-                            )
-                        )
-                        for error in ingest_result.errors[:15]:
-                            _info(style(f"  - {error}", cs.Color.RED))
-                        if len(ingest_result.errors) > 15:
-                            _info(
-                                style(
-                                    f"  ... and {len(ingest_result.errors) - 15} more errors",
-                                    cs.Color.RED,
-                                )
-                            )
-
-                        if not json_skip_invalid:
-                            raise ValueError(
-                                "JSON ingestion failed (--json-fail-on-invalid enabled)"
-                            )
-
-                except Exception as e:
-                    _info(style(f"JSON ingestion failed: {e}", cs.Color.RED))
-                    if not json_skip_invalid:
-                        raise typer.Exit(1) from e
-
             docs_indexed = True
 
         except Exception as e:
@@ -310,6 +233,97 @@ def _handle_indexing(
             docs_indexed = False
             # Per spec: disable --with-docs when document indexing fails
             effective_with_docs = False
+
+    # JSON ingestion runs independently of document indexing
+    if ingest_json:
+        from codebase_rag.json_ingestion import ingest_json_data
+
+        # Clean JSON database if requested, consistent with other databases
+        if clean:
+            _info(style("Cleaning JSON database...", cs.Color.YELLOW))
+            from codebase_rag.json_ingestion import _create_json_ingestor
+
+            with _create_json_ingestor(batch_size) as json_ingestor:
+                json_ingestor.clean_database()
+            _info(style("JSON database cleaned.", cs.Color.GREEN))
+
+        _info(
+            style(
+                f"Running JSON ingestion with {json_parallel_workers} parallel workers...",
+                cs.Color.CYAN,
+            )
+        )
+
+        # Resolve target JSON path (user-provided or repo root)
+        target_json_path = json_path or str(repo_path)
+
+        try:
+            ingest_result = ingest_json_data(
+                input_path=target_json_path,
+                skip_existing=True,
+                batch_size=batch_size,
+                incremental=True,
+                dry_run=False,
+                parallel_workers=json_parallel_workers,
+                exclude_patterns=json_exclude,
+                # Link ingested data to active document workspace for isolation
+                metadata_override={"workspace": doc_workspace},
+            )
+
+            # Display ingestion results
+            json_table = Table(
+                title=style("JSON Ingestion Results", cs.Color.GREEN),
+                show_header=True,
+                header_style=f"{cs.StyleModifier.BOLD} {cs.Color.MAGENTA}",
+            )
+            json_table.add_column("Metric", style=cs.Color.CYAN)
+            json_table.add_column("Count", style=cs.Color.YELLOW, justify="right")
+
+            json_table.add_row(
+                "JSON files processed",
+                str(getattr(ingest_result, "files_processed", 0)),
+            )
+            json_table.add_row(
+                "Invalid JSON files skipped",
+                str(getattr(ingest_result, "files_skipped", 0)),
+            )
+            json_table.add_row(
+                "Entities ingested", str(ingest_result.entities_ingested)
+            )
+            json_table.add_row(
+                "Relationships ingested",
+                str(ingest_result.relationships_ingested),
+            )
+
+            app_context.console.print(json_table)
+
+            # Handle errors if fail-on-invalid is enabled
+            if ingest_result.errors:
+                _info(
+                    style(
+                        f"Ingestion completed with {len(ingest_result.errors)} errors:",
+                        cs.Color.YELLOW,
+                    )
+                )
+                for error in ingest_result.errors[:15]:
+                    _info(style(f"  - {error}", cs.Color.RED))
+                if len(ingest_result.errors) > 15:
+                    _info(
+                        style(
+                            f"  ... and {len(ingest_result.errors) - 15} more errors",
+                            cs.Color.RED,
+                        )
+                    )
+
+                if not json_skip_invalid:
+                    raise ValueError(
+                        "JSON ingestion failed (--json-fail-on-invalid enabled)"
+                    )
+
+        except Exception as e:
+            _info(style(f"JSON ingestion failed: {e}", cs.Color.RED))
+            if not json_skip_invalid:
+                raise typer.Exit(1) from e
 
     return (code_indexed, docs_indexed, effective_with_docs)
 
@@ -498,7 +512,7 @@ def start(
     ingest_json: bool = typer.Option(
         False,
         "--ingest-json",
-        help="Enable automatic JSON ingestion during document indexing (validates against ingestion_schema.json)",
+        help="Enable automatic JSON ingestion (runs independently of document/code indexing, validates against ingestion_schema.json)",
     ),
     json_path: str | None = typer.Option(
         None,
@@ -516,6 +530,11 @@ def start(
         min=1,
         max=32,
         help="Number of parallel workers for JSON ingestion (default: 10, max: 32)",
+    ),
+    json_exclude: list[str] | None = typer.Option(
+        None,
+        "--json-exclude",
+        help="Patterns of JSON files to exclude from ingestion (supports glob patterns)",
     ),
 ) -> None:
     import re
@@ -608,6 +627,12 @@ def start(
         _info(style("Cleaning document database...", cs.Color.YELLOW))
         with connect_doc_memgraph(effective_batch_size) as doc_ingestor:
             doc_ingestor.clean_database()
+        # Clean JSON database
+        _info(style("Cleaning JSON database...", cs.Color.YELLOW))
+        from codebase_rag.json_ingestion import _create_json_ingestor
+
+        with _create_json_ingestor(effective_batch_size) as json_ingestor:
+            json_ingestor.clean_database()
         _delete_hash_cache(Path(target_repo_path))
         _info(style(cs.CLI_MSG_CLEAN_DONE, cs.Color.GREEN))
         return
@@ -636,6 +661,7 @@ def start(
         json_path=json_path,
         json_skip_invalid=json_skip_invalid,
         json_parallel_workers=json_parallel_workers,
+        json_exclude=json_exclude,
     )
 
     # If only updating graph (no chat), return
@@ -1573,6 +1599,11 @@ def ingest_json(
         "--conflict-resolution",
         help="Conflict resolution strategy: last-write-wins (default), highest-confidence-wins, manual-review.",
     ),
+    exclude: list[str] | None = typer.Option(
+        None,
+        "--exclude",
+        help="Patterns of JSON files to exclude from ingestion (supports glob patterns).",
+    ),
 ) -> None:
     from .json_ingestion import ingest_json_data
 
@@ -1589,6 +1620,7 @@ def ingest_json(
             incremental=incremental,
             dry_run=dry_run,
             conflict_resolution=conflict_resolution,
+            exclude_patterns=exclude,
         )
 
         # Display results

@@ -98,9 +98,7 @@ class UniXcoder(nn.Module):
         pad_id = self.config.pad_token_id
         assert pad_id is not None
         mask = source_ids.ne(pad_id)
-        token_embeddings = self.model(
-            source_ids, attention_mask=mask.unsqueeze(1) * mask.unsqueeze(2)
-        )[0]
+        token_embeddings = self.model(source_ids, attention_mask=mask)[0]
         sentence_embeddings = (token_embeddings * mask.unsqueeze(-1)).sum(1) / mask.sum(
             -1
         ).unsqueeze(-1)

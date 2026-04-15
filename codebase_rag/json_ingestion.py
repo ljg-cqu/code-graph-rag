@@ -5,6 +5,7 @@ import copy
 import json
 import os
 import re
+from fnmatch import fnmatch
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -42,7 +43,9 @@ EMBEDDING_VERSION = 1
 
 embedding_provider = get_embedding_provider_instance()
 embedding_cache = EmbeddingCache(
-    dimension=getattr(embedding_provider, "dimension", settings.get_effective_vector_dim())
+    dimension=getattr(
+        embedding_provider, "dimension", settings.get_effective_vector_dim()
+    )
 )
 
 
@@ -272,23 +275,96 @@ def validate_json_input(
         return False, None, errors
 
 
-def load_json_files(input_path: str) -> list[tuple[Path, dict[str, Any]]]:
+def load_json_files(
+    input_path: str, exclude_patterns: list[str] | None = None
+) -> list[tuple[Path, dict[str, Any]]]:
+    json_files, load_errors = _load_json_files_with_errors(input_path, exclude_patterns)
+    for error in load_errors:
+        logger.warning(error)
+    return json_files
+
+
+def _load_json_files_with_errors(
+    input_path: str, exclude_patterns: list[str] | None = None
+) -> tuple[list[tuple[Path, dict[str, Any]]], list[str]]:
     path = Path(input_path)
     json_files: list[tuple[Path, dict[str, Any]]] = []
+    load_errors: list[str] = []
+    # Common JSON files to exclude by default
+    default_exclude_patterns = {
+        "**/node_modules/**/*.json",
+        "**/package-lock.json",
+        "**/yarn.lock",
+        "**/pnpm-lock.yaml",
+        "**/*.min.json",
+        "**/tsconfig*.json",
+        "**/.eslintrc*.json",
+        "**/prettierrc*.json",
+        "**/.vscode/**/*.json",
+        "**/.idea/**/*.json",
+        "**/build/**/*.json",
+        "**/dist/**/*.json",
+        "**/coverage/**/*.json",
+        "**/.embedding_cache/**/*.json",
+        "**/.cgr/**/*.json",
+        "**/*.egg-info/**/*.json",
+        "**/benchmarks/results/**/*.json",
+    }
+    # Combine default excludes with user-provided excludes
+    all_exclude_patterns = default_exclude_patterns.copy()
+    if exclude_patterns:
+        all_exclude_patterns.update(set(exclude_patterns))
+
+    base_path = path if path.is_dir() else path.parent
+
+    def looks_like_ingestion_payload(data: Any) -> bool:
+        return isinstance(data, dict) and "entities" in data
+
+    def should_exclude(file_path: Path) -> bool:
+        if file_path.name.startswith(".tmp_cache_") and file_path.suffix == ".json":
+            return True
+
+        if any(
+            part in {".embedding_cache", ".cgr"} or part.endswith(".egg-info")
+            for part in file_path.parts
+        ):
+            return True
+
+        try:
+            relative_path = str(file_path.relative_to(base_path))
+        except ValueError:
+            relative_path = str(file_path)
+
+        for pattern in all_exclude_patterns:
+            if fnmatch(relative_path, pattern):
+                return True
+        return False
 
     if path.is_file() and path.suffix == ".json":
-        with open(path, encoding="utf-8") as json_file:
-            json_files.append((path, json.load(json_file)))
+        if should_exclude(path):
+            return [], []
+        try:
+            with open(path, encoding="utf-8") as json_file:
+                json_files.append((path, json.load(json_file)))
+        except Exception as exc:
+            load_errors.append(f"Skipping invalid JSON file {path}: {exc}")
     elif path.is_dir():
         for file_path in path.rglob("*.json"):
-            with open(file_path, encoding="utf-8") as json_file:
-                json_files.append((file_path, json.load(json_file)))
+            if should_exclude(file_path):
+                continue
+            try:
+                with open(file_path, encoding="utf-8") as json_file:
+                    data = json.load(json_file)
+                    if looks_like_ingestion_payload(data):
+                        json_files.append((file_path, data))
+            except Exception as exc:
+                load_errors.append(f"Skipping invalid JSON file {file_path}: {exc}")
     else:
         raise ValueError(
             f"Invalid input path: {input_path} (must be .json file or directory containing JSON files)"
         )
 
-    return json_files
+    return json_files, load_errors
 
 
 def generate_embeddings_for_entities(
@@ -376,7 +452,9 @@ def _validate_prepared_files(prepared_files: list[PreparedJsonFile]) -> list[str
         for entity in prepared_file.entities:
             entity_id = str(entity["id"])
             current_path = prepared_file.path
-            existing_path = dataset_entity_sources[prepared_file.dataset_id].get(entity_id)
+            existing_path = dataset_entity_sources[prepared_file.dataset_id].get(
+                entity_id
+            )
             if existing_path is not None and existing_path != current_path:
                 errors.append(
                     "Duplicate entity ID across prepared files: "
@@ -384,7 +462,9 @@ def _validate_prepared_files(prepared_files: list[PreparedJsonFile]) -> list[str
                     f"files={existing_path} and {current_path}"
                 )
             else:
-                dataset_entity_sources[prepared_file.dataset_id][entity_id] = current_path
+                dataset_entity_sources[prepared_file.dataset_id][entity_id] = (
+                    current_path
+                )
 
     return errors
 
@@ -608,17 +688,19 @@ def ingest_entities(
                     summary.skipped += 1
             except Exception as exc:
                 summary.failed += 1
-                summary.errors.append(
-                    f"Failed to delete entity {entity['id']}: {exc}"
-                )
+                summary.errors.append(f"Failed to delete entity {entity['id']}: {exc}")
             continue
 
         if skip_existing and exists:
             summary.skipped += 1
             continue
 
-        if incremental and exists and _existing_is_newer_or_equal(
-            existing_nodes.get(unique_id), entity_last_updated
+        if (
+            incremental
+            and exists
+            and _existing_is_newer_or_equal(
+                existing_nodes.get(unique_id), entity_last_updated
+            )
         ):
             summary.skipped += 1
             continue
@@ -694,7 +776,10 @@ def _lookup_entity_reference(
 
     lookup_cache[reference] = None
     if len(rows) > 1:
-        return None, f"Reference '{reference}' is ambiguous in graph for dataset '{dataset_id}'"
+        return (
+            None,
+            f"Reference '{reference}' is ambiguous in graph for dataset '{dataset_id}'",
+        )
     return None, f"Could not resolve relationship reference: {reference}"
 
 
@@ -727,7 +812,9 @@ def ingest_relationships(
         rel_type = str(relationship["relationship"])
         operation = str(relationship.get("operation") or "add").lower()
         relationship_last_updated = (
-            str(relationship["last_updated"]) if relationship.get("last_updated") else None
+            str(relationship["last_updated"])
+            if relationship.get("last_updated")
+            else None
         )
 
         source_unique_id, source_error = _lookup_entity_reference(
@@ -739,7 +826,9 @@ def ingest_relationships(
         )
         if source_unique_id is None:
             summary.failed += 1
-            summary.errors.append(source_error or f"Could not resolve source: {source_ref}")
+            summary.errors.append(
+                source_error or f"Could not resolve source: {source_ref}"
+            )
             continue
 
         target_unique_id, target_error = _lookup_entity_reference(
@@ -751,7 +840,9 @@ def ingest_relationships(
         )
         if target_unique_id is None:
             summary.failed += 1
-            summary.errors.append(target_error or f"Could not resolve target: {target_ref}")
+            summary.errors.append(
+                target_error or f"Could not resolve target: {target_ref}"
+            )
             continue
 
         relationship_key = (source_unique_id, rel_type, target_unique_id)
@@ -797,8 +888,12 @@ def ingest_relationships(
             summary.skipped += 1
             continue
 
-        if incremental and exists and _existing_is_newer_or_equal(
-            existing_relationships.get(relationship_key), relationship_last_updated
+        if (
+            incremental
+            and exists
+            and _existing_is_newer_or_equal(
+                existing_relationships.get(relationship_key), relationship_last_updated
+            )
         ):
             summary.skipped += 1
             continue
@@ -852,7 +947,9 @@ def ingest_relationships(
 
 
 def _ensure_json_vector_index(batch_size: int) -> None:
-    dimension = getattr(embedding_provider, "dimension", settings.get_effective_vector_dim())
+    dimension = getattr(
+        embedding_provider, "dimension", settings.get_effective_vector_dim()
+    )
     index_name = settings.JSON_MEMGRAPH_VECTOR_INDEX_NAME
     capacity = settings.JSON_MEMGRAPH_VECTOR_CAPACITY
     cypher = f"""
@@ -995,7 +1092,9 @@ def delete_dataset(
     relationships_deleted = 0
 
     try:
-        with _create_json_ingestor(settings.JSON_MEMGRAPH_BATCH_SIZE) as graph_connection:
+        with _create_json_ingestor(
+            settings.JSON_MEMGRAPH_BATCH_SIZE
+        ) as graph_connection:
             relationship_rows = graph_connection.fetch_all(
                 """
                 MATCH ()-[r]->()
@@ -1056,14 +1155,28 @@ def ingest_json_data(
     pre_loaded_data: list[tuple[Path, dict[str, Any]]] | None = None,
     parallel_workers: int = settings.JSON_PARALLEL_WORKERS,
     metadata_override: dict[str, Any] | None = None,
+    exclude_patterns: list[str] | None = None,
 ) -> IngestionResult:
     del conflict_resolution
 
     result = IngestionResult(dataset_id=dataset_id or "", dry_run=dry_run)
 
     try:
-        json_files = pre_loaded_data if pre_loaded_data is not None else load_json_files(input_path)
+        load_errors: list[str] = []
+        if pre_loaded_data is not None:
+            json_files = pre_loaded_data
+        else:
+            json_files, load_errors = _load_json_files_with_errors(
+                input_path, exclude_patterns
+            )
+
+        result.files_skipped += len(load_errors)
+        result.errors.extend(load_errors)
         logger.info(f"Loaded {len(json_files)} JSON file(s) for ingestion")
+
+        if not json_files:
+            logger.info("No valid JSON files found for ingestion")
+            return result
 
         prepared_files: list[PreparedJsonFile] = []
         for file_data in json_files:
@@ -1228,6 +1341,7 @@ def handle_json_update_event(
         conflict_resolution=conflict_resolution,
         dry_run=dry_run,
         parallel_workers=1,
+        exclude_patterns=None,
     )
 
     return UpdateResult(

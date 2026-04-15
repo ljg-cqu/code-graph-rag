@@ -54,6 +54,7 @@ class DocumentGraphUpdater:
             ".cache",
             ".pytest_cache",
             ".ruff_cache",
+            ".cgr",
             ".qdrant_code_embeddings",
             ".embedding_cache",
             "grammars",  # Tree-sitter grammar submodules (not user code)
@@ -122,6 +123,12 @@ class DocumentGraphUpdater:
 
         # Cache supported extensions from config
         self._supported_extensions = set(settings.DOC_SUPPORTED_EXTENSIONS)
+
+    def _is_excluded_path(self, file_path: Path) -> bool:
+        return any(
+            part in self.EXCLUDED_DIRS or part.endswith(".egg-info")
+            for part in file_path.parts
+        )
 
     def _is_path_within_boundary(self, path: Path) -> bool:
         """
@@ -509,7 +516,7 @@ class DocumentGraphUpdater:
         # Handle single file path
         if self.repo_path.is_file():
             # Security: Check excluded directories for single file
-            if any(part in self.EXCLUDED_DIRS for part in self.repo_path.parts):
+            if self._is_excluded_path(self.repo_path):
                 logger.debug(f"Skipping file in excluded directory: {self.repo_path}")
                 return documents
 
@@ -534,7 +541,7 @@ class DocumentGraphUpdater:
         for ext in supported_extensions:
             for doc_path in self.repo_path.rglob(f"*{ext}"):
                 # Check if any path component is in excluded directories
-                if any(part in self.EXCLUDED_DIRS for part in doc_path.parts):
+                if self._is_excluded_path(doc_path):
                     continue
 
                 # Check if path is a file
@@ -1264,7 +1271,7 @@ class DocumentGraphUpdater:
             "indexed", "skipped", or "failed"
         """
         # Security: Check excluded directories (same as _collect_documents)
-        if any(part in self.EXCLUDED_DIRS for part in file_path.parts):
+        if self._is_excluded_path(file_path):
             logger.debug(f"Skipping file in excluded directory: {file_path}")
             return "skipped"
 

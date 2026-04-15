@@ -66,6 +66,13 @@ class GraphAlgorithms:
             finally:
                 cursor.close()
 
+    @staticmethod
+    def _is_missing_procedure_error(error: Exception) -> bool:
+        message = str(error).lower()
+        return "there is no procedure named" in message or (
+            "procedure" in message and "not found" in message
+        )
+
     def run_pagerank(self) -> int:
         """Run PageRank algorithm and store scores as node properties.
 
@@ -108,47 +115,70 @@ class GraphAlgorithms:
         algo_name = "Leiden" if use_leiden else "Louvain"
         logger.info(f"Running {algo_name} community detection algorithm...")
 
+        attempts: list[tuple[str, str]] = []
         if use_leiden:
-            cypher = """
-            CALL community_detection.leiden(
-                "CALLS",
-                "OUTGOING",
-                { community_property: "community_id", weight_property: "weight" }
-            ) YIELD node, community_id
-            RETURN count(node) AS updated_count;
-            """
+            attempts.append(
+                (
+                    "Leiden",
+                    """
+                    CALL graph_algorithms.leiden(
+                        "CALLS",
+                        "OUTGOING",
+                        { community_property: "community_id", weight_property: "weight" }
+                    ) YIELD node, community_id
+                    RETURN count(node) AS updated_count;
+                    """,
+                )
+            )
+        attempts.append(
+            (
+                "Louvain",
+                """
+                CALL graph_algorithms.louvain(
+                    "CALLS",
+                    "OUTGOING",
+                    { community_property: "community_id", weight_property: "weight" }
+                ) YIELD node, community_id
+                RETURN count(node) AS updated_count;
+                """,
+            )
+        )
+
+        unsupported_attempts = 0
+
+        for index, (name, cypher) in enumerate(attempts):
             try:
                 results = self._execute_query(cypher)
                 updated = results[0].get("updated_count", 0) if results else 0
-                if updated > 0:
-                    logger.info(
-                        f"{algo_name} community detection completed, updated {updated} nodes"
-                    )
-                    return updated
+                logger.info(
+                    f"{name} community detection completed, updated {updated} nodes"
+                )
+                return updated
             except Exception as e:
-                logger.warning(f"Leiden algorithm failed, falling back to Louvain: {e}")
-                logger.info("Falling back to Louvain algorithm...")
+                if self._is_missing_procedure_error(e):
+                    unsupported_attempts += 1
+                    logger.info(
+                        f"Skipping {name} community detection: procedure not available"
+                    )
+                    continue
 
-        # Fallback to Louvain
-        cypher = """
-        CALL community_detection.louvain(
-            "CALLS",
-            "OUTGOING",
-            { community_property: "community_id", weight_property: "weight" }
-        ) YIELD node, community_id
-        RETURN count(node) AS updated_count;
-        """
+                if index < len(attempts) - 1:
+                    logger.warning(
+                        f"{name} algorithm failed, falling back to {attempts[index + 1][0]}: {e}"
+                    )
+                    logger.info(
+                        f"Falling back to {attempts[index + 1][0]} algorithm..."
+                    )
+                    continue
 
-        try:
-            results = self._execute_query(cypher)
-            updated = results[0].get("updated_count", 0) if results else 0
+                logger.error(f"Community detection algorithm failed: {e}")
+                return 0
+
+        if unsupported_attempts == len(attempts):
             logger.info(
-                ls.ALGO_COMMUNITY_COMPLETED.format(algo="Louvain", count=updated)
+                "Skipping community detection optimization (not supported in your Memgraph edition)"
             )
-            return updated
-        except Exception as e:
-            logger.error(f"Community detection algorithm failed: {e}")
-            return 0
+        return 0
 
     def get_bfs_context(
         self, start_node_id: int, max_depth: int = 3

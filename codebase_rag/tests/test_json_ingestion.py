@@ -158,6 +158,71 @@ def test_load_json_files_directory() -> None:
         assert dataset_ids == {"test_0", "test_1"}
 
 
+def test_load_json_files_directory_skips_artifacts_and_non_ingestion_json() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+
+        valid_path = temp_path / "valid.json"
+        with open(valid_path, "w", encoding="utf-8") as json_file:
+            json.dump(SAMPLE_VALID_JSON, json_file)
+
+        cache_dir = temp_path / ".embedding_cache"
+        cache_dir.mkdir()
+        with open(cache_dir / ".tmp_cache_123.json", "w", encoding="utf-8") as json_file:
+            json.dump(SAMPLE_VALID_JSON, json_file)
+
+        egg_info_dir = temp_path / "demo.egg-info"
+        egg_info_dir.mkdir()
+        with open(egg_info_dir / "metadata.json", "w", encoding="utf-8") as json_file:
+            json.dump(SAMPLE_VALID_JSON, json_file)
+
+        optimize_dir = temp_path / "optimize"
+        optimize_dir.mkdir()
+        with open(optimize_dir / "memory_profile_results.json", "w", encoding="utf-8") as json_file:
+            json.dump({"metadata": {"workspace": "default"}}, json_file)
+
+        files = load_json_files(str(temp_path))
+
+        assert len(files) == 1
+        assert files[0][0] == valid_path
+
+
+def test_load_json_files_single_non_ingestion_file_is_loaded_for_validation() -> None:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as json_file:
+        json.dump({"metadata": {"workspace": "default"}}, json_file)
+        temp_path = Path(json_file.name)
+
+    try:
+        files = load_json_files(str(temp_path))
+        assert len(files) == 1
+        assert files[0][0] == temp_path
+        assert files[0][1] == {"metadata": {"workspace": "default"}}
+    finally:
+        temp_path.unlink()
+
+
+def test_ingest_json_data_dry_run_reports_invalid_json_files() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+
+        valid_path = temp_path / "valid.json"
+        with open(valid_path, "w", encoding="utf-8") as json_file:
+            json.dump(SAMPLE_VALID_JSON, json_file)
+
+        invalid_path = temp_path / "invalid.json"
+        invalid_path.write_text('{"entities": [}', encoding="utf-8")
+
+        result = ingest_json_data(
+            input_path=str(temp_path),
+            dry_run=True,
+            parallel_workers=1,
+        )
+
+        assert result.files_processed == 1
+        assert result.files_skipped == 1
+        assert any(str(invalid_path) in error for error in result.errors)
+
+
 def test_load_json_files_invalid_path() -> None:
     with pytest.raises(ValueError):
         load_json_files("/non/existent/path/12345.json")

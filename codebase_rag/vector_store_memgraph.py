@@ -188,6 +188,43 @@ class MemgraphBackend(VectorBackend):
         except Exception:
             pass  # Non-critical
 
+    def _store_single(self, node_id: int, embedding: list[float], qualified_name: str) -> int:
+        cypher = """
+        MATCH (n) WHERE id(n) = $node_id
+        SET n.embedding = $embedding,
+            n.embedding_model = $model_name,
+            n.embedding_version = $version
+        RETURN count(n) AS stored;
+        """
+
+        params = {
+            "node_id": node_id,
+            "embedding": embedding,
+            "model_name": settings.EMBEDDING_MODEL,
+            "version": EMBEDDING_VERSION,
+        }
+
+        try:
+            results = self._execute_query(cypher, params)
+            return results[0].get("stored", 0) if results else 0
+        except Exception as e:
+            logger.warning(ls.EMBEDDING_STORE_FAILED.format(name=qualified_name, error=e))
+            return 0
+
+    def _store_individually(
+        self, points: Sequence[tuple[int, list[float], str]]
+    ) -> int:
+        return sum(
+            self._store_single(node_id, embedding, qualified_name)
+            for node_id, embedding, qualified_name in points
+        )
+
+    def _verified_count(self, node_ids: set[int], fallback_count: int) -> int:
+        try:
+            return len(self.verify_ids(node_ids))
+        except Exception:
+            return fallback_count
+
     def store_batch(self, points: Sequence[tuple[int, list[float], str]]) -> int:
         """Store embeddings as node properties.
 
@@ -216,16 +253,35 @@ class MemgraphBackend(VectorBackend):
             "model_name": settings.EMBEDDING_MODEL,
             "version": EMBEDDING_VERSION,
         }
+        node_ids = {node_id for node_id, _, _ in points}
 
         try:
             results = self._execute_query(cypher, params)
             logger.debug(f"store_batch query results: {results}")
             stored = results[0].get("stored", 0) if results else 0
+
+            if stored < len(points):
+                try:
+                    found_ids = self.verify_ids(node_ids)
+                    missing_points = [
+                        point for point in points if point[0] not in found_ids
+                    ]
+                except Exception:
+                    missing_points = list(points)
+
+                if missing_points:
+                    logger.warning(
+                        f"Batch stored {stored} of {len(points)} embeddings, retrying {len(missing_points)} individually"
+                    )
+                    stored += self._store_individually(missing_points)
+                    stored = self._verified_count(node_ids, stored)
+
             logger.debug(ls.EMBEDDING_BATCH_STORED.format(count=stored))
             return stored
         except Exception as e:
             logger.warning(ls.EMBEDDING_BATCH_FAILED.format(error=e))
-            return 0
+            stored = self._store_individually(points)
+            return self._verified_count(node_ids, stored)
 
     def search(
         self,

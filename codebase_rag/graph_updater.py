@@ -372,7 +372,9 @@ class GraphUpdater:
         # Run post-ingestion data quality validation
         if settings.RUN_INGESTION_QUALITY_CHECKS:
             health_checker = HealthChecker()
-            validation_results = health_checker.validate_ingestion_quality()
+            validation_results = health_checker.validate_ingestion_quality(
+                embedded_node_label="Function|Method|Class"
+            )
             passed = sum(1 for res in validation_results if res.passed)
             total = len(validation_results)
             logger.info(
@@ -717,7 +719,9 @@ class GraphUpdater:
                 for pattern, rel_list in worker_ingestor.relationships.items()
             }
 
-            worker_factory.structure_processor.process_generic_file(filepath, filepath.name)
+            worker_factory.structure_processor.process_generic_file(
+                filepath, filepath.name
+            )
 
             lang_config = get_language_spec(filepath.suffix)
             if (

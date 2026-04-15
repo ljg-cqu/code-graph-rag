@@ -14,6 +14,7 @@ from codebase_rag.embeddings import (
 from codebase_rag.exceptions import (
     EmbeddingAuthenticationError,
     EmbeddingConnectionError,
+    EmbeddingGenerationError,
     EmbeddingProviderNotFoundError,
 )
 
@@ -147,6 +148,28 @@ class TestOpenAIEmbeddingProvider:
             endpoint="https://custom.openai.com/v1/embeddings",
         )
         assert provider._endpoint == "https://custom.openai.com/v1/embeddings"
+
+    def test_local_fallback_requires_matching_dimension(self) -> None:
+        provider = get_embedding_provider(
+            "openai", "text-embedding-v4", api_key="test-key"
+        )
+        mock_client = MagicMock()
+        mock_client.post.side_effect = Exception("ssl failure")
+
+        fallback_provider = MagicMock()
+        fallback_provider.dimension = 768
+
+        with (
+            patch.object(provider, "_get_client", return_value=mock_client),
+            patch(
+                "codebase_rag.embeddings.openai.LocalEmbeddingProvider",
+                return_value=fallback_provider,
+            ),
+        ):
+            with pytest.raises(EmbeddingGenerationError, match="produces 768-dim"):
+                provider.embed_batch(["hello"], batch_size=1)
+
+        fallback_provider.embed_batch.assert_not_called()
 
 
 class TestOllamaEmbeddingProvider:
