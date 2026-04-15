@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from codebase_rag.constants import NODE_UNIQUE_CONSTRAINTS
+from codebase_rag.config import settings
 from codebase_rag.cypher_queries import (
     build_create_node_query,
     build_create_relationship_query,
@@ -260,6 +261,21 @@ class TestExecuteQuery:
         mock_cursor.execute.assert_called_once_with(
             "MATCH (n {id: $id}) RETURN n", {"id": 123}
         )
+
+    def test_uses_graph_specific_dimension_hint_for_json_graph(self) -> None:
+        ingestor = MemgraphIngestor(
+            host="localhost",
+            port=settings.JSON_MEMGRAPH_PORT,
+        )
+        ingestor.conn = MagicMock()
+
+        expected_dim = settings.get_effective_vector_dim("json")
+
+        with pytest.raises(Exception, match="cgr vector recreate-indexes --json"):
+            ingestor._execute_query(
+                "RETURN 1",
+                {"embedding": [0.0] * max(expected_dim - 1, 0)},
+            )
 
     def test_retries_transient_query_failure_with_reconnect(self) -> None:
         ingestor = MemgraphIngestor(host="localhost", port=7687)

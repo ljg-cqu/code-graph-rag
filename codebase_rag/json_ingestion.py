@@ -26,6 +26,7 @@ __all__ = [
     "handle_json_update_event",
     "validate_json_input",
     "load_json_files",
+    "recreate_json_vector_index",
     "IngestionResult",
     "UpdateResult",
 ]
@@ -44,7 +45,7 @@ EMBEDDING_VERSION = 1
 embedding_provider = get_embedding_provider_instance()
 embedding_cache = EmbeddingCache(
     dimension=getattr(
-        embedding_provider, "dimension", settings.get_effective_vector_dim()
+        embedding_provider, "dimension", settings.get_effective_vector_dim("json")
     )
 )
 
@@ -447,10 +448,13 @@ def _prepare_json_file(
 def _validate_prepared_files(prepared_files: list[PreparedJsonFile]) -> list[str]:
     errors: list[str] = []
     dataset_entity_sources: dict[str, dict[str, Path]] = defaultdict(dict)
+    dataset_entity_refs: dict[str, set[str]] = defaultdict(set)
+    dataset_name_counts: dict[str, dict[str, int]] = defaultdict(dict)
 
     for prepared_file in prepared_files:
         for entity in prepared_file.entities:
             entity_id = str(entity["id"])
+            entity_name = str(entity["name"])
             current_path = prepared_file.path
             existing_path = dataset_entity_sources[prepared_file.dataset_id].get(
                 entity_id
@@ -464,6 +468,49 @@ def _validate_prepared_files(prepared_files: list[PreparedJsonFile]) -> list[str
             else:
                 dataset_entity_sources[prepared_file.dataset_id][entity_id] = (
                     current_path
+                )
+
+            dataset_entity_refs[prepared_file.dataset_id].add(entity_id)
+            dataset_entity_refs[prepared_file.dataset_id].add(entity_name)
+            dataset_name_counts[prepared_file.dataset_id][entity_name] = (
+                dataset_name_counts[prepared_file.dataset_id].get(entity_name, 0) + 1
+            )
+
+    dataset_ambiguous_names = {
+        dataset_id: {
+            name for name, count in name_counts.items() if count > 1
+        }
+        for dataset_id, name_counts in dataset_name_counts.items()
+    }
+
+    for prepared_file in prepared_files:
+        entity_refs = dataset_entity_refs[prepared_file.dataset_id]
+        ambiguous_names = dataset_ambiguous_names.get(prepared_file.dataset_id, set())
+
+        for index, relationship in enumerate(prepared_file.relationships, start=1):
+            source = str(relationship["source"])
+            target = str(relationship["target"])
+
+            if source in ambiguous_names:
+                errors.append(
+                    f"{prepared_file.path}: Relationship {index} source references "
+                    f"ambiguous entity name in dataset '{prepared_file.dataset_id}': {source}"
+                )
+            elif source not in entity_refs:
+                errors.append(
+                    f"{prepared_file.path}: Relationship {index} source references "
+                    f"non-existent entity in dataset '{prepared_file.dataset_id}': {source}"
+                )
+
+            if target in ambiguous_names:
+                errors.append(
+                    f"{prepared_file.path}: Relationship {index} target references "
+                    f"ambiguous entity name in dataset '{prepared_file.dataset_id}': {target}"
+                )
+            elif target not in entity_refs:
+                errors.append(
+                    f"{prepared_file.path}: Relationship {index} target references "
+                    f"non-existent entity in dataset '{prepared_file.dataset_id}': {target}"
                 )
 
     return errors
@@ -947,16 +994,47 @@ def ingest_relationships(
 
 
 def _ensure_json_vector_index(batch_size: int) -> None:
-    dimension = getattr(
-        embedding_provider, "dimension", settings.get_effective_vector_dim()
-    )
+    recreate_json_vector_index(batch_size=batch_size)
+
+
+def _find_vector_index(
+    rows: list[dict[str, Any]],
+    index_name: str,
+) -> dict[str, Any] | None:
+    for row in rows:
+        if str(row.get("index_name") or "") == index_name:
+            return row
+    return None
+
+
+def _read_vector_index_dimension(index_info: dict[str, Any] | None) -> int | None:
+    if index_info is None:
+        return None
+
+    raw_dimension = index_info.get("dimension")
+    if raw_dimension is None:
+        return None
+
+    try:
+        return int(raw_dimension)
+    except (TypeError, ValueError):
+        return None
+
+
+def recreate_json_vector_index(
+    batch_size: int,
+    dimension: int | None = None,
+    clear_existing_embeddings: bool = True,
+    force_recreate: bool = False,
+) -> None:
+    effective_dimension = dimension or settings.get_effective_vector_dim("json")
     index_name = settings.JSON_MEMGRAPH_VECTOR_INDEX_NAME
     capacity = settings.JSON_MEMGRAPH_VECTOR_CAPACITY
     cypher = f"""
     CREATE VECTOR INDEX {index_name}
     ON :{JSON_ENTITY_LABEL}(embedding)
     WITH CONFIG {{
-        "dimension": {dimension},
+        "dimension": {effective_dimension},
         "capacity": {capacity},
         "metric": "cos"
     }};
@@ -964,7 +1042,53 @@ def _ensure_json_vector_index(batch_size: int) -> None:
 
     try:
         with _create_json_ingestor(batch_size) as graph_connection:
+            existing_index = None
+            try:
+                existing_indexes = graph_connection.fetch_all("SHOW VECTOR INDEX INFO;")
+                existing_index = _find_vector_index(existing_indexes, index_name)
+            except Exception:
+                existing_index = None
+
+            existing_dimension = _read_vector_index_dimension(existing_index)
+            needs_recreate = force_recreate
+
+            if existing_index is not None and not force_recreate:
+                if existing_dimension == effective_dimension:
+                    logger.info(f"Vector index '{index_name}' already exists")
+                    return
+
+                logger.warning(
+                    f"Vector index '{index_name}' has dimension {existing_dimension}, "
+                    f"recreating it for dimension {effective_dimension}"
+                )
+                needs_recreate = True
+
+            if existing_index is not None and needs_recreate:
+                if clear_existing_embeddings:
+                    graph_connection.execute_write(
+                        f"""
+                        MATCH (n:{JSON_ENTITY_LABEL})
+                        SET n.embedding = NULL,
+                            n.embedding_model = NULL,
+                            n.embedding_version = NULL
+                        """,
+                        {},
+                    )
+                try:
+                    graph_connection.execute_write(
+                        f"DROP VECTOR INDEX {index_name};",
+                        {},
+                    )
+                except Exception as exc:
+                    logger.debug(
+                        f"Failed to drop JSON vector index '{index_name}': {exc}"
+                    )
+
             graph_connection.execute_write(cypher, {})
+            logger.info(
+                f"Created JSON vector index '{index_name}' "
+                f"(dim={effective_dimension}, capacity={capacity})"
+            )
     except Exception as exc:
         error_message = str(exc).lower()
         if "already exists" in error_message or "duplicate" in error_message:

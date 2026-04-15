@@ -368,14 +368,28 @@ class DimensionMismatchError(EmbeddingError):
 
     def __init__(
         self,
-        existing_dim: int,
-        configured_dim: int,
+        existing_dim: int | None = None,
+        configured_dim: int | None = None,
         message: str | None = None,
         *,
         provider: str | None = None,
         model: str | None = None,
         existing_model: str | None = None,
+        expected: int | None = None,
+        actual: int | None = None,
     ) -> None:
+        # Support backward compatibility for expected/actual parameter names
+        if expected is not None:
+            configured_dim = expected
+        if actual is not None:
+            existing_dim = actual
+
+        # Validate required parameters
+        if existing_dim is None or configured_dim is None:
+            raise ValueError(
+                "Either (existing_dim, configured_dim) or (expected, actual) must be provided"
+            )
+
         super().__init__(
             message
             or f"Dimension mismatch: existing={existing_dim}, configured={configured_dim}",
@@ -386,3 +400,9 @@ class DimensionMismatchError(EmbeddingError):
         self.existing_dim = existing_dim
         self.configured_dim = configured_dim
         self.existing_model = existing_model
+        self.expected = configured_dim
+        self.actual = existing_dim
+
+
+# Backward compatibility alias
+EmbeddingDimensionMismatchError = DimensionMismatchError

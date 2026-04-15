@@ -202,7 +202,7 @@ V1_PATH = "/v1"
 # (H) HTTP status codes
 HTTP_OK = 200
 
-UNIXCODER_MODEL = "microsoft/unixcoder-base"
+UNIXCODER_MODEL = "BAAI/bge-large-en-v1.5"
 EMBEDDING_DEFAULT_BATCH_SIZE = 32
 EMBEDDING_CACHE_FILENAME = ".embedding_cache.json"
 

@@ -1,8 +1,12 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from codebase_rag.config import settings
 from codebase_rag.document.chunking import DocumentChunk
-from codebase_rag.document.document_updater import DocumentGraphUpdater
+from codebase_rag.document.document_updater import (
+    DocumentGraphUpdater,
+    ensure_document_vector_index,
+)
 from codebase_rag.document.extractors.base import ExtractedDocument
 
 
@@ -178,3 +182,26 @@ def test_delete_document_nodes_uses_separate_linear_deletes(tmp_path: Path) -> N
     assert "CONTAINS_SECTION" not in queries[1]
     assert "qualified_name STARTS WITH $path_prefix" in queries[2]
     assert "qualified_name STARTS WITH $path_prefix" in queries[3]
+
+
+def test_ensure_vector_index_recreates_mismatched_dimension() -> None:
+    ingestor = MagicMock()
+    ingestor.fetch_all.return_value = [
+        {"index_name": settings.DOC_MEMGRAPH_VECTOR_INDEX_NAME, "dimension": 768}
+    ]
+
+    ensure_document_vector_index(ingestor, dimension=1024)
+
+    queries = [call.args[0] for call in ingestor.execute_write.call_args_list]
+    assert any(
+        "MATCH (n:Chunk)" in query and "SET n.embedding = NULL" in query
+        for query in queries
+    )
+    assert any(
+        f"DROP VECTOR INDEX {settings.DOC_MEMGRAPH_VECTOR_INDEX_NAME};" in query
+        for query in queries
+    )
+    assert any(
+        f"CREATE VECTOR INDEX {settings.DOC_MEMGRAPH_VECTOR_INDEX_NAME}" in query
+        for query in queries
+    )

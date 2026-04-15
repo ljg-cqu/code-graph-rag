@@ -6,13 +6,16 @@ import json
 import tempfile
 from copy import deepcopy
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
+from codebase_rag.config import settings
 from codebase_rag.json_ingestion import (
     handle_json_update_event,
     ingest_json_data,
     load_json_files,
+    recreate_json_vector_index,
     validate_json_input,
 )
 
@@ -306,6 +309,106 @@ def test_ingest_json_data_dry_run_resolves_cross_file_relationships() -> None:
     assert result.errors == []
 
 
+def test_ingest_json_data_dry_run_rejects_missing_prepared_references() -> None:
+    job_file = {
+        "metadata": {"dataset_id": "shared_dataset"},
+        "entities": [
+            {
+                "id": "job_001",
+                "name": "Backend Engineer",
+                "type": "JobPosting",
+                "properties": {"description": "A backend engineering role."},
+            }
+        ],
+        "relationships": [
+            {
+                "source": "job_001",
+                "target": "skill_999",
+                "relationship": "REQUIRES_SKILL",
+            }
+        ],
+    }
+
+    result = ingest_json_data(
+        pre_loaded_data=[(Path("job.json"), job_file)],
+        dry_run=True,
+        parallel_workers=1,
+    )
+
+    assert result.files_processed == 1
+    assert result.entities_processed == 1
+    assert result.relationships_processed == 1
+    assert result.entities_ingested == 0
+    assert result.relationships_ingested == 0
+    assert result.errors == [
+        "job.json: Relationship 1 target references non-existent entity in dataset 'shared_dataset': skill_999"
+    ]
+
+
+def test_ingest_json_data_dry_run_rejects_ambiguous_prepared_names() -> None:
+    job_file = {
+        "metadata": {"dataset_id": "shared_dataset"},
+        "entities": [
+            {
+                "id": "job_001",
+                "name": "Backend Engineer",
+                "type": "JobPosting",
+                "properties": {"description": "A backend engineering role."},
+            }
+        ],
+        "relationships": [
+            {
+                "source": "job_001",
+                "target": "Python",
+                "relationship": "REQUIRES_SKILL",
+            }
+        ],
+    }
+    skill_file_a = {
+        "metadata": {"dataset_id": "shared_dataset"},
+        "entities": [
+            {
+                "id": "skill_001",
+                "name": "Python",
+                "type": "Skill",
+                "properties": {"description": "Python programming language."},
+            }
+        ],
+        "relationships": [],
+    }
+    skill_file_b = {
+        "metadata": {"dataset_id": "shared_dataset"},
+        "entities": [
+            {
+                "id": "skill_002",
+                "name": "Python",
+                "type": "Skill",
+                "properties": {"description": "Python web framework skill."},
+            }
+        ],
+        "relationships": [],
+    }
+
+    result = ingest_json_data(
+        pre_loaded_data=[
+            (Path("job.json"), job_file),
+            (Path("skill_a.json"), skill_file_a),
+            (Path("skill_b.json"), skill_file_b),
+        ],
+        dry_run=True,
+        parallel_workers=3,
+    )
+
+    assert result.files_processed == 3
+    assert result.entities_processed == 3
+    assert result.relationships_processed == 1
+    assert result.entities_ingested == 0
+    assert result.relationships_ingested == 0
+    assert result.errors == [
+        "job.json: Relationship 1 target references ambiguous entity name in dataset 'shared_dataset': Python"
+    ]
+
+
 def test_handle_json_update_event_basic() -> None:
     event = {
         "id": "evt_123",
@@ -322,3 +425,82 @@ def test_handle_json_update_event_basic() -> None:
     assert result.dataset_id == "test_dataset"
     assert result.dry_run is True
     assert result.errors == []
+
+
+def test_recreate_json_vector_index_recreates_mismatched_dimension() -> None:
+    class FakeIngestor:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+
+        def __enter__(self) -> FakeIngestor:
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        def fetch_all(self, query: str, params: dict | None = None) -> list[dict]:
+            self.calls.append(("fetch_all", " ".join(query.split())))
+            return [
+                {
+                    "index_name": settings.JSON_MEMGRAPH_VECTOR_INDEX_NAME,
+                    "dimension": 768,
+                }
+            ]
+
+        def execute_write(self, query: str, params: dict | None = None) -> None:
+            self.calls.append(("execute_write", " ".join(query.split())))
+
+    fake_ingestor = FakeIngestor()
+
+    with patch(
+        "codebase_rag.json_ingestion._create_json_ingestor",
+        return_value=fake_ingestor,
+    ):
+        recreate_json_vector_index(batch_size=10, dimension=1024)
+
+    write_queries = [query for kind, query in fake_ingestor.calls if kind == "execute_write"]
+    assert any("MATCH (n:JsonEntity) SET n.embedding = NULL" in query for query in write_queries)
+    assert any(
+        f"DROP VECTOR INDEX {settings.JSON_MEMGRAPH_VECTOR_INDEX_NAME};" in query
+        for query in write_queries
+    )
+    assert any(
+        f"CREATE VECTOR INDEX {settings.JSON_MEMGRAPH_VECTOR_INDEX_NAME}" in query
+        and '"dimension": 1024' in query
+        for query in write_queries
+    )
+
+
+def test_recreate_json_vector_index_keeps_matching_dimension() -> None:
+    class FakeIngestor:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+
+        def __enter__(self) -> FakeIngestor:
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        def fetch_all(self, query: str, params: dict | None = None) -> list[dict]:
+            self.calls.append(("fetch_all", " ".join(query.split())))
+            return [
+                {
+                    "index_name": settings.JSON_MEMGRAPH_VECTOR_INDEX_NAME,
+                    "dimension": 1024,
+                }
+            ]
+
+        def execute_write(self, query: str, params: dict | None = None) -> None:
+            self.calls.append(("execute_write", " ".join(query.split())))
+
+    fake_ingestor = FakeIngestor()
+
+    with patch(
+        "codebase_rag.json_ingestion._create_json_ingestor",
+        return_value=fake_ingestor,
+    ):
+        recreate_json_vector_index(batch_size=10, dimension=1024)
+
+    write_queries = [query for kind, query in fake_ingestor.calls if kind == "execute_write"]
+    assert write_queries == []

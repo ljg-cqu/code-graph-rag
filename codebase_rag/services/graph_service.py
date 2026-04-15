@@ -312,9 +312,7 @@ class MemgraphIngestor:
         attempt: int,
         max_attempts: int,
     ) -> bool:
-        return (
-            attempt < max_attempts and self._is_retryable_memgraph_error(error)
-        )
+        return attempt < max_attempts and self._is_retryable_memgraph_error(error)
 
     def _execute_query(
         self,
@@ -339,6 +337,22 @@ class MemgraphIngestor:
                             continue
                         raise
                 with self._get_cursor() as cursor:
+                    # Validate embedding dimension if present in parameters
+                    if "embedding" in params:
+                        embedding = params["embedding"]
+                        expected_dim = settings.get_effective_vector_dim(
+                            self._vector_graph_type()
+                        )
+                        if (
+                            isinstance(embedding, list)
+                            and len(embedding) != expected_dim
+                        ):
+                            raise ex.DimensionMismatchError(
+                                existing_dim=len(embedding),
+                                configured_dim=expected_dim,
+                                message=f"Embedding dimension mismatch: expected {expected_dim}, got {len(embedding)}. "
+                                f"Check your embedding model configuration or run `{self._vector_recreate_command()}` to fix.",
+                            )
                     cursor.execute(query, params)
                     return self._cursor_to_results(cursor)
             except Exception as e:
@@ -392,7 +406,9 @@ class MemgraphIngestor:
         if not params_list:
             return
         use_shared_connection = conn is self.conn
-        max_attempts = settings.MEMGRAPH_QUERY_MAX_RETRIES + 1 if use_shared_connection else 1
+        max_attempts = (
+            settings.MEMGRAPH_QUERY_MAX_RETRIES + 1 if use_shared_connection else 1
+        )
         for attempt in range(1, max_attempts + 1):
             cursor = None
             try:
@@ -419,9 +435,8 @@ class MemgraphIngestor:
                 cursor.execute(wrap_with_unwind(query), BatchWrapper(batch=params_list))
                 return
             except Exception as e:
-                if (
-                    use_shared_connection
-                    and self._should_retry_shared_connection_error(e, attempt, max_attempts)
+                if use_shared_connection and self._should_retry_shared_connection_error(
+                    e, attempt, max_attempts
                 ):
                     logger.warning(
                         f"Transient Memgraph batch failure (attempt {attempt}/{max_attempts}), reconnecting: {e}"
@@ -465,7 +480,9 @@ class MemgraphIngestor:
         if not params_list:
             return []
         use_shared_connection = conn is self.conn
-        max_attempts = settings.MEMGRAPH_QUERY_MAX_RETRIES + 1 if use_shared_connection else 1
+        max_attempts = (
+            settings.MEMGRAPH_QUERY_MAX_RETRIES + 1 if use_shared_connection else 1
+        )
         for attempt in range(1, max_attempts + 1):
             cursor = None
             try:
@@ -492,9 +509,8 @@ class MemgraphIngestor:
                 cursor.execute(wrap_with_unwind(query), BatchWrapper(batch=params_list))
                 return self._cursor_to_results(cursor)
             except Exception as e:
-                if (
-                    use_shared_connection
-                    and self._should_retry_shared_connection_error(e, attempt, max_attempts)
+                if use_shared_connection and self._should_retry_shared_connection_error(
+                    e, attempt, max_attempts
                 ):
                     logger.warning(
                         f"Transient Memgraph batch-return failure (attempt {attempt}/{max_attempts}), reconnecting: {e}"
@@ -525,6 +541,22 @@ class MemgraphIngestor:
         logger.info(ls.MG_CLEANING_DB)
         self._execute_query(CYPHER_DELETE_ALL)
         logger.info(ls.MG_DB_CLEANED)
+
+    def _vector_graph_type(self) -> str:
+        if self._port == settings.DOC_MEMGRAPH_PORT:
+            return "document"
+        if self._port == settings.JSON_MEMGRAPH_PORT:
+            return "json"
+        return "code"
+
+    def _vector_recreate_command(self) -> str:
+        graph_type = self._vector_graph_type()
+        option = {
+            "code": "--code",
+            "document": "--docs",
+            "json": "--json",
+        }[graph_type]
+        return f"cgr vector recreate-indexes {option}"
 
     def list_projects(self) -> list[str]:
         result = self.fetch_all(CYPHER_LIST_PROJECTS)

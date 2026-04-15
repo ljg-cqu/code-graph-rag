@@ -105,7 +105,7 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
         ssl_verify: bool = True,
         proxy: str | None = None,
         fallback_to_local: bool = True,
-        fallback_model: str = "microsoft/unixcoder-base",
+        fallback_model: str = "BAAI/bge-large-en-v1.5",
     ) -> None:
         # Determine dimension from known models or default
         if dimension is None:

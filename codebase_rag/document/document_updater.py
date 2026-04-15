@@ -33,6 +33,107 @@ from .versioning import ContentVersionTracker, VersionCache
 WORKSPACE_PATTERN = re.compile(r"^[\w\-]+$")
 
 
+def _find_vector_index(
+    rows: list[dict[str, str | int | None]],
+    index_name: str,
+) -> dict[str, str | int | None] | None:
+    for row in rows:
+        if str(row.get("index_name") or "") == index_name:
+            return row
+    return None
+
+
+def _read_vector_index_dimension(
+    index_info: dict[str, str | int | None] | None,
+) -> int | None:
+    if index_info is None:
+        return None
+
+    raw_dimension = index_info.get("dimension")
+    if raw_dimension is None:
+        return None
+
+    try:
+        return int(raw_dimension)
+    except (TypeError, ValueError):
+        return None
+
+
+def ensure_document_vector_index(
+    ingestor: MemgraphIngestor,
+    dimension: int,
+    clear_existing_embeddings: bool = True,
+    force_recreate: bool = False,
+) -> None:
+    if not dimension or dimension <= 0:
+        raise ExtractionException(
+            path="",
+            error_type=ErrorType.EMBEDDING_ERROR,
+            message=f"Invalid embedding dimension: {dimension}. "
+            "Check EMBEDDING_MODEL configuration.",
+        )
+
+    capacity = settings.DOC_MEMGRAPH_VECTOR_CAPACITY
+    index_name = settings.DOC_MEMGRAPH_VECTOR_INDEX_NAME
+    cypher = f"""
+    CREATE VECTOR INDEX {index_name}
+    ON :Chunk(embedding)
+    WITH CONFIG {{
+        "dimension": {dimension},
+        "capacity": {capacity},
+        "metric": "cos"
+    }};
+    """
+
+    existing_index = None
+    try:
+        existing_indexes = ingestor.fetch_all("SHOW VECTOR INDEX INFO;")
+        existing_index = _find_vector_index(existing_indexes, index_name)
+    except Exception:
+        existing_index = None
+
+    existing_dimension = _read_vector_index_dimension(existing_index)
+    needs_recreate = force_recreate
+
+    if existing_index is not None and not force_recreate:
+        if existing_dimension == dimension:
+            logger.info(f"Vector index '{index_name}' already exists")
+            return
+
+        logger.warning(
+            f"Vector index '{index_name}' has dimension {existing_dimension}, "
+            f"recreating it for dimension {dimension}"
+        )
+        needs_recreate = True
+
+    if existing_index is not None and needs_recreate:
+        if clear_existing_embeddings:
+            ingestor.execute_write(
+                """
+                MATCH (n:Chunk)
+                SET n.embedding = NULL
+                """,
+                {},
+            )
+        try:
+            ingestor.execute_write(f"DROP VECTOR INDEX {index_name};", {})
+        except Exception as exc:
+            logger.debug(f"Failed to drop vector index '{index_name}': {exc}")
+
+    try:
+        ingestor.execute_write(cypher, {})
+        logger.info(
+            f"Created vector index '{index_name}' for Chunk nodes "
+            f"(dim={dimension}, capacity={capacity})"
+        )
+    except Exception as exc:
+        error_str = str(exc).lower()
+        if "already exists" in error_str or "duplicate" in error_str:
+            logger.info(f"Vector index '{index_name}' already exists")
+        else:
+            logger.error(f"Failed to create vector index '{index_name}': {exc}")
+
+
 class DocumentGraphUpdater:
     """
     Handles document graph ingestion and updates.
@@ -412,45 +513,8 @@ class DocumentGraphUpdater:
         Raises:
             ExtractionException: If embedding dimension is invalid (0 or negative).
         """
-        # Use the embedding provider's dimension property (already has correct mapping)
-        # The provider's dimension is determined from known model dimensions
-        dimension = self._embedding_provider.dimension
-
-        # Validate embedding dimension before creating index
-        if not dimension or dimension <= 0:
-            raise ExtractionException(
-                path=str(self.repo_path),
-                error_type=ErrorType.EMBEDDING_ERROR,
-                message=f"Invalid embedding dimension: {dimension}. "
-                f"Provider '{self._embedding_provider.provider}' returned invalid dimension. "
-                f"Check EMBEDDING_MODEL configuration.",
-            )
-
-        capacity = settings.DOC_MEMGRAPH_VECTOR_CAPACITY
-        index_name = settings.DOC_MEMGRAPH_VECTOR_INDEX_NAME
-
-        cypher = f"""
-        CREATE VECTOR INDEX {index_name}
-        ON :Chunk(embedding)
-        WITH CONFIG {{
-            "dimension": {dimension},
-            "capacity": {capacity},
-            "metric": "cos"
-        }};
-        """
-
-        try:
-            ingestor.execute_write(cypher, {})
-            logger.info(
-                f"Created vector index '{index_name}' for Chunk nodes (dim={dimension}, capacity={capacity})"
-            )
-        except Exception as e:
-            error_str = str(e).lower()
-            if "already exists" in error_str or "duplicate" in error_str:
-                logger.info(f"Vector index '{index_name}' already exists")
-            else:
-                logger.error(f"Failed to create vector index '{index_name}': {e}")
-                # Non-fatal: indexing can proceed without vector index
+        dimension = settings.get_effective_vector_dim("document")
+        ensure_document_vector_index(ingestor, dimension)
 
     def _ensure_document_indexes(self, ingestor: MemgraphIngestor) -> None:
         """Create indexes for document graph queries.

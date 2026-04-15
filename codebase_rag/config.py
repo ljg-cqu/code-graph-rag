@@ -14,8 +14,9 @@ def get_default_log_path() -> str:
         return str(Path(appdata) / "cgr" / "cgr.log")
     elif sys.platform == "darwin":
         return str(Path.home() / "Library" / "Caches" / "cgr" / "cgr.log")
-    else: # Linux/Unix
+    else:  # Linux/Unix
         return str(Path.home() / ".cache" / "cgr" / "cgr.log")
+
 
 from dotenv import load_dotenv
 from loguru import logger
@@ -189,7 +190,7 @@ class EmbeddingConfig:
     ssl_verify: bool = True
     proxy: str | None = None
     fallback_to_local: bool = True
-    fallback_model: str = "microsoft/unixcoder-base"
+    fallback_model: str = "BAAI/bge-large-en-v1.5"
 
     def to_update_kwargs(self) -> EmbeddingConfigKwargs:
         result = asdict(self)
@@ -437,7 +438,7 @@ class AppConfig(BaseSettings):
     EMBEDDING_SSL_VERIFY: bool = True
     EMBEDDING_PROXY: str | None = None
     EMBEDDING_FALLBACK_TO_LOCAL: bool = True
-    EMBEDDING_FALLBACK_MODEL: str = "microsoft/unixcoder-base"
+    EMBEDDING_FALLBACK_MODEL: str = "BAAI/bge-large-en-v1.5"
 
     EMBEDDING_MAX_LENGTH: int = 512
     EMBEDDING_PROGRESS_INTERVAL: int = 10
@@ -578,7 +579,9 @@ class AppConfig(BaseSettings):
 
     # Logging configuration
     LOG_TO_FILE: bool = Field(True, validation_alias="CGR_LOG_TO_FILE")
-    LOG_FILE_PATH: str = Field(default_factory=get_default_log_path, validation_alias="CGR_LOG_FILE")
+    LOG_FILE_PATH: str = Field(
+        default_factory=get_default_log_path, validation_alias="CGR_LOG_FILE"
+    )
     LOG_LEVEL: str = Field("INFO", validation_alias="CGR_LOG_LEVEL")
     LOG_ROTATION: str = Field("10 MB", validation_alias="CGR_LOG_ROTATION")
     LOG_RETENTION: str = Field("30 days", validation_alias="CGR_LOG_RETENTION")
@@ -591,7 +594,9 @@ class AppConfig(BaseSettings):
         allowed_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
         upper_v = v.upper()
         if upper_v not in allowed_levels:
-            raise ValueError(f"Invalid log level '{v}'. Must be one of: {', '.join(allowed_levels)}")
+            raise ValueError(
+                f"Invalid log level '{v}'. Must be one of: {', '.join(allowed_levels)}"
+            )
         return upper_v
 
     # Yolo mode via environment (for MCP server and persistent settings)
@@ -931,26 +936,54 @@ class AppConfig(BaseSettings):
         """
         return cs.EMBEDDING_MODEL_DIMENSIONS.get(model_id, 768)
 
-    def get_effective_vector_dim(self) -> int:
-        """Return effective dimension with proper precedence.
+    @property
+    def EMBEDDING_DIMENSION(self) -> int:
+        """Alias for get_effective_vector_dim("code") for backward compatibility."""
+        return self.get_effective_vector_dim("code")
 
-        Precedence order:
-        1. MEMGRAPH_VECTOR_DIM if set (explicit override)
-        2. Auto-detect from embedding model
+    @property
+    def DOC_EMBEDDING_DIMENSION(self) -> int:
+        """Effective embedding dimension for document graph (follows standard precedence logic)."""
+        return self.get_effective_vector_dim("document")
+
+    @property
+    def JSON_EMBEDDING_DIMENSION(self) -> int:
+        """Effective embedding dimension for JSON graph (follows standard precedence logic)."""
+        return self.get_effective_vector_dim("json")
+
+    def get_effective_vector_dim(self, graph_type: str = "code") -> int:
+        """Return effective dimension with proper precedence for specified graph type.
+
+        Args:
+            graph_type: One of "code", "document", "json"
+
+        Consistent precedence order for all graph types:
+            1. <GRAPH_TYPE>_MEMGRAPH_VECTOR_DIM if set (explicit override)
+            2. Auto-detect from embedding model (shared across all graphs)
 
         Returns:
-            Effective vector dimension.
+            Effective vector dimension for the requested graph type.
         """
-        # If explicitly set via env/config, use that
-        # Check if it's set to something other than default
-        env_dim = os.environ.get("MEMGRAPH_VECTOR_DIM")
+        # Map graph type to corresponding env var (consistent naming convention)
+        env_var_map = {
+            "code": "MEMGRAPH_VECTOR_DIM",
+            "document": "DOC_MEMGRAPH_VECTOR_DIM",
+            "json": "JSON_MEMGRAPH_VECTOR_DIM",
+        }
+        if graph_type not in env_var_map:
+            raise ValueError(
+                f"Invalid graph_type: {graph_type}. Must be one of {list(env_var_map.keys())}"
+            )
+
+        # Check for explicit override first (same logic for all graph types)
+        env_dim = os.environ.get(env_var_map[graph_type])
         if env_dim:
             try:
                 return int(env_dim)
             except ValueError:
                 pass
 
-        # Auto-detect from model
+        # Auto-detect from model as universal fallback for all graph types
         return self._get_model_dimension(
             self.EMBEDDING_PROVIDER,
             self.EMBEDDING_MODEL,

@@ -17,8 +17,34 @@ from .graph.query_generator import MemgraphQueryGenerator
 from .vector_backend import VectorBackend
 
 # Model info
-UNIXCODER_MODEL = "microsoft/unixcoder-base"
+UNIXCODER_MODEL = "BAAI/bge-large-en-v1.5"
 EMBEDDING_VERSION = 1
+
+
+def _find_vector_index(
+    rows: list[dict[str, str | int | None]],
+    index_name: str,
+) -> dict[str, str | int | None] | None:
+    for row in rows:
+        if str(row.get("index_name") or "") == index_name:
+            return row
+    return None
+
+
+def _read_vector_index_dimension(
+    index_info: dict[str, str | int | None] | None,
+) -> int | None:
+    if index_info is None:
+        return None
+
+    raw_dimension = index_info.get("dimension")
+    if raw_dimension is None:
+        return None
+
+    try:
+        return int(raw_dimension)
+    except (TypeError, ValueError):
+        return None
 
 
 class MemgraphBackend(VectorBackend):
@@ -133,7 +159,7 @@ class MemgraphBackend(VectorBackend):
         capabilities = self.query_generator.capabilities
 
         # Get existing index info upfront
-        existing_indexes = []
+        existing_indexes: list[dict[str, str | int | None]] = []
         try:
             existing_indexes = self._execute_query("SHOW VECTOR INDEX INFO;")
         except Exception:
@@ -143,13 +169,11 @@ class MemgraphBackend(VectorBackend):
             index_name = f"{label.lower()}_embedding_index"
 
             # Check if index exists and has correct dimension
-            existing_index = next(
-                (i for i in existing_indexes if i.get("index_name") == index_name), None
-            )
+            existing_index = _find_vector_index(existing_indexes, index_name)
             needs_recreate = False
 
             if existing_index:
-                current_dim = existing_index.get("dimension")
+                current_dim = _read_vector_index_dimension(existing_index)
                 if current_dim != effective_dim:
                     logger.warning(
                         f"Vector index {index_name} has dimension {current_dim}, but current embedding model "
@@ -262,7 +286,7 @@ class MemgraphBackend(VectorBackend):
                 "vector index property must have the same number of dimensions"
                 in error_str
             ):
-                extra_msg = " This is likely due to a dimension mismatch between your embedding model and existing vector indexes. The vector store will automatically fix this on next initialization, or you can run the recreate-indexes command manually."
+                extra_msg = " This is likely due to a dimension mismatch between your embedding model and existing vector indexes. The vector store will automatically fix this on next initialization, or you can run `cgr vector recreate-indexes --code` manually."
             logger.warning(
                 ls.EMBEDDING_STORE_FAILED.format(
                     name=qualified_name, error=f"{e}{extra_msg}"

@@ -56,6 +56,7 @@ class LocalEmbeddingProvider(EmbeddingProvider):
         super().__init__(model_id, dimension, device=device)
         self._device = device
         self._model: object | None = None
+        self._tokenizer: object | None = None
         self._torch: type[torch] | None = None
 
     @property
@@ -83,15 +84,24 @@ class LocalEmbeddingProvider(EmbeddingProvider):
 
         try:
             import torch
-
-            from ..unixcoder import UniXcoder
+            from transformers import AutoModel, AutoTokenizer
 
             self._torch = torch
             device = self._get_device()
 
             logger.info(f"Loading embedding model {self.model_id} on {device}...")
 
-            model = UniXcoder(self.model_id)
+            # Load model type based on ID
+            if "bge-" in self.model_id.lower():
+                # BGE model uses standard transformers
+                self._tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+                model = AutoModel.from_pretrained(self.model_id)
+            else:
+                # UniXcoder model
+                from ..unixcoder import UniXcoder
+
+                model = UniXcoder(self.model_id)
+
             model.eval()
 
             if device == "cuda":
@@ -149,16 +159,45 @@ class LocalEmbeddingProvider(EmbeddingProvider):
         max_chars = settings.EMBEDDING_MAX_LENGTH * 4
         truncated_text = text[:max_chars]
 
-        tokens = model.tokenize(
-            [truncated_text], max_length=settings.EMBEDDING_MAX_LENGTH
-        )
-        tokens_tensor = torch.tensor(tokens).to(device)
+        if "bge-" in self.model_id.lower():
+            # BGE model processing
+            inputs = self._tokenizer(
+                [truncated_text],
+                padding=True,
+                truncation=True,
+                max_length=settings.EMBEDDING_MAX_LENGTH,
+                return_tensors="pt",
+            ).to(device)
 
-        with torch.no_grad():
-            _, sentence_embeddings = model(tokens_tensor)
-            embedding = sentence_embeddings.cpu().numpy()
+            with torch.no_grad():
+                model_output = model(**inputs)
+                # Mean pooling
+                attention_mask = inputs["attention_mask"]
+                token_embeddings = model_output[0]
+                input_mask = (
+                    attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+                )
+                sentence_embeddings = torch.sum(
+                    token_embeddings * input_mask, 1
+                ) / torch.clamp(input_mask.sum(1), min=1e-9)
+                # Normalize
+                sentence_embeddings = torch.nn.functional.normalize(
+                    sentence_embeddings, p=2, dim=1
+                )
+                embedding = sentence_embeddings.cpu().numpy()
+            return embedding[0].tolist()
+        else:
+            # UniXcoder model processing
+            tokens = model.tokenize(
+                [truncated_text], max_length=settings.EMBEDDING_MAX_LENGTH
+            )
+            tokens_tensor = torch.tensor(tokens).to(device)
 
-        return embedding[0].tolist()
+            with torch.no_grad():
+                _, sentence_embeddings = model(tokens_tensor)
+                embedding = sentence_embeddings.cpu().numpy()
+
+            return embedding[0].tolist()
 
     def embed_batch(self, texts: list[str], batch_size: int = 32) -> list[list[float]]:
         """Generate embeddings for multiple texts.
@@ -188,18 +227,53 @@ class LocalEmbeddingProvider(EmbeddingProvider):
         max_chars = settings.EMBEDDING_MAX_LENGTH * 4
         truncated_texts = [text[:max_chars] for text in texts]
 
-        for start in range(0, len(truncated_texts), batch_size):
-            batch = truncated_texts[start : start + batch_size]
-            tokens_list = model.tokenize(
-                batch, max_length=settings.EMBEDDING_MAX_LENGTH, padding=True
-            )
-            tokens_tensor = torch.tensor(tokens_list).to(device)
+        if "bge-" in self.model_id.lower():
+            # BGE model batch processing
+            for start in range(0, len(truncated_texts), batch_size):
+                batch = truncated_texts[start : start + batch_size]
+                inputs = self._tokenizer(
+                    batch,
+                    padding=True,
+                    truncation=True,
+                    max_length=settings.EMBEDDING_MAX_LENGTH,
+                    return_tensors="pt",
+                ).to(device)
 
-            with torch.no_grad():
-                _, sentence_embeddings = model(tokens_tensor)
-                batch_np = sentence_embeddings.cpu().numpy()
+                with torch.no_grad():
+                    model_output = model(**inputs)
+                    # Mean pooling
+                    attention_mask = inputs["attention_mask"]
+                    token_embeddings = model_output[0]
+                    input_mask = (
+                        attention_mask.unsqueeze(-1)
+                        .expand(token_embeddings.size())
+                        .float()
+                    )
+                    sentence_embeddings = torch.sum(
+                        token_embeddings * input_mask, 1
+                    ) / torch.clamp(input_mask.sum(1), min=1e-9)
+                    # Normalize
+                    sentence_embeddings = torch.nn.functional.normalize(
+                        sentence_embeddings, p=2, dim=1
+                    )
+                    batch_np = sentence_embeddings.cpu().numpy()
 
-            for row in batch_np:
-                all_embeddings.append(row.tolist())
+                for row in batch_np:
+                    all_embeddings.append(row.tolist())
+        else:
+            # UniXcoder model batch processing
+            for start in range(0, len(truncated_texts), batch_size):
+                batch = truncated_texts[start : start + batch_size]
+                tokens_list = model.tokenize(
+                    batch, max_length=settings.EMBEDDING_MAX_LENGTH, padding=True
+                )
+                tokens_tensor = torch.tensor(tokens_list).to(device)
+
+                with torch.no_grad():
+                    _, sentence_embeddings = model(tokens_tensor)
+                    batch_np = sentence_embeddings.cpu().numpy()
+
+                for row in batch_np:
+                    all_embeddings.append(row.tolist())
 
         return all_embeddings
