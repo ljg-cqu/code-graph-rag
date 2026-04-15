@@ -4021,12 +4021,31 @@ HEALTH_CHECK_EMBEDDING_CORR_FAIL_MSG = (
 )
 HEALTH_CHECK_EMBEDDING_CORR_ERROR_MSG = "Embedding correlation check failed: {error}"
 
+HEALTH_CHECK_FILE_LAYER_PASS = "File layer present"
+HEALTH_CHECK_FILE_LAYER_FAIL = "File layer missing"
+HEALTH_CHECK_FILE_LAYER_PASS_MSG = "Code graph contains File nodes for indexed modules"
+HEALTH_CHECK_FILE_LAYER_FAIL_MSG = (
+    "Found {module_count} Module nodes but no File nodes in the code graph"
+)
+HEALTH_CHECK_FILE_LAYER_SKIP_MSG = "File layer check skipped because no Module nodes exist"
+HEALTH_CHECK_FILE_LAYER_ERROR_MSG = "File layer check failed: {error}"
+
+HEALTH_CHECK_DOC_CHUNK_PASS = "Large document chunk coverage valid"
+HEALTH_CHECK_DOC_CHUNK_FAIL = "Large documents missing chunks"
+HEALTH_CHECK_DOC_CHUNK_PASS_MSG = "All large documents have chunk coverage"
+HEALTH_CHECK_DOC_CHUNK_FAIL_MSG = (
+    "{count} large documents have no chunks in the document graph"
+)
+HEALTH_CHECK_DOC_CHUNK_SKIP_MSG = "Document chunk coverage check skipped because no large documents exist"
+HEALTH_CHECK_DOC_CHUNK_ERROR_MSG = "Document chunk coverage check failed: {error}"
+
 HEALTH_CHECK_JSON_SCHEMA_PASS = "JSON schema validation passed"
 HEALTH_CHECK_JSON_SCHEMA_FAIL = "JSON schema validation failed"
 HEALTH_CHECK_JSON_SCHEMA_PASS_MSG = "JSON file conforms to the ingestion schema"
 HEALTH_CHECK_JSON_SCHEMA_FAIL_MSG = "JSON validation error: {error}"
 HEALTH_CHECK_JSON_SCHEMA_IO_ERROR_MSG = "Cannot read schema or data file: {error}"
 HEALTH_CHECK_JSON_SCHEMA_FILE = "ingestion_schema.json"
+HEALTH_CHECK_JSON_SAMPLE_FILE = "sample_json_ingest.json"
 
 SHELL_CMD_WHERE = "where"
 SHELL_CMD_WHICH = "which"

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from pathlib import Path
 
 import mgclient  # ty: ignore[unresolved-import]
 from loguru import logger
@@ -193,6 +194,11 @@ class HealthChecker:
         self.results.append(self.check_disconnected_nodes())
         self.results.append(self.check_required_properties())
         self.results.append(self.check_embedding_correlation())
+        self.results.append(self.check_file_layer())
+        self.results.append(self.check_large_document_chunk_coverage())
+        sample_json_path = Path(cs.HEALTH_CHECK_JSON_SAMPLE_FILE)
+        if sample_json_path.exists():
+            self.results.append(self.check_json_ingestion_schema(str(sample_json_path)))
         return self.results
 
     def get_summary(self) -> tuple[int, int]:
@@ -332,6 +338,129 @@ class HealthChecker:
                 except Exception:
                     pass
 
+    def check_file_layer(self) -> HealthCheckResult:
+        conn = None
+        cursor = None
+        try:
+            conn = mgclient.connect(
+                host=settings.MEMGRAPH_HOST,
+                port=settings.MEMGRAPH_PORT,
+            )
+            cursor = conn.cursor()
+            cursor.execute(
+                "MATCH (m:Module) RETURN count(m) AS module_count"
+            )
+            module_row = cursor.fetchone()
+            module_count = int(module_row[0]) if module_row else 0
+
+            cursor.execute("MATCH (f:File) RETURN count(f) AS file_count")
+            file_row = cursor.fetchone()
+            file_count = int(file_row[0]) if file_row else 0
+
+            if module_count == 0:
+                return HealthCheckResult(
+                    name=cs.HEALTH_CHECK_FILE_LAYER_PASS,
+                    passed=True,
+                    message=cs.HEALTH_CHECK_FILE_LAYER_SKIP_MSG,
+                )
+
+            if file_count > 0:
+                return HealthCheckResult(
+                    name=cs.HEALTH_CHECK_FILE_LAYER_PASS,
+                    passed=True,
+                    message=cs.HEALTH_CHECK_FILE_LAYER_PASS_MSG,
+                )
+
+            return HealthCheckResult(
+                name=cs.HEALTH_CHECK_FILE_LAYER_FAIL,
+                passed=False,
+                message=cs.HEALTH_CHECK_FILE_LAYER_FAIL_MSG.format(
+                    module_count=module_count
+                ),
+            )
+        except Exception as e:
+            return HealthCheckResult(
+                name=cs.HEALTH_CHECK_FILE_LAYER_FAIL,
+                passed=False,
+                message=cs.HEALTH_CHECK_FILE_LAYER_FAIL,
+                error=cs.HEALTH_CHECK_FILE_LAYER_ERROR_MSG.format(error=str(e)),
+            )
+        finally:
+            if cursor is not None:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    def check_large_document_chunk_coverage(self) -> HealthCheckResult:
+        conn = None
+        cursor = None
+        try:
+            conn = mgclient.connect(
+                host=settings.DOC_MEMGRAPH_HOST,
+                port=settings.DOC_MEMGRAPH_PORT,
+            )
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                MATCH (d:Document)
+                WHERE coalesce(d.word_count, 0) >= 1000
+                OPTIONAL MATCH (d)-[:CONTAINS_CHUNK]->(c:Chunk)
+                WITH d, count(c) AS chunk_count
+                WITH count(d) AS large_doc_count,
+                     count(CASE WHEN chunk_count = 0 THEN 1 END) AS unchunked_count
+                RETURN large_doc_count, unchunked_count
+                """
+            )
+            row = cursor.fetchone()
+            large_doc_count = int(row[0]) if row else 0
+            unchunked_count = int(row[1]) if row else 0
+
+            if large_doc_count == 0:
+                return HealthCheckResult(
+                    name=cs.HEALTH_CHECK_DOC_CHUNK_PASS,
+                    passed=True,
+                    message=cs.HEALTH_CHECK_DOC_CHUNK_SKIP_MSG,
+                )
+
+            if unchunked_count == 0:
+                return HealthCheckResult(
+                    name=cs.HEALTH_CHECK_DOC_CHUNK_PASS,
+                    passed=True,
+                    message=cs.HEALTH_CHECK_DOC_CHUNK_PASS_MSG,
+                )
+
+            return HealthCheckResult(
+                name=cs.HEALTH_CHECK_DOC_CHUNK_FAIL,
+                passed=False,
+                message=cs.HEALTH_CHECK_DOC_CHUNK_FAIL_MSG.format(
+                    count=unchunked_count
+                ),
+            )
+        except Exception as e:
+            return HealthCheckResult(
+                name=cs.HEALTH_CHECK_DOC_CHUNK_FAIL,
+                passed=False,
+                message=cs.HEALTH_CHECK_DOC_CHUNK_FAIL,
+                error=cs.HEALTH_CHECK_DOC_CHUNK_ERROR_MSG.format(error=str(e)),
+            )
+        finally:
+            if cursor is not None:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
     def check_json_ingestion_schema(self, json_path: str) -> HealthCheckResult:
         import json
         import jsonschema  # ty: ignore[unresolved-import]
@@ -369,6 +498,7 @@ class HealthChecker:
         expected_node_count: int | None = None,
         expected_edge_count: int | None = None,
         node_label: str = "File",
+        embedded_node_label: str = "Function",
         embedding_property: str = "embedding",
         vector_dim: int | None = None,
     ) -> list[HealthCheckResult]:
@@ -470,11 +600,13 @@ class HealthChecker:
 
             # 3. Check missing embeddings
             cursor.execute(f"""
-                MATCH (n:{node_label})
+                MATCH (n:{embedded_node_label})
                 WHERE n.{embedding_property} IS NULL
                 RETURN count(n) AS count
             """)
             missing_embeddings_count = cursor.fetchone()[0]
+            cursor.execute(f"MATCH (n:{embedded_node_label}) RETURN count(n) AS count")
+            embedded_node_count = cursor.fetchone()[0]
             missing_embeddings_passed = missing_embeddings_count == 0
             results.append(
                 HealthCheckResult(
@@ -494,9 +626,9 @@ class HealthChecker:
             )
 
             # 4. Check invalid embeddings dimension
-            if missing_embeddings_count < actual_node_count:
+            if missing_embeddings_count < embedded_node_count:
                 cursor.execute(f"""
-                    MATCH (n:{node_label})
+                    MATCH (n:{embedded_node_label})
                     WHERE n.{embedding_property} IS NOT NULL
                     RETURN size(n.{embedding_property}) AS dim
                     LIMIT 1

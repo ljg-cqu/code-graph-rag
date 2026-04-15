@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .types_defs import ResultRow
 
@@ -108,7 +108,7 @@ class JSONEntity(BaseModel):
     labels: list[str] | None = None
     operation: str | None = None
     last_updated: str | None = None
-    properties: dict[str, Any] = {}
+    properties: dict[str, Any] = Field(default_factory=dict)
 
 
 class JSONRelationship(BaseModel):
@@ -121,7 +121,7 @@ class JSONRelationship(BaseModel):
     confidence: float | None = None
     explanation: str | None = None
     isInferred: bool | None = None
-    properties: dict[str, Any] = {}
+    properties: dict[str, Any] = Field(default_factory=dict)
 
 
 class JSONMetadata(BaseModel):
@@ -156,7 +156,7 @@ class IngestionResult(BaseModel):
     relationships_deleted: int = 0
     relationships_skipped: int = 0
     relationships_failed: int = 0
-    errors: list[str] = []
+    errors: list[str] = Field(default_factory=list)
     dry_run: bool = False
 
 

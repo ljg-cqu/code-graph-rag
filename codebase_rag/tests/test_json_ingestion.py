@@ -1,107 +1,134 @@
-"""Unit tests for JSON Data Ingestion feature."""
+"""Unit tests for canonical JSON ingestion behavior."""
+
+from __future__ import annotations
 
 import json
-import tempfile
+from copy import deepcopy
 from pathlib import Path
+import tempfile
 
 import pytest
 
-from codebase_rag.json_ingestion import load_json_files, validate_json_input
+from codebase_rag.json_ingestion import (
+    handle_json_update_event,
+    ingest_json_data,
+    load_json_files,
+    validate_json_input,
+)
 
 SAMPLE_VALID_JSON = {
     "metadata": {"dataset_id": "test_dataset_1", "source": "test_source"},
     "entities": [
         {
             "id": "ent_001",
+            "name": "John Doe",
+            "type": "Person",
             "labels": ["TestEntity", "Person"],
             "properties": {
-                "name": "John Doe",
                 "description": "Test person entity",
                 "age": 30,
             },
         },
         {
             "id": "ent_002",
+            "name": "Acme Corp",
+            "type": "Company",
             "labels": ["TestEntity", "Company"],
-            "properties": {"name": "Acme Corp", "description": "Test company entity"},
+            "properties": {"description": "Test company entity"},
         },
     ],
     "relationships": [
         {
-            "source_entity_id": "ent_001",
-            "target_entity_id": "ent_002",
-            "type": "WORKS_AT",
+            "source": "ent_001",
+            "target": "ent_002",
+            "relationship": "WORKS_AT",
             "properties": {"description": "John works at Acme Corp", "since": 2020},
         }
     ],
 }
 
 
-def test_validate_valid_json():
-    """Test validation of properly structured JSON input."""
-    valid, validated, errors = validate_json_input(SAMPLE_VALID_JSON)
+def test_validate_valid_json() -> None:
+    valid, validated, errors = validate_json_input(deepcopy(SAMPLE_VALID_JSON))
+
     assert valid is True
-    assert len(errors) == 0
+    assert errors == []
     assert validated is not None
-    assert validated.metadata.dataset_id == "test_dataset_1"
-    assert len(validated.entities) == 2
-    assert len(validated.relationships) == 1
+    assert validated["metadata"]["dataset_id"] == "test_dataset_1"
+    assert len(validated["entities"]) == 2
+    assert len(validated["relationships"]) == 1
 
 
-def test_validate_json_missing_required_fields():
-    """Test validation fails when required fields are missing."""
-    # Missing entity id
-    invalid_json = SAMPLE_VALID_JSON.copy()
-    invalid_json["entities"][0].pop("id")
-    valid, validated, errors = validate_json_input(invalid_json)
+def test_validate_json_missing_required_fields() -> None:
+    invalid_json = deepcopy(SAMPLE_VALID_JSON)
+    invalid_json["entities"][0].pop("name")
+    valid, _, errors = validate_json_input(invalid_json)
     assert valid is False
-    assert len(errors) > 0
+    assert errors
 
-    # Missing entity name in properties
-    invalid_json = SAMPLE_VALID_JSON.copy()
-    invalid_json["entities"][0]["properties"].pop("name")
-    valid, validated, errors = validate_json_input(invalid_json)
+    invalid_json = deepcopy(SAMPLE_VALID_JSON)
+    invalid_json["relationships"][0].pop("source")
+    valid, _, errors = validate_json_input(invalid_json)
     assert valid is False
-    assert len(errors) > 0
+    assert errors
 
-    # Missing entity description in properties
-    invalid_json = SAMPLE_VALID_JSON.copy()
-    invalid_json["entities"][0]["properties"].pop("description")
-    valid, validated, errors = validate_json_input(invalid_json)
+    invalid_json = deepcopy(SAMPLE_VALID_JSON)
+    invalid_json["relationships"][0].pop("relationship")
+    valid, _, errors = validate_json_input(invalid_json)
     assert valid is False
-    assert len(errors) > 0
+    assert errors
 
-    # Missing relationship source_entity_id
-    invalid_json = SAMPLE_VALID_JSON.copy()
-    invalid_json["relationships"][0].pop("source_entity_id")
-    valid, validated, errors = validate_json_input(invalid_json)
+
+def test_validate_auto_generates_missing_entity_ids() -> None:
+    input_json = deepcopy(SAMPLE_VALID_JSON)
+    input_json["entities"][0].pop("id")
+    input_json["relationships"][0]["source"] = "John Doe"
+
+    valid, validated, errors = validate_json_input(input_json)
+
+    assert valid is True
+    assert errors == []
+    assert validated is not None
+    assert validated["entities"][0]["id"] == "john_doe"
+
+
+def test_validate_duplicate_entity_ids() -> None:
+    invalid_json = deepcopy(SAMPLE_VALID_JSON)
+    invalid_json["entities"][1]["id"] = "ent_001"
+
+    valid, _, errors = validate_json_input(invalid_json)
+
     assert valid is False
-    assert len(errors) > 0
+    assert any("duplicate" in error.lower() for error in errors)
 
 
-def test_validate_duplicate_entity_ids():
-    """Test validation fails when duplicate entity IDs are present."""
-    invalid_json = SAMPLE_VALID_JSON.copy()
-    invalid_json["entities"][1]["id"] = "ent_001"  # Duplicate ID
-    valid, validated, errors = validate_json_input(invalid_json)
+def test_validate_invalid_relationship_references() -> None:
+    invalid_json = deepcopy(SAMPLE_VALID_JSON)
+    invalid_json["relationships"][0]["source"] = "non_existent_id"
+
+    valid, _, errors = validate_json_input(invalid_json)
+
     assert valid is False
-    assert "duplicate" in errors[0].lower()
+    assert any("non-existent" in error.lower() for error in errors)
 
 
-def test_validate_invalid_relationship_references():
-    """Test validation fails when relationships reference non-existent entities."""
-    invalid_json = SAMPLE_VALID_JSON.copy()
-    invalid_json["relationships"][0]["source_entity_id"] = "non_existent_id"
-    valid, validated, errors = validate_json_input(invalid_json)
-    assert valid is False
-    assert "non-existent" in errors[0].lower()
+def test_validate_relationship_wrapper_object() -> None:
+    input_json = deepcopy(SAMPLE_VALID_JSON)
+    input_json["relationships"] = {"relationships": input_json["relationships"]}
+
+    valid, validated, errors = validate_json_input(input_json)
+
+    assert valid is True
+    assert errors == []
+    assert validated is not None
+    assert len(validated["relationships"]) == 1
+    assert validated["relationships"][0]["relationship"] == "WORKS_AT"
 
 
-def test_load_json_files_single_file():
-    """Test loading JSON from a single file."""
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-        json.dump(SAMPLE_VALID_JSON, f)
-        temp_path = Path(f.name)
+def test_load_json_files_single_file() -> None:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as json_file:
+        json.dump(SAMPLE_VALID_JSON, json_file)
+        temp_path = Path(json_file.name)
 
     try:
         files = load_json_files(str(temp_path))
@@ -112,30 +139,26 @@ def test_load_json_files_single_file():
         temp_path.unlink()
 
 
-def test_load_json_files_directory():
-    """Test loading JSON files from a directory."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tmp_path = Path(tmpdir)
+def test_load_json_files_directory() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
 
-        # Create 2 JSON files
-        for i in range(2):
-            file_path = tmp_path / f"test_{i}.json"
-            data = SAMPLE_VALID_JSON.copy()
-            data["metadata"]["dataset_id"] = f"test_{i}"
-            with open(file_path, "w") as f:
-                json.dump(data, f)
+        for index in range(2):
+            file_path = temp_path / f"test_{index}.json"
+            data = deepcopy(SAMPLE_VALID_JSON)
+            data["metadata"]["dataset_id"] = f"test_{index}"
+            with open(file_path, "w", encoding="utf-8") as json_file:
+                json.dump(data, json_file)
 
-        # Create a non-JSON file that should be ignored
-        (tmp_path / "not_json.txt").write_text("ignore me")
+        (temp_path / "not_json.txt").write_text("ignore me", encoding="utf-8")
 
-        files = load_json_files(str(tmp_path))
+        files = load_json_files(str(temp_path))
         assert len(files) == 2
-        dataset_ids = {f[1]["metadata"]["dataset_id"] for f in files}
+        dataset_ids = {file_data[1]["metadata"]["dataset_id"] for file_data in files}
         assert dataset_ids == {"test_0", "test_1"}
 
 
-def test_load_json_files_invalid_path():
-    """Test error is raised for invalid input path."""
+def test_load_json_files_invalid_path() -> None:
     with pytest.raises(ValueError):
         load_json_files("/non/existent/path/12345.json")
 
@@ -143,10 +166,74 @@ def test_load_json_files_invalid_path():
         load_json_files("/non/existent/directory/")
 
 
-def test_handle_json_update_event_basic():
-    """Test basic event handling functionality."""
-    from codebase_rag.json_ingestion import handle_json_update_event
+def test_ingest_json_data_dry_run_with_sample_json() -> None:
+    sample_path = Path(__file__).resolve().parents[2] / "sample_json_ingest.json"
 
+    result = ingest_json_data(
+        input_path=str(sample_path),
+        dry_run=True,
+        parallel_workers=1,
+    )
+
+    assert result.files_processed == 1
+    assert result.files_skipped == 0
+    assert result.entities_processed == 3
+    assert result.relationships_processed == 2
+    assert result.entities_ingested == 3
+    assert result.relationships_ingested == 2
+    assert result.errors == []
+
+
+def test_ingest_json_data_dry_run_resolves_cross_file_relationships() -> None:
+    job_file = {
+        "metadata": {"dataset_id": "shared_dataset"},
+        "entities": [
+            {
+                "id": "job_001",
+                "name": "Backend Engineer",
+                "type": "JobPosting",
+                "properties": {"description": "A backend engineering role."},
+            }
+        ],
+        "relationships": [
+            {
+                "source": "job_001",
+                "target": "skill_001",
+                "relationship": "REQUIRES_SKILL",
+            }
+        ],
+    }
+    skill_file = {
+        "metadata": {"dataset_id": "shared_dataset"},
+        "entities": [
+            {
+                "id": "skill_001",
+                "name": "Python",
+                "type": "Skill",
+                "properties": {"description": "Python programming language."},
+            }
+        ],
+        "relationships": [],
+    }
+
+    result = ingest_json_data(
+        pre_loaded_data=[
+            (Path("job.json"), job_file),
+            (Path("skill.json"), skill_file),
+        ],
+        dry_run=True,
+        parallel_workers=2,
+    )
+
+    assert result.files_processed == 2
+    assert result.entities_processed == 2
+    assert result.relationships_processed == 1
+    assert result.entities_ingested == 2
+    assert result.relationships_ingested == 1
+    assert result.errors == []
+
+
+def test_handle_json_update_event_basic() -> None:
     event = {
         "id": "evt_123",
         "operation": "add",
@@ -155,9 +242,10 @@ def test_handle_json_update_event_basic():
         "relationships": SAMPLE_VALID_JSON["relationships"],
     }
 
-    # Dry run to avoid database writes
     result = handle_json_update_event(event, "test_dataset", dry_run=True)
+
     assert result.event_id == "evt_123"
     assert result.operation == "add"
     assert result.dataset_id == "test_dataset"
     assert result.dry_run is True
+    assert result.errors == []

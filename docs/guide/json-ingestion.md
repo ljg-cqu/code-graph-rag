@@ -4,22 +4,21 @@ description: "Ingest custom entities, relationships, and domain knowledge from J
 
 # JSON Data Ingestion Guide
 
-The JSON data ingestion feature allows you to load pre-processed custom domain data, entities, relationships, and metadata directly into both the Code-Graph-RAG knowledge graph (Memgraph) and vector database. This enables you to combine your custom domain knowledge with code analysis for comprehensive RAG queries.
+The JSON data ingestion feature allows you to load pre-processed custom domain data, entities, relationships, and metadata directly into the dedicated JSON Memgraph graph. Entity embeddings are stored on the JSON nodes themselves, which keeps semantic retrieval and graph traversal in the same data store.
 
 ## Overview
 
 This feature supports:
 - Bulk ingestion of custom entities and relationships from JSON files
-- Automatic embedding generation for all entities and relationships
+- Automatic embedding generation for entities
 - Incremental updates for changing datasets
-- Atomic batch operations with rollback support
 - Idempotent ingestion (re-running the same command does not create duplicates)
 - Complete integration with existing Code-Graph-RAG querying and validation capabilities
 - Optional real-time streaming ingestion for low-latency updates
 
 ## Input JSON Schema
 
-All ingested JSON files must conform to the following schema, which aligns with existing internal Code-Graph-RAG models:
+All ingested JSON files must conform to the official ingestion schema. Entities use top-level `name`, `type`, and `labels` fields. Relationships use `source`, `target`, and `relationship` fields.
 
 ```json
 {
@@ -31,11 +30,12 @@ All ingested JSON files must conform to the following schema, which aligns with 
   },
   "entities": [
     {
-      "id": "string (required, unique entity ID within dataset)",
-      "labels": ["string (required, node labels e.g. ['Job', 'Company'])", "inherited from metadata.default_entity_labels if not specified"],
+      "id": "string (optional, unique entity ID within dataset; auto-generated from name if omitted)",
+      "name": "string (required, human-readable entity name)",
+      "type": "string (optional, primary entity type used as a label)",
+      "labels": ["string (optional, node labels e.g. ['Job', 'Company'])", "inherited from metadata.default_entity_labels if not specified"],
       "properties": {
-        "name": "string (required, human-readable entity name)",
-        "description": "string (required, content used for embedding generation)",
+        "description": "string (recommended, content used for embedding generation)",
         "any_custom_property": "any (optional custom metadata fields)"
       }
     }
@@ -43,11 +43,11 @@ All ingested JSON files must conform to the following schema, which aligns with 
   "relationships": [
     {
       "id": "string (optional, unique relationship ID)",
-      "source_entity_id": "string (required, references entity.id in same dataset)",
-      "target_entity_id": "string (required, references entity.id in same dataset)",
-      "type": "string (required, relationship type e.g. 'REQUIRES_SKILL', 'WORKS_AT')",
+      "source": "string (required, references entity.id or entity.name in the same dataset)",
+      "target": "string (required, references entity.id or entity.name in the same dataset)",
+      "relationship": "string (required, relationship type e.g. 'REQUIRES_SKILL', 'WORKS_AT')",
       "properties": {
-        "description": "string (optional, used for relationship embedding if provided)",
+        "description": "string (optional relationship metadata)",
         "any_custom_property": "any (optional custom metadata fields)"
       }
     }
@@ -66,9 +66,10 @@ All ingested JSON files must conform to the following schema, which aligns with 
   "entities": [
     {
       "id": "job_001",
+      "name": "Senior Backend Engineer",
+      "type": "JobPosting",
       "labels": ["JobPosting", "SoftwareEngineer"],
       "properties": {
-        "name": "Senior Backend Engineer",
         "description": "Senior backend engineer position requiring Python, Neo4j, and microservices experience. 5+ years of experience required.",
         "salary_range": "$150k-$200k",
         "location": "Remote",
@@ -77,18 +78,20 @@ All ingested JSON files must conform to the following schema, which aligns with 
     },
     {
       "id": "skill_001",
+      "name": "Python",
+      "type": "Skill",
       "labels": ["Skill", "Technology"],
       "properties": {
-        "name": "Python",
         "description": "Python programming language, version 3.8+",
         "category": "Programming Language"
       }
     },
     {
       "id": "skill_002",
+      "name": "Neo4j",
+      "type": "Skill",
       "labels": ["Skill", "Technology"],
       "properties": {
-        "name": "Neo4j",
         "description": "Neo4j graph database, including Cypher query language",
         "category": "Database"
       }
@@ -96,9 +99,9 @@ All ingested JSON files must conform to the following schema, which aligns with 
   ],
   "relationships": [
     {
-      "source_entity_id": "job_001",
-      "target_entity_id": "skill_001",
-      "type": "REQUIRES_SKILL",
+      "source": "job_001",
+      "target": "skill_001",
+      "relationship": "REQUIRES_SKILL",
       "properties": {
         "description": "Job requires Python proficiency",
         "minimum_experience_years": 3,
@@ -106,9 +109,9 @@ All ingested JSON files must conform to the following schema, which aligns with 
       }
     },
     {
-      "source_entity_id": "job_001",
-      "target_entity_id": "skill_002",
-      "type": "REQUIRES_SKILL",
+      "source": "job_001",
+      "target": "skill_002",
+      "relationship": "REQUIRES_SKILL",
       "properties": {
         "description": "Job requires Neo4j experience",
         "minimum_experience_years": 2,
@@ -122,33 +125,27 @@ All ingested JSON files must conform to the following schema, which aligns with 
 ## Core Ingestion Workflow
 
 ### 1. Input Validation
-- JSON structure is validated against the schema using Pydantic
+- JSON structure is validated against the official schema and Pydantic models
 - Duplicate entity IDs within the dataset are checked
-- All relationship source and target entity IDs are verified to exist in the dataset
+- Relationship references are validated against entity IDs or names
 - Required fields are validated for presence and correct type
 
 ### 2. Embedding Generation
 - Uses your configured embedding provider (same as code GraphRAG)
-- Generates embeddings for entity `properties.description` (required for all entities)
-- Generates embeddings for relationship `properties.description` (optional, only if present)
+- Generates embeddings for entity `properties.description`, falling back to `name` if needed
 - Reuses existing embedding cache to avoid duplicate work for identical content
-- Embeddings are stored with metadata linking to the corresponding graph node/relationship IDs
+- Embeddings are stored directly on `JsonEntity` nodes in the JSON Memgraph instance
 
 ### 3. Knowledge Graph Ingestion
-- Uses existing Cypher query builders from Code-Graph-RAG
-- Entities are merged (upserted) to avoid duplicates: `dataset_id + entity.id` is used as the unique key
-- Relationships are created between the merged entities
+- Entities are merged (upserted) using `dataset_id + entity.id` as the unique key
+- Relationships are created after entity ingestion, so cross-file references resolve correctly
 - All custom properties are attached to nodes and relationships
-- All nodes and relationships from the same dataset get a `source_dataset` property for easy filtering and cleanup
+- All JSON entities receive the stable `JsonEntity` label in addition to user-provided labels
 
-### 4. Vector Database Ingestion
-- Embeddings are stored in the configured vector backend (Qdrant/Memgraph)
-- Metadata includes:
-  - Graph node/relationship ID reference
-  - Dataset ID
-  - Entity/relationship labels/type
-  - All custom properties needed for search filtering
-- Maintains 1:1 mapping between graph nodes/relationships and vector store entries for cross-reference between semantic search results and graph traversal
+### 4. Vector Indexing
+- JSON entity embeddings are indexed directly in the JSON Memgraph instance
+- The JSON ingestion path does not persist relationship embeddings
+- Dataset deletion removes JSON nodes and relationships without a separate vector-store cleanup step
 
 ## CLI Usage
 
@@ -194,7 +191,7 @@ cgr ingest-json --input-path ./live-dataset --incremental --conflict-resolution 
 You can also use the JSON ingestion functionality programmatically via the Python API:
 
 ```python
-from codebase_rag.ingestion.json_ingestor import ingest_json_data, IngestionResult
+from codebase_rag.json_ingestion import ingest_json_data, IngestionResult
 
 result: IngestionResult = ingest_json_data(
     input_path="/path/to/your/data.json",

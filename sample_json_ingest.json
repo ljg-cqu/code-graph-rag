@@ -7,9 +7,10 @@
     "entities": [
         {
             "id": "job_001",
+            "name": "Senior Backend Engineer",
+            "type": "JobPosting",
             "labels": ["JobPosting", "SoftwareEngineer"],
             "properties": {
-                "name": "Senior Backend Engineer",
                 "description": "Senior backend engineer position requiring Python, Neo4j, and microservices experience. 5+ years of experience required.",
                 "salary_range": "$150k-$200k",
                 "location": "Remote"
@@ -17,17 +18,19 @@
         },
         {
             "id": "skill_001",
+            "name": "Python",
+            "type": "Skill",
             "labels": ["Skill", "Technology"],
             "properties": {
-                "name": "Python",
                 "description": "Python programming language, version 3.8+"
             }
         },
         {
             "id": "skill_002",
+            "name": "Neo4j",
+            "type": "Skill",
             "labels": ["Skill", "Technology"],
             "properties": {
-                "name": "Neo4j",
                 "description": "Neo4j graph database, including Cypher query language"
             }
         }
