@@ -339,7 +339,6 @@ class GraphUpdater:
 
         # Run post-ingestion graph algorithms (Memgraph MAGE integration)
         from .graph_algorithms import get_shared_algorithms
-        from .config import settings
 
         logger.info(
             "Running post-ingestion graph algorithms to improve retrieval quality..."
@@ -650,11 +649,10 @@ class GraphUpdater:
         queries: dict[SupportedLanguage, LanguageQueries] = {}
         for lang in get_supported_languages():
             queries[lang] = load_queries_for_language(lang)
+        from .language_spec import LANGUAGE_SPECS
+        from .parser_loader import LANGUAGE_LIBRARIES
         from .parsers.factory import ProcessorFactory
         from .services.memory_ingestor import MemoryIngestor
-        from .parser_loader import LANGUAGE_LIBRARIES
-
-        from .language_spec import LANGUAGE_SPECS
 
         # Initialize parsers INSIDE worker (avoids unpickleable parser issue)
         parsers: dict[cs.SupportedLanguage, Parser] = {}

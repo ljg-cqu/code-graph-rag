@@ -102,12 +102,17 @@ class StructureProcessor:
                 )
             elif root != self.repo_path:
                 self.structural_elements[relative_root] = None
+                folder_qn = cs.SEPARATOR_DOT.join(
+                    [self.project_name] + list(relative_root.parts)
+                )
+                folder_qn += ":folder"
                 logger.info(
                     logs.STRUCT_IDENTIFIED_FOLDER.format(relative_root=relative_root)
                 )
                 self.ingestor.ensure_node_batch(
                     cs.NodeLabel.FOLDER,
                     {
+                        cs.KEY_QUALIFIED_NAME: folder_qn,
                         cs.KEY_PATH: relative_root.as_posix(),
                         cs.KEY_NAME: root.name,
                         cs.KEY_ABSOLUTE_PATH: root.resolve().as_posix(),

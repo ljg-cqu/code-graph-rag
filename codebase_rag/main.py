@@ -32,6 +32,7 @@ from . import constants as cs
 from . import exceptions as ex
 from . import logs as ls
 from .config import ModelConfig, load_cgrignore_patterns, settings
+from .context_compressor import ContextCompressor
 from .models import AppContext
 from .orchestrator import (
     ConcurrencyEligibilityClassifier,
@@ -66,7 +67,6 @@ from .tools.semantic_search import (
     create_semantic_search_tool,
 )
 from .tools.shell_command import ShellCommander, create_shell_command_tool
-from .context_compressor import ContextCompressor
 from .types_defs import (
     CHAT_LOOP_UI,
     OPTIMIZATION_LOOP_UI,
@@ -503,19 +503,15 @@ async def _run_agent_response_loop(
             and message_history
             and not deferred_results
         ):
-            import dataclasses
+
             from .utils.token_utils import count_tokens
 
             # Estimate total tokens (history + new question)
-            total_tokens = count_tokens(
-                json.dumps(
-                    [dataclasses.asdict(m) for m in message_history]
-                    + [question_with_context],
-                    default=lambda obj: (
-                        obj.isoformat() if hasattr(obj, "isoformat") else obj
-                    ),
-                )
+            # Avoid circular references by stringifying directly instead of asdict
+            serialized = "\n".join(
+                [str(m) for m in message_history] + [question_with_context]
             )
+            total_tokens = count_tokens(serialized)
             # Get max context window from model config (default to 256k if not specified)
             max_context = settings.DEFAULT_CONTEXT_WINDOW
             try:
@@ -1116,9 +1112,11 @@ async def _run_interactive_loop(
 
                 # === AUTOMATIC CONCURRENCY DETECTION (NO USER INPUT NEEDED) ===
                 # First check if task is eligible for parallel execution
-                eligible, task_type, confidence = concurrency_classifier.is_eligible(
-                    question_with_context
-                )
+                (
+                    eligible,
+                    task_type,
+                    confidence,
+                ) = await concurrency_classifier.is_eligible(question_with_context)
                 use_parallel = eligible
                 parallel_result = None
 
@@ -1150,7 +1148,7 @@ async def _run_interactive_loop(
                     if len(subtasks) >= 2:
                         # Execute subtasks in parallel with round-robin workers
                         aggregator = subagent_orchestrator.execute_tasks(subtasks)
-                        parallel_result = aggregator.final_result
+                        parallel_result = aggregator.consolidate()
                         app_context.console.print(
                             style(
                                 f"⚡ Parallel execution completed in {aggregator.metadata['total_execution_time']:.2f}s",

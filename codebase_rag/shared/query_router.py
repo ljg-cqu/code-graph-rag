@@ -306,10 +306,10 @@ class QueryRouter:
             # Simple text search in function/class names
             keyword_query = """
             MATCH (n)
-            WHERE (n:Function OR n:Class OR n:Method)
+            WHERE (n:Function OR n:Class OR n:Method OR n:Enum OR n:Type OR n:Union OR n:Interface OR n:Contract OR n:Library)
               AND (n.name CONTAINS $keyword OR n.qualified_name CONTAINS $keyword)
             RETURN n.name as name, n.qualified_name as qualified_name,
-                   n.file_path as file_path, n.start_line as start_line,
+                   n.path as file_path, n.start_line as start_line,
                    n.end_line as end_line, labels(n) as labels
             LIMIT $limit
             """

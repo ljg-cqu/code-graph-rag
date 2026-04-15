@@ -74,6 +74,10 @@ class NodeType(StrEnum):
     UNION = "Union"
     CONTRACT = "Contract"
     LIBRARY = "Library"
+    MODIFIER = "Modifier"
+    EVENT = "Event"
+    STATE_VARIABLE = "StateVariable"
+    CUSTOM_ERROR = "CustomError"
 
 
 type TrieNode = dict[str, TrieNode | QualifiedName | NodeType]
@@ -458,7 +462,10 @@ NODE_SCHEMAS: tuple[NodeSchema, ...] = (
         NodeLabel.PACKAGE,
         "{qualified_name: string, name: string, path: string, absolute_path: string}",
     ),
-    NodeSchema(NodeLabel.FOLDER, "{path: string, name: string, absolute_path: string}"),
+    NodeSchema(
+        NodeLabel.FOLDER,
+        "{qualified_name: string, path: string, name: string, absolute_path: string}",
+    ),
     NodeSchema(
         NodeLabel.FILE,
         "{path: string, name: string, extension: string, absolute_path: string}",
@@ -487,8 +494,8 @@ NODE_SCHEMAS: tuple[NodeSchema, ...] = (
         NodeLabel.ENUM,
         "{qualified_name: string, name: string, path: string, absolute_path: string}",
     ),
-    NodeSchema(NodeLabel.TYPE, "{qualified_name: string, name: string}"),
-    NodeSchema(NodeLabel.UNION, "{qualified_name: string, name: string}"),
+    NodeSchema(NodeLabel.TYPE, "{qualified_name: string, name: string, path: string, absolute_path: string}"),
+    NodeSchema(NodeLabel.UNION, "{qualified_name: string, name: string, path: string, absolute_path: string}"),
     NodeSchema(
         NodeLabel.MODULE_INTERFACE,
         "{qualified_name: string, name: string, path: string, absolute_path: string}",
@@ -578,6 +585,8 @@ RELATIONSHIP_SCHEMAS: tuple[RelationshipSchema, ...] = (
         (
             NodeLabel.CLASS,
             NodeLabel.CONTRACT,
+            NodeLabel.INTERFACE,
+            NodeLabel.LIBRARY,
         ),
         RelationshipType.DEFINES_METHOD,
         (NodeLabel.METHOD,),

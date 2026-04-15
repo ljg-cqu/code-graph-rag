@@ -1,0 +1,19 @@
+# Exclude build artifacts
+*.egg-info/
+build/
+dist/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Exclude large reference files that don't need indexing
+/optimize/tree-sitter.txt
+/docs/tree-sitter.txt
+
+# Exclude other non-source files
+*.pdf
+*.zip
+*.tar.gz
+*.rar
+*.7z

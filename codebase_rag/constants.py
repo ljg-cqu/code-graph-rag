@@ -544,6 +544,12 @@ KEY_PARAMETERS = "parameters"
 KEY_DECORATORS = "decorators"
 KEY_DOCSTRING = "docstring"
 KEY_IS_EXPORTED = "is_exported"
+KEY_IS_ABSTRACT = "is_abstract"
+KEY_IS_CONSTANT = "is_constant"
+KEY_IS_IMMUTABLE = "is_immutable"
+KEY_IS_MAPPED = "is_mapped"
+KEY_IS_ANONYMOUS = "is_anonymous"
+KEY_INDEXED_COUNT = "indexed_count"
 
 # (H) Method signature formatting
 EMPTY_PARENS = "()"
@@ -592,7 +598,7 @@ MATCH (m:Module)
 WHERE m.qualified_name STARTS WITH ($project_name + '.')
 MATCH (m)-[:DEFINES]->(c)-[:DEFINES_METHOD]->(n:Method)
 RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
-       n.start_line AS start_line, n.end_line AS end_line, m.path AS path
+       n.start_line AS start_line, n.end_line AS end_line, COALESCE(n.path, m.path) AS path
 UNION
 MATCH (m:Module)
 WHERE m.qualified_name STARTS WITH ($project_name + '.')
@@ -615,6 +621,24 @@ UNION
 MATCH (m:Module)
 WHERE m.qualified_name STARTS WITH ($project_name + '.')
 MATCH (m)-[:DEFINES]->(n:Library)
+RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
+       n.start_line AS start_line, n.end_line AS end_line, m.path AS path
+UNION
+MATCH (m:Module)
+WHERE m.qualified_name STARTS WITH ($project_name + '.')
+MATCH (m)-[:DEFINES]->(n:Enum)
+RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
+       n.start_line AS start_line, n.end_line AS end_line, m.path AS path
+UNION
+MATCH (m:Module)
+WHERE m.qualified_name STARTS WITH ($project_name + '.')
+MATCH (m)-[:DEFINES]->(n:Type)
+RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
+       n.start_line AS start_line, n.end_line AS end_line, m.path AS path
+UNION
+MATCH (m:Module)
+WHERE m.qualified_name STARTS WITH ($project_name + '.')
+MATCH (m)-[:DEFINES]->(n:Union)
 RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
        n.start_line AS start_line, n.end_line AS end_line, m.path AS path
 """
@@ -648,6 +672,21 @@ UNION
 MATCH (m:Module)
 WHERE m.qualified_name STARTS WITH ($project_name + '.')
 MATCH (m)-[:DEFINES]->(n:Library)
+RETURN id(n) AS node_id
+UNION
+MATCH (m:Module)
+WHERE m.qualified_name STARTS WITH ($project_name + '.')
+MATCH (m)-[:DEFINES]->(n:Enum)
+RETURN id(n) AS node_id
+UNION
+MATCH (m:Module)
+WHERE m.qualified_name STARTS WITH ($project_name + '.')
+MATCH (m)-[:DEFINES]->(n:Type)
+RETURN id(n) AS node_id
+UNION
+MATCH (m:Module)
+WHERE m.qualified_name STARTS WITH ($project_name + '.')
+MATCH (m)-[:DEFINES]->(n:Union)
 RETURN id(n) AS node_id
 """
 
@@ -1229,7 +1268,7 @@ MODULE_TORCH = "torch"
 MODULE_TRANSFORMERS = "transformers"
 MODULE_QDRANT_CLIENT = "qdrant_client"
 
-SEMANTIC_DEPENDENCIES = (MODULE_QDRANT_CLIENT, MODULE_TORCH, MODULE_TRANSFORMERS)
+SEMANTIC_DEPENDENCIES = (MODULE_TORCH, MODULE_TRANSFORMERS)
 ML_DEPENDENCIES = (MODULE_TORCH, MODULE_TRANSFORMERS)
 
 

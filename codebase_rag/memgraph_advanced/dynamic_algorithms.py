@@ -1,16 +1,15 @@
 """Dynamic graph algorithms for real-time updates."""
 
-from typing import Any, Optional
 from loguru import logger
 
-from ..services.graph_service import MemgraphIngestor
 from ..config import settings
+from ..services.graph_service import MemgraphIngestor
 
 
 class DynamicGraphAlgorithms:
     """Wrapper for dynamic MAGE algorithms."""
 
-    def __init__(self, use_dynamic: Optional[bool] = None):
+    def __init__(self, use_dynamic: bool | None = None):
         """
         Initialize dynamic algorithms wrapper.
 
@@ -45,8 +44,8 @@ class DynamicGraphAlgorithms:
 
     def update_pagerank_dynamic(
         self,
-        new_relationships: Optional[list[tuple[int, int]]],
-        deleted_relationships: Optional[list[tuple[int, int]]],
+        new_relationships: list[tuple[int, int]] | None,
+        deleted_relationships: list[tuple[int, int]] | None,
     ) -> dict:
         """
         Incrementally update PageRank scores when graph changes.
@@ -120,7 +119,7 @@ class DynamicGraphAlgorithms:
                 "method": "full",
             }
 
-    def update_communities_dynamic(self, changed_nodes: Optional[list[int]]) -> dict:
+    def update_communities_dynamic(self, changed_nodes: list[int] | None) -> dict:
         """
         Incrementally update community assignments.
 

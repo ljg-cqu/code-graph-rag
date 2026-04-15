@@ -1,11 +1,11 @@
 """Query-Focused Summarization using community detection."""
 
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
-from ..services.graph_service import MemgraphIngestor
 from ..config import settings
 from ..providers import get_provider_from_config
+from ..services.graph_service import MemgraphIngestor
 
 
 @dataclass

@@ -35,8 +35,9 @@ def qdrant_backend_env(reset_backend: None) -> None:
 
 class TestUpsertWithRetry:
     def test_succeeds_on_first_attempt(self, qdrant_backend_env: None) -> None:
-        import codebase_rag.vector_store as vs
         from codebase_rag.vector_store_qdrant import QdrantBackend
+
+        import codebase_rag.vector_store as vs
 
         mock_client = MagicMock()
         mock_point = MagicMock()
@@ -52,8 +53,9 @@ class TestUpsertWithRetry:
         mock_client.upsert.assert_called_once()
 
     def test_retries_on_failure_then_succeeds(self, qdrant_backend_env: None) -> None:
-        import codebase_rag.vector_store as vs
         from codebase_rag.vector_store_qdrant import QdrantBackend
+
+        import codebase_rag.vector_store as vs
 
         mock_client = MagicMock()
         mock_client.upsert.side_effect = [
@@ -73,8 +75,9 @@ class TestUpsertWithRetry:
         mock_sleep.assert_called_once()
 
     def test_raises_after_exhausting_retries(self, qdrant_backend_env: None) -> None:
-        import codebase_rag.vector_store as vs
         from codebase_rag.vector_store_qdrant import QdrantBackend
+
+        import codebase_rag.vector_store as vs
 
         mock_client = MagicMock()
         mock_client.upsert.side_effect = ConnectionError("timeout")
@@ -91,8 +94,9 @@ class TestUpsertWithRetry:
             backend._upsert_with_retry([MagicMock()])
 
     def test_exponential_backoff_delays(self, qdrant_backend_env: None) -> None:
-        import codebase_rag.vector_store as vs
         from codebase_rag.vector_store_qdrant import QdrantBackend
+
+        import codebase_rag.vector_store as vs
 
         mock_client = MagicMock()
         mock_client.upsert.side_effect = [
@@ -115,9 +119,10 @@ class TestUpsertWithRetry:
 
 class TestStoreEmbeddingBatch:
     def test_returns_count_on_success(self, qdrant_backend_env: None) -> None:
+        from codebase_rag.vector_store_qdrant import QdrantBackend
+
         import codebase_rag.vector_store as vs
         from codebase_rag.vector_store import store_embedding_batch
-        from codebase_rag.vector_store_qdrant import QdrantBackend
 
         mock_client = MagicMock()
         points = [
@@ -140,9 +145,10 @@ class TestStoreEmbeddingBatch:
         assert result == 0
 
     def test_returns_zero_on_failure(self, qdrant_backend_env: None) -> None:
+        from codebase_rag.vector_store_qdrant import QdrantBackend
+
         import codebase_rag.vector_store as vs
         from codebase_rag.vector_store import store_embedding_batch
-        from codebase_rag.vector_store_qdrant import QdrantBackend
 
         mock_client = MagicMock()
         mock_client.upsert.side_effect = Exception("fail")
@@ -158,9 +164,10 @@ class TestStoreEmbeddingBatch:
         assert result == 0
 
     def test_builds_correct_point_structs(self, qdrant_backend_env: None) -> None:
+        from codebase_rag.vector_store_qdrant import QdrantBackend
+
         import codebase_rag.vector_store as vs
         from codebase_rag.vector_store import store_embedding_batch
-        from codebase_rag.vector_store_qdrant import QdrantBackend
 
         mock_client = MagicMock()
         embedding = [0.5] * 768
@@ -184,9 +191,10 @@ class TestStoreEmbeddingBatch:
 
 class TestDeleteProjectEmbeddings:
     def test_deletes_given_ids(self, qdrant_backend_env: None) -> None:
+        from codebase_rag.vector_store_qdrant import QdrantBackend
+
         import codebase_rag.vector_store as vs
         from codebase_rag.vector_store import delete_project_embeddings
-        from codebase_rag.vector_store_qdrant import QdrantBackend
 
         mock_client = MagicMock()
         node_ids = [1, 2, 3]
@@ -214,9 +222,10 @@ class TestDeleteProjectEmbeddings:
         mock_get_backend.return_value.delete_batch.assert_not_called()
 
     def test_handles_exception_gracefully(self, qdrant_backend_env: None) -> None:
+        from codebase_rag.vector_store_qdrant import QdrantBackend
+
         import codebase_rag.vector_store as vs
         from codebase_rag.vector_store import delete_project_embeddings
-        from codebase_rag.vector_store_qdrant import QdrantBackend
 
         mock_client = MagicMock()
         mock_client.delete.side_effect = Exception("connection lost")
@@ -231,9 +240,10 @@ class TestDeleteProjectEmbeddings:
 
 class TestVerifyStoredIds:
     def test_returns_found_ids(self, qdrant_backend_env: None) -> None:
+        from codebase_rag.vector_store_qdrant import QdrantBackend
+
         import codebase_rag.vector_store as vs
         from codebase_rag.vector_store import verify_stored_ids
-        from codebase_rag.vector_store_qdrant import QdrantBackend
 
         mock_client = MagicMock()
         mock_point_1 = MagicMock()
@@ -258,9 +268,10 @@ class TestVerifyStoredIds:
         assert result == set()
 
     def test_raises_on_exception(self, qdrant_backend_env: None) -> None:
+        from codebase_rag.vector_store_qdrant import QdrantBackend
+
         import codebase_rag.vector_store as vs
         from codebase_rag.vector_store import verify_stored_ids
-        from codebase_rag.vector_store_qdrant import QdrantBackend
 
         mock_client = MagicMock()
         mock_client.retrieve.side_effect = Exception("fail")
@@ -274,9 +285,10 @@ class TestVerifyStoredIds:
             verify_stored_ids({1, 2})
 
     def test_batches_large_id_sets(self, qdrant_backend_env: None) -> None:
+        from codebase_rag.vector_store_qdrant import QdrantBackend
+
         import codebase_rag.vector_store as vs
         from codebase_rag.vector_store import _RETRIEVE_BATCH_SIZE, verify_stored_ids
-        from codebase_rag.vector_store_qdrant import QdrantBackend
 
         mock_client = MagicMock()
         mock_client.retrieve.return_value = []
@@ -294,9 +306,10 @@ class TestVerifyStoredIds:
     def test_retrieve_called_with_correct_params(
         self, qdrant_backend_env: None
     ) -> None:
+        from codebase_rag.vector_store_qdrant import QdrantBackend
+
         import codebase_rag.vector_store as vs
         from codebase_rag.vector_store import verify_stored_ids
-        from codebase_rag.vector_store_qdrant import QdrantBackend
 
         mock_client = MagicMock()
         mock_client.retrieve.return_value = []

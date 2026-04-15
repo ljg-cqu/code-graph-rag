@@ -2,10 +2,9 @@
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Optional
 
-from ..services.graph_service import MemgraphIngestor
 from ..config import settings
+from ..services.graph_service import MemgraphIngestor
 
 
 class PathType(Enum):
@@ -113,7 +112,7 @@ class PathAnalyzer:
         )
 
     def find_bottlenecks(
-        self, function_qn: Optional[str] = None, threshold: float = 0.01
+        self, function_qn: str | None = None, threshold: float = 0.01
     ) -> list[dict]:
         """
         Find functions that are bottlenecks (high betweenness centrality).

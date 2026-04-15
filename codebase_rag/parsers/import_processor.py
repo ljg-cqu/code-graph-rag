@@ -20,7 +20,7 @@ from .stdlib_extractor import (
     load_persistent_cache,
     save_persistent_cache,
 )
-from .utils import get_query_cursor, safe_decode_text, safe_decode_with_fallback
+from .utils import safe_decode_text, safe_decode_with_fallback
 
 
 class ImportProcessor:
@@ -105,7 +105,6 @@ class ImportProcessor:
         self.import_mapping[module_qn] = {}
 
         try:
-            from tree_sitter import QueryCursor
 
             from .utils import get_query_captures
 

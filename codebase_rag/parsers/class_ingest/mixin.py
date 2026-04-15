@@ -20,6 +20,7 @@ from . import identity as id_
 from . import method_override as mo
 from . import node_type as nt
 from . import relationships as rel
+from . import solidity_members as sol_members
 
 if TYPE_CHECKING:
     from ...services import IngestorProtocol
@@ -181,6 +182,18 @@ class ClassIngestMixin:
         self._ingest_class_methods(
             class_node, class_qn, node_type, language, lang_queries, file_path
         )
+        if language == cs.SupportedLanguage.SOLIDITY and node_type in (
+            nt.NodeType.CONTRACT,
+            nt.NodeType.LIBRARY,
+        ):
+            sol_members.ingest_solidity_contract_members(
+                class_node,
+                class_qn,
+                node_type,
+                self.ingestor,
+                file_path,
+                self.repo_path,
+            )
 
     def _ingest_rust_impl_methods(
         self,

@@ -23,13 +23,16 @@ class TaskSplitter:
     def __init__(self, repo_path: str | None = None):
         self.repo_path = Path(repo_path or settings.TARGET_REPO_PATH).resolve()
 
-    def split_task(self, prompt: str, strategy: str = "auto") -> list[dict[str, Any]]:
+    def split_task(
+        self, prompt: str, strategy: str = "auto", max_subtasks: int | None = None
+    ) -> list[dict[str, Any]]:
         """
         Split a user request into subtasks based on the given strategy.
 
         Args:
             prompt: User's original request
             strategy: Splitting strategy to use (auto, file, node, query, manual)
+            max_subtasks: Maximum number of subtasks to return, None for no limit
 
         Returns:
             List of subtask dictionaries with task details
@@ -38,15 +41,23 @@ class TaskSplitter:
             strategy = self._detect_strategy(prompt)
 
         if strategy == "file":
-            return self._split_by_file(prompt)
+            subtasks = self._split_by_file(prompt)
         elif strategy == "node":
-            return self._split_by_node_type(prompt)
+            subtasks = self._split_by_node_type(prompt)
         elif strategy == "query":
-            return self._split_by_query(prompt)
+            subtasks = self._split_by_query(prompt)
         elif strategy == "manual":
-            return self._split_manual(prompt)
+            subtasks = self._split_manual(prompt)
         else:
             raise ValueError(f"Unsupported splitting strategy: {strategy}")
+
+        if max_subtasks is not None and len(subtasks) > max_subtasks:
+            logger.info(
+                f"Truncating {len(subtasks)} subtasks to max limit of {max_subtasks}"
+            )
+            return subtasks[:max_subtasks]
+
+        return subtasks
 
     def _detect_strategy(self, prompt: str) -> str:
         """

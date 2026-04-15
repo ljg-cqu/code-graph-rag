@@ -4,11 +4,14 @@ Implements 10 permanent base workers, 10 burst workers, round-robin assignment, 
 """
 
 from __future__ import annotations
-import re
+
 import math
+import re
+from typing import TYPE_CHECKING
+
 import psutil
-from typing import List, Optional, Any, TYPE_CHECKING
 from loguru import logger
+
 from codebase_rag.config import settings
 
 if TYPE_CHECKING:
@@ -32,8 +35,8 @@ class DynamicConcurrencyController:
         # Round-robin assignment state
         self._next_worker_index = 0
         # Worker pools
-        self.permanent_workers: List[SubAgentWorker] = []
-        self.burst_workers: List[SubAgentWorker] = []
+        self.permanent_workers: list[SubAgentWorker] = []
+        self.burst_workers: list[SubAgentWorker] = []
 
     def _initialize_permanent_workers(self, agent_factory: callable) -> None:
         """Initialize 10 permanent base workers that run continuously for zero cold start overhead."""
@@ -137,7 +140,7 @@ class DynamicConcurrencyController:
 
     def scale_workers(
         self, target_count: int, agent_factory: callable
-    ) -> List[SubAgentWorker]:
+    ) -> list[SubAgentWorker]:
         """
         Scale worker pool to target count: use permanent base workers first, then spin up burst workers as needed.
 
@@ -173,7 +176,7 @@ class DynamicConcurrencyController:
         return active_workers[:target_count]
 
     def get_next_worker_round_robin(
-        self, active_workers: List[SubAgentWorker]
+        self, active_workers: list[SubAgentWorker]
     ) -> SubAgentWorker:
         """
         Get next available worker in strict round-robin order for even load distribution.
@@ -193,7 +196,7 @@ class DynamicConcurrencyController:
         return worker
 
     def reassign_failed_subtask(
-        self, active_workers: List[SubAgentWorker], failed_worker_id: str
+        self, active_workers: list[SubAgentWorker], failed_worker_id: str
     ) -> SubAgentWorker:
         """
         Reassign a failed subtask to the next available worker in the round-robin queue, skipping the failed worker.

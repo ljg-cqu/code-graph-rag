@@ -220,7 +220,7 @@ class CodeVsDocValidator(BaseValidator):
         for name in names[:5]:  # Limit to first 5 names
             query = """
             MATCH (n)
-            WHERE (n:Function OR n:Class OR n:Method)
+            WHERE (n:Function OR n:Class OR n:Method OR n:Enum OR n:Type OR n:Union OR n:Interface)
               AND (toLower(n.name) CONTAINS toLower($name)
                OR toLower(n.qualified_name) CONTAINS toLower($name))
             RETURN count(n) as count

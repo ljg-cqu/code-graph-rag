@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 import re
-import time
 import threading
+import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Callable, Pattern
-from collections import OrderedDict
+from re import Pattern
+from typing import Any
 
 from loguru import logger
 

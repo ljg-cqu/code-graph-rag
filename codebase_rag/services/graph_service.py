@@ -27,8 +27,8 @@ from ..constants import (
     KEY_QUALIFIED_NAME,
     KEY_TO_VAL,
     NODE_UNIQUE_CONSTRAINTS,
-    NodeLabel,
     REL_TYPE_CALLS,
+    NodeLabel,
 )
 from ..cypher_queries import (
     CYPHER_DELETE_ALL,
@@ -423,10 +423,8 @@ class MemgraphIngestor:
             from_label = _get_label(from_identifier)
             to_label = _get_label(to_identifier)
         else:
-            # For other relationships, use generic Node type
-            # This might need to be refined based on actual usage
-            from_label = "Node"
-            to_label = "Node"
+            from_label = NodeLabel.FUNCTION
+            to_label = NodeLabel.FUNCTION
 
         self.ensure_relationship_batch(
             (from_label, KEY_QUALIFIED_NAME, from_identifier),

@@ -39,6 +39,9 @@ class MemgraphBackend(VectorBackend):
         "Interface",
         "Contract",
         "Library",
+        "Enum",
+        "Type",
+        "Union",
     )
 
     def __init__(self, is_document: bool = False) -> None:

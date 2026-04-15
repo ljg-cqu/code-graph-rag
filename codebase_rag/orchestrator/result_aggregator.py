@@ -8,6 +8,7 @@ from collections import defaultdict
 from typing import Any
 
 from loguru import logger
+
 from codebase_rag.config import settings
 
 

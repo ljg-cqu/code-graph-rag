@@ -4,10 +4,10 @@ Determines if a task can be safely parallelized without explicit user request.
 """
 
 import re
-import json
-from typing import Optional, Tuple
+
 from loguru import logger
 from pydantic_ai import Agent
+
 from codebase_rag.config import settings
 from codebase_rag.providers import get_provider_from_config
 
@@ -65,11 +65,11 @@ class ConcurrencyEligibilityClassifier:
         self.min_subtask_count: int = (
             2  # Minimum subtasks required to justify parallel overhead
         )
-        self.agent: Optional[Agent] = None
+        self.agent: Agent | None = None
         # Dynamic calibration state (tracks success rates per task type)
         self.success_rate_tracker: dict[str, list[bool]] = {}
 
-    async def _get_llm_eligibility(self, prompt: str) -> Tuple[float, str]:
+    async def _get_llm_eligibility(self, prompt: str) -> tuple[float, str]:
         """Run lightweight LLM analysis to determine parallel eligibility and confidence score."""
         if not self.agent:
             config = settings.active_orchestrator_config

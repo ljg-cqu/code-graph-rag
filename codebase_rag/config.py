@@ -427,7 +427,7 @@ class AppConfig(BaseSettings):
     FILE_FLUSH_INTERVAL: int = Field(default=500, gt=0)
 
     # Parallel indexing settings
-    PARALLEL_INDEXING_WORKERS: int = Field(default=20, gt=0)
+    PARALLEL_INDEXING_WORKERS: int = Field(default=30, gt=0)
     """Number of parallel workers to use for codebase indexing.
     Auto-optimized at runtime: will not exceed available CPU cores or number of changed files.
     Set to 1 to disable parallel processing entirely (sequential mode)."""
@@ -552,8 +552,8 @@ class AppConfig(BaseSettings):
     MCP_HTTP_ENDPOINT_PATH: str = "/mcp"
 
     # Parallel Sub-Agent Configuration
-    CGR_MAX_PARALLEL_WORKERS: int = 20
-    CGR_DEFAULT_PARALLEL_WORKERS: int = 10
+    CGR_MAX_PARALLEL_WORKERS: int = 30
+    CGR_DEFAULT_PARALLEL_WORKERS: int = 20
     CGR_ALLOW_DYNAMIC_MAX_OVERRIDE: bool = True
     CGR_AUTO_SCALE_WORKERS: bool = True
     CGR_SUBAGENT_TIMEOUT: int = 300

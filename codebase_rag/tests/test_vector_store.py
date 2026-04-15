@@ -96,11 +96,11 @@ def integration_client(
     if not has_qdrant_client():
         pytest.skip("qdrant-client not installed")
 
+    from codebase_rag.vector_store_qdrant import QdrantBackend
     from qdrant_client import QdrantClient as QC
     from qdrant_client.models import Distance, VectorParams
 
     import codebase_rag.vector_store as vs
-    from codebase_rag.vector_store_qdrant import QdrantBackend
 
     client = QC(path=str(temp_qdrant_path))
     client.create_collection(

@@ -33,7 +33,7 @@ def has_qdrant_client() -> bool:
 
 
 def has_semantic_dependencies() -> bool:
-    return has_qdrant_client() and has_torch() and has_transformers()
+    return has_torch() and has_transformers()
 
 
 def check_dependencies(required_modules: Sequence[str]) -> bool:

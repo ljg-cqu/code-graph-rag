@@ -287,7 +287,7 @@ class EmbeddingCache:
                     logger.warning(
                         f"Cache version {cache_version} too old, starting fresh"
                     )
-                    self._cache = {}
+                    self._cache = OrderedDict()
                     return
 
                 # Validate dimension if we have one configured
@@ -298,17 +298,17 @@ class EmbeddingCache:
                         f"{self._dimension}, cache may be stale"
                     )
 
-                self._cache = data.get("embeddings", {})
+                self._cache = OrderedDict(data.get("embeddings", {}))
             else:
                 # Legacy format: direct dict of embeddings
-                self._cache = data
+                self._cache = OrderedDict(data)
 
             logger.debug(
                 ls.EMBEDDING_CACHE_LOADED, count=len(self._cache), path=self._path
             )
         except Exception as e:
             logger.warning(ls.EMBEDDING_CACHE_LOAD_FAILED, path=self._path, error=e)
-            self._cache = {}
+            self._cache = OrderedDict()
         finally:
             if fd is not None:
                 try:
