@@ -129,19 +129,17 @@ class ConcurrencyEligibilityClassifier:
         # 2. Check for explicit user overrides
         lower_prompt = prompt.lower()
 
-        for pattern in self.EXPLICIT_PARALLEL_PATTERNS:
-            if re.search(pattern, lower_prompt, flags=re.IGNORECASE):
-                logger.info(
-                    "Task eligible for parallel execution: explicit user request"
-                )
-                return True, "user_requested_parallel", 1.0
-
         for pattern in self.EXPLICIT_SEQUENTIAL_PATTERNS:
             if re.search(pattern, lower_prompt, flags=re.IGNORECASE):
                 logger.debug(
                     "Task not eligible for parallel execution: explicit user request for sequential"
                 )
                 return False, "user_requested_sequential", 0.0
+
+        explicitly_parallel = any(
+            re.search(pattern, lower_prompt, flags=re.IGNORECASE)
+            for pattern in self.EXPLICIT_PARALLEL_PATTERNS
+        )
 
         # 3. Safety rule-based non-eligible checks
         for pattern, confidence in self.SAFETY_NON_ELIGIBLE_PATTERNS:
@@ -155,6 +153,10 @@ class ConcurrencyEligibilityClassifier:
                 f"Task not eligible for parallel execution: only {subtask_count} subtasks (min {self.min_subtask_count})"
             )
             return False, "insufficient_subtasks", 0.0
+
+        if explicitly_parallel:
+            logger.info("Task eligible for parallel execution: explicit user request")
+            return True, "user_requested_parallel", 1.0
 
         # 5. LLM intent analysis (primary eligibility detection)
         confidence, task_type = await self._get_llm_eligibility(prompt)

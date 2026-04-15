@@ -3,19 +3,193 @@ Sub-Agent Orchestrator module for parallel execution.
 Manages sub-agent pool, task distribution, lifecycle, and execution guarantees.
 """
 
-import queue
+from __future__ import annotations
+
+import asyncio
+import io
 import signal
 import time
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, wait
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from typing import Any
 
 from loguru import logger
+from pydantic_ai import Agent, DeferredToolRequests, Tool
+from rich.console import Console
 
 from codebase_rag.config import ModelConfig, settings
+from codebase_rag.prompts import build_rag_orchestrator_prompt
+from codebase_rag.providers import get_provider_from_config
+from codebase_rag.services.graph_service import MemgraphIngestor
+from codebase_rag.services.llm import CypherGenerator
+from codebase_rag.shared.query_router import QueryMode, QueryRouter
+from codebase_rag.tools.code_retrieval import CodeRetriever, create_code_retrieval_tool
+from codebase_rag.tools.codebase_query import create_query_tool
+from codebase_rag.tools.directory_lister import (
+    DirectoryLister,
+    create_directory_lister_tool,
+)
+from codebase_rag.tools.document_analyzer import (
+    DocumentAnalyzer,
+    create_document_analyzer_tool,
+)
+from codebase_rag.tools.document_query import (
+    create_query_both_graphs_tool,
+    create_query_document_graph_tool,
+)
+from codebase_rag.tools.document_validation import (
+    create_validate_code_against_spec_tool,
+    create_validate_doc_against_code_tool,
+)
+from codebase_rag.tools.file_reader import FileReader, create_file_reader_tool
+from codebase_rag.tools.graph_query import create_graph_query_tool
+from codebase_rag.tools.semantic_search import (
+    create_get_function_source_tool,
+    create_semantic_search_tool,
+)
 
 from .dynamic_concurrency_controller import DynamicConcurrencyController
 from .result_aggregator import ResultAggregator
+
+
+class ReadOnlySubAgent:
+    def __init__(
+        self,
+        repo_path: str,
+        llm_config: ModelConfig,
+        enable_document_graph: bool = False,
+        query_mode: QueryMode = QueryMode.CODE_ONLY,
+        doc_workspace: str = "default",
+    ):
+        self.repo_path = repo_path
+        self.llm_config = llm_config
+        self.allow_write = False
+        self.enable_document_graph = enable_document_graph
+        self.query_mode = query_mode
+        self.doc_workspace = doc_workspace
+        self.agent: Agent | None = None
+        self.code_graph: MemgraphIngestor | None = None
+        self.doc_graph: MemgraphIngestor | None = None
+        self.query_router: QueryRouter | None = None
+        self.cypher_generator: CypherGenerator | None = None
+        self.console = Console(file=io.StringIO(), width=120, force_terminal=False)
+
+    def _initialize(self) -> None:
+        if self.agent is not None:
+            return
+
+        try:
+            self.code_graph = MemgraphIngestor(
+                host=settings.MEMGRAPH_HOST,
+                port=settings.MEMGRAPH_PORT,
+                batch_size=1,
+                username=settings.MEMGRAPH_USERNAME,
+                password=settings.MEMGRAPH_PASSWORD,
+            )
+            self.code_graph.__enter__()
+
+            if self.enable_document_graph:
+                self.doc_graph = MemgraphIngestor(
+                    host=settings.DOC_MEMGRAPH_HOST,
+                    port=settings.DOC_MEMGRAPH_PORT,
+                    batch_size=1,
+                    username=settings.DOC_MEMGRAPH_USERNAME,
+                    password=settings.DOC_MEMGRAPH_PASSWORD,
+                )
+                self.doc_graph.__enter__()
+                self.query_router = QueryRouter(
+                    code_graph=self.code_graph,
+                    doc_graph=self.doc_graph,
+                )
+                self.query_router.current_mode = self.query_mode
+
+            self.cypher_generator = CypherGenerator()
+            tools = self._build_tools()
+            provider = get_provider_from_config(self.llm_config)
+            model = provider.create_model(self.llm_config.model_id)
+            system_prompt = (
+                "You are a read-only parallel sub-agent. Investigate only your assigned scope, use tools to gather evidence, and summarize only what you can verify. You cannot modify files or execute shell commands.\n\n"
+                f"{build_rag_orchestrator_prompt(tools)}"
+            )
+            self.agent = Agent(
+                model=model,
+                system_prompt=system_prompt,
+                tools=tools,
+                retries=settings.AGENT_RETRIES,
+                output_retries=settings.ORCHESTRATOR_OUTPUT_RETRIES,
+                output_type=[str, DeferredToolRequests],
+            )
+        except Exception:
+            self.shutdown()
+            raise
+
+    def _build_tools(self) -> list[Tool]:
+        if self.code_graph is None or self.cypher_generator is None:
+            raise RuntimeError("Parallel sub-agent dependencies are not initialized")
+
+        code_retriever = CodeRetriever(project_root=self.repo_path, ingestor=self.code_graph)
+        file_reader = FileReader(project_root=self.repo_path)
+        directory_lister = DirectoryLister(project_root=self.repo_path)
+        document_analyzer = DocumentAnalyzer(
+            project_root=self.repo_path,
+            doc_graph=self.doc_graph,
+        )
+
+        tools: list[Tool] = [
+            create_query_tool(self.code_graph, self.cypher_generator, self.console),
+            create_code_retrieval_tool(code_retriever),
+            create_file_reader_tool(file_reader),
+            create_directory_lister_tool(directory_lister),
+            *create_document_analyzer_tool(
+                document_analyzer,
+                enable_graph_queries=self.doc_graph is not None,
+                workspace=self.doc_workspace,
+            ),
+            create_semantic_search_tool(),
+            create_get_function_source_tool(),
+        ]
+
+        if self.query_router is not None:
+            tools.extend(
+                [
+                    create_query_document_graph_tool(self.query_router),
+                    create_query_both_graphs_tool(self.query_router),
+                    create_validate_code_against_spec_tool(self.query_router),
+                    create_validate_doc_against_code_tool(self.query_router),
+                    create_graph_query_tool(self.query_router),
+                ]
+            )
+
+        return tools
+
+    def execute(self, subtask: dict[str, Any]) -> str:
+        self._initialize()
+        if self.agent is None:
+            raise RuntimeError("Parallel sub-agent was not initialized")
+
+        response = asyncio.run(
+            self.agent.run(subtask.get("prompt", ""), message_history=[])
+        )
+        if isinstance(response.output, DeferredToolRequests):
+            raise RuntimeError("Read-only sub-agent requested an unsupported approval flow")
+        if not isinstance(response.output, str):
+            return str(response.output)
+        return response.output
+
+    def reset(self) -> None:
+        if self.query_router is not None:
+            self.query_router.current_mode = self.query_mode
+
+    def shutdown(self) -> None:
+        if self.doc_graph is not None:
+            self.doc_graph.__exit__(None, None, None)
+            self.doc_graph = None
+        if self.code_graph is not None:
+            self.code_graph.__exit__(None, None, None)
+            self.code_graph = None
+        self.query_router = None
+        self.cypher_generator = None
+        self.agent = None
 
 
 class SubAgentWorker:
@@ -49,6 +223,8 @@ class SubAgentWorker:
     def shutdown(self) -> None:
         """Shutdown the worker and clean up resources."""
         self.busy = False
+        if hasattr(self.agent, "shutdown") and callable(self.agent.shutdown):
+            self.agent.shutdown()
         self.agent = None
 
 
@@ -62,19 +238,25 @@ class SubAgentOrchestrator:
         self,
         worker_count: int | None = None,
         agent_factory: Callable | None = None,
-        scheduling_strategy: str = "round-robin",  # Options: "fifo", "round-robin" (default: round-robin as per requirement)
+        scheduling_strategy: str = "round-robin",
+        repo_path: str | None = None,
+        enable_document_graph: bool = False,
+        query_mode: QueryMode = QueryMode.CODE_ONLY,
+        doc_workspace: str = "default",
     ):
         self.dynamic_controller = DynamicConcurrencyController()
-        self.worker_count = self.dynamic_controller.get_effective_worker_count(
-            worker_count
-        )
+        self.requested_worker_count = worker_count
+        self.worker_count = self.dynamic_controller.get_effective_worker_count(worker_count)
+        self.repo_path = repo_path or settings.TARGET_REPO_PATH
+        self.enable_document_graph = enable_document_graph
+        self.query_mode = query_mode
+        self.doc_workspace = doc_workspace
         self.agent_factory = agent_factory or self._default_agent_factory
-        self.agent_pool: queue.Queue[Any] = queue.Queue()
+        self.workers: list[SubAgentWorker] = []
         self.running = False
         self._shutdown_called = False
-        self._llm_assignment_index = 0  # Counter for round-robin LLM assignment
+        self._llm_assignment_index = 0
 
-        # Validate scheduling strategy
         valid_strategies = {"fifo", "round-robin"}
         scheduling_strategy = scheduling_strategy.lower()
         if scheduling_strategy not in valid_strategies:
@@ -83,96 +265,41 @@ class SubAgentOrchestrator:
             )
         self.scheduling_strategy = scheduling_strategy
 
-        # Per-worker rate limiting to prevent LLM API throttling
-        try:
-            from codebase_rag.embeddings.rate_limiter import RateLimiter
-
-            self.rate_limiter = RateLimiter(max_requests_per_minute=60)
-        except ImportError:
-            # Fallback to no rate limiting if rate limiter module not available
-            self.rate_limiter = None
-
-        # Safety check for worker count exceeding max limit
-        if (
-            self.worker_count > settings.CGR_MAX_PARALLEL_WORKERS
-            and not settings.CGR_ALLOW_DYNAMIC_MAX_OVERRIDE
-        ):
-            logger.warning(
-                f"Requested worker count {self.worker_count} exceeds max limit {settings.CGR_MAX_PARALLEL_WORKERS}. "
-                f"Limiting to {settings.CGR_MAX_PARALLEL_WORKERS} workers. Set CGR_ALLOW_DYNAMIC_MAX_OVERRIDE=True to override."
-            )
-            self.worker_count = settings.CGR_MAX_PARALLEL_WORKERS
-
-        # Register signal handlers for graceful shutdown on all termination signals
         for sig in [signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT]:
             try:
                 signal.signal(sig, self._handle_shutdown)
             except ValueError:
-                # Ignore signals that aren't supported on the current platform
                 pass
 
     def _default_agent_factory(self, llm_config: ModelConfig | None = None) -> Any:
-        """
-        Default factory for creating sub-agent instances.
-
-        Args:
-            llm_config: Optional custom LLM config to use for this sub-agent instead of default orchestrator LLM
-
-        Returns:
-            New sub-agent instance with specified LLM configuration
-        """
         worker_llm_config = llm_config or settings.active_orchestrator_config
+        return ReadOnlySubAgent(
+            repo_path=self.repo_path,
+            llm_config=worker_llm_config,
+            enable_document_graph=self.enable_document_graph,
+            query_mode=self.query_mode,
+            doc_workspace=self.doc_workspace,
+        )
 
-        # For MVP, this is a placeholder that returns a simple callable
-        # In real implementation, this would create an instance of the core RAG agent
-        # with isolated state, inherited config, and read-only permissions by default
-        class SimpleSubAgent:
-            def __init__(self, llm_config: ModelConfig):
-                self.config = settings
-                self.llm_config = llm_config
-                self.allow_write = settings.CGR_SUBAGENT_ALLOW_WRITE
-                # Cypher LLM remains shared global config, unchanged
-                self.cypher_llm_config = settings.active_cypher_config
-
-            def execute(self, subtask: dict) -> str:
-                # Placeholder execution logic
-                prompt = subtask.get("prompt", "")
-                time.sleep(0.1)  # Simulate work
-                return f"Processed prompt with {self.llm_config.provider}:{self.llm_config.model_id}: {prompt[:50]}..."
-
-            def reset(self):
-                # Reset any mutable state between tasks
-                pass
-
-        return SimpleSubAgent(worker_llm_config)
-
-    def initialize_agents(self):
-        """Initialize the pool of sub-agents with round-robin LLM assignment."""
+    def initialize_agents(self) -> None:
         logger.info(f"Initializing {self.worker_count} sub-agents")
         worker_llms = settings.active_worker_llms
         num_worker_llms = len(worker_llms)
 
-        # Clear existing queue first
-        while not self.agent_pool.empty():
-            try:
-                self.agent_pool.get_nowait()
-            except queue.Empty:
-                break
+        for worker in self.workers[self.worker_count :]:
+            worker.shutdown()
+        self.workers = self.workers[: self.worker_count]
 
-        # Reset LLM assignment index for new pool initialization
-        self._llm_assignment_index = 0
-
-        # Add new agents to queue with round-robin LLM assignment
-        for _ in range(self.worker_count):
+        for index in range(len(self.workers), self.worker_count):
             if num_worker_llms > 0:
-                # Get next LLM in round-robin sequence
                 llm_config = worker_llms[self._llm_assignment_index % num_worker_llms]
                 self._llm_assignment_index += 1
                 agent = self.agent_factory(llm_config=llm_config)
             else:
-                # No worker LLMs configured, use default orchestrator LLM
                 agent = self.agent_factory()
-            self.agent_pool.put(agent)
+            self.workers.append(
+                SubAgentWorker(worker_id=self._build_worker_id(index), agent=agent)
+            )
 
         if num_worker_llms > 0:
             logger.info(
@@ -196,34 +323,45 @@ class SubAgentOrchestrator:
         Args:
             subtasks: List of subtasks to execute
             result_aggregator: Optional aggregator to use for results
-            retry_attempts: Number of retries for failed tasks (defaults to config value)
-            dry_run: If True, simulate execution without making actual LLM calls (for cost estimation)
+            retry_attempts: Number of retries for failed tasks
+            dry_run: If True, emit execution plan metadata without running sub-agents
         """
+        if len(subtasks) > settings.CGR_PARALLEL_MAX_QUEUE_SIZE:
+            raise ValueError(
+                f"Subtask queue size {len(subtasks)} exceeds configured maximum of {settings.CGR_PARALLEL_MAX_QUEUE_SIZE}"
+            )
+
         retry_attempts = retry_attempts or settings.CGR_SUBAGENT_RETRY_ATTEMPTS
         result_aggregator = result_aggregator or ResultAggregator()
         result_aggregator.set_total_subtasks(len(subtasks))
+        result_aggregator.metadata["dry_run"] = dry_run
+        result_aggregator.metadata["scheduling_strategy"] = self.scheduling_strategy
 
-        # Auto-scale worker count to match subtask count
         self.worker_count = self.dynamic_controller.get_effective_worker_count(
-            self.worker_count, len(subtasks)
+            self.requested_worker_count, len(subtasks)
         )
+        result_aggregator.metadata["worker_count"] = self.worker_count
 
-        # Initialize agents if not already done
-        if self.agent_pool.empty():
-            self.initialize_agents()
-
-        # Handle dry run mode
         if dry_run:
             start_time = time.time()
             logger.info(
                 f"Dry run: Would execute {len(subtasks)} subtasks with {self.worker_count} workers (scheduling: {self.scheduling_strategy})"
             )
-            # Simulate execution for dry run without actual LLM calls
-            for subtask in subtasks:
+            for index, subtask in enumerate(subtasks):
+                worker_metadata = self._build_planned_worker_metadata(
+                    index % max(self.worker_count, 1)
+                )
                 result_aggregator.add_result(
                     subtask,
-                    f"Dry run: Would process {subtask.get('relative_path', 'unknown file')} with round-robin worker assignment",
+                    {
+                        "status": "planned",
+                        "target": subtask.get("relative_path")
+                        or subtask.get("target_entity")
+                        or subtask.get("id"),
+                    },
                     execution_time=0.0,
+                    status="planned",
+                    worker_metadata={**worker_metadata, "status": "planned"},
                 )
             result_aggregator.set_total_execution_time(time.time() - start_time)
             logger.info(
@@ -231,73 +369,86 @@ class SubAgentOrchestrator:
             )
             return result_aggregator
 
+        self.initialize_agents()
+
         self.running = True
         start_time = time.time()
         logger.info(
             f"Starting parallel execution of {len(subtasks)} subtasks with {self.worker_count} workers (scheduling: {self.scheduling_strategy})"
         )
-        logger.info(
-            f"ACTIVE PARALLEL WORKERS: {self.worker_count} - running concurrently"
-        )
 
-        # Track remaining tasks and retries
         remaining_tasks = subtasks.copy()
-        retry_counts = {st["id"]: 0 for st in subtasks}
-        active_futures = {}
+        retry_counts = {subtask["id"]: 0 for subtask in subtasks}
+        active_futures: dict[Any, tuple[dict[str, Any], SubAgentWorker, float]] = {}
 
         try:
-            # Single long-lived executor for all tasks (no per-batch recreation)
             with ThreadPoolExecutor(max_workers=self.worker_count) as executor:
                 while (
                     (remaining_tasks or active_futures)
                     and self.running
                     and not self._shutdown_called
                 ):
-                    # Submit new tasks as agents become available (continuous parallelism)
-                    while remaining_tasks and not self.agent_pool.empty():
-                        # Round-robin: take next task from front of queue
+                    while remaining_tasks:
+                        worker = self._get_available_worker()
+                        if worker is None:
+                            break
                         subtask = remaining_tasks.pop(0)
-                        agent = self.agent_pool.get()
-                        future = executor.submit(self._execute_subtask, agent, subtask)
-                        active_futures[future] = (subtask, agent)
+                        worker.busy = True
+                        future = executor.submit(self._execute_subtask, worker, subtask)
+                        active_futures[future] = (subtask, worker, time.time())
 
-                    # Process completed tasks as they finish
-                    if active_futures:
-                        done, _ = wait(
-                            active_futures.keys(), return_when="FIRST_COMPLETED"
+                    if not active_futures:
+                        continue
+
+                    done, _ = wait(active_futures, return_when=FIRST_COMPLETED)
+
+                    for future in done:
+                        subtask, worker, started_at = active_futures.pop(future)
+                        execution_time = time.time() - started_at
+                        worker_metadata = self._build_worker_metadata(
+                            worker,
+                            retry_counts.get(subtask["id"], 0),
                         )
 
-                        for future in done:
-                            subtask, agent = active_futures.pop(future)
+                        if hasattr(worker.agent, "reset") and callable(worker.agent.reset):
+                            worker.agent.reset()
 
-                            # Reset agent state before returning to pool
-                            if hasattr(agent, "reset") and callable(agent.reset):
-                                agent.reset()
-                            # Return agent to pool immediately for new tasks
-                            self.agent_pool.put(agent)
+                        try:
+                            result, execution_time = future.result()
+                            result_aggregator.add_result(
+                                subtask,
+                                result,
+                                execution_time=execution_time,
+                                worker_metadata={
+                                    **worker_metadata,
+                                    "execution_time": execution_time,
+                                    "status": "completed",
+                                },
+                            )
+                        except Exception as e:
+                            error_msg = str(e)
+                            retry_count = retry_counts.get(subtask["id"], 0)
 
-                            try:
-                                result, execution_time = future.result()
-                                result_aggregator.add_result(
-                                    subtask, result, execution_time
+                            if retry_count < retry_attempts:
+                                retry_counts[subtask["id"]] = retry_count + 1
+                                logger.warning(
+                                    f"Subtask {subtask['id']} failed (attempt {retry_count + 1}/{retry_attempts + 1}): {error_msg}. Retrying..."
                                 )
-                            except Exception as e:
-                                error_msg = str(e)
-                                retry_count = retry_counts.get(subtask["id"], 0)
-
-                                if retry_count < retry_attempts:
-                                    # Retry the task, add back to front for round-robin
-                                    retry_counts[subtask["id"]] = retry_count + 1
-                                    logger.warning(
-                                        f"Subtask {subtask['id']} failed (attempt {retry_count + 1}/{retry_attempts + 1}): {error_msg}. Retrying..."
-                                    )
-                                    remaining_tasks.insert(0, subtask)
-                                else:
-                                    # Max retries reached, mark as failed
-                                    result_aggregator.add_error(subtask, error_msg)
-                                    logger.error(
-                                        f"Subtask {subtask['id']} failed permanently after {retry_attempts + 1} attempts: {error_msg}"
-                                    )
+                                remaining_tasks.insert(0, subtask)
+                            else:
+                                result_aggregator.add_error(
+                                    subtask,
+                                    error_msg,
+                                    execution_time=execution_time,
+                                    worker_metadata={
+                                        **worker_metadata,
+                                        "execution_time": execution_time,
+                                        "status": "failed",
+                                    },
+                                )
+                                logger.error(
+                                    f"Subtask {subtask['id']} failed permanently after {retry_attempts + 1} attempts: {error_msg}"
+                                )
 
         finally:
             self.running = False
@@ -308,14 +459,13 @@ class SubAgentOrchestrator:
         return result_aggregator
 
     def _execute_subtask(
-        self, agent: Any, subtask: dict[str, Any]
+        self, worker: SubAgentWorker, subtask: dict[str, Any]
     ) -> tuple[Any, float]:
         """
-        Execute a single subtask with a given agent.
-        Uses simple task model for low complexity subtasks if configured.
+        Execute a single subtask with a given worker.
 
         Args:
-            agent: Sub-agent instance to use
+            worker: Sub-agent worker wrapper to use
             subtask: Subtask to execute
 
         Returns:
@@ -324,30 +474,16 @@ class SubAgentOrchestrator:
         start_time = time.time()
         timeout = settings.CGR_SUBAGENT_TIMEOUT
 
-        # Use simple task model for simple tasks if configured
-        complexity = subtask.get("complexity", 2)
-        if complexity <= 1 and settings.CGR_SIMPLE_TASK_MODEL:
-            # Create simple task agent on demand
-            simple_agent = self._default_agent_factory(
-                llm_config=settings.CGR_SIMPLE_TASK_MODEL
-            )
-            agent = simple_agent
-
         try:
-            # Execute the task with PREEMPTIVE timeout using single-threaded executor
             with ThreadPoolExecutor(max_workers=1) as task_executor:
-                future = task_executor.submit(agent.execute, subtask)
+                future = task_executor.submit(worker.execute, subtask)
                 result = future.result(timeout=timeout)
 
             execution_time = time.time() - start_time
             return result, execution_time
 
-        except TimeoutError:
-            execution_time = time.time() - start_time
-            raise TimeoutError(f"Subtask exceeded timeout of {timeout}s")
-        except Exception as e:
-            execution_time = time.time() - start_time
-            raise e
+        except TimeoutError as e:
+            raise TimeoutError(f"Subtask exceeded timeout of {timeout}s") from e
 
     def _handle_shutdown(self, signum, frame):
         """Handle shutdown signals to gracefully terminate all workers."""
@@ -361,23 +497,18 @@ class SubAgentOrchestrator:
         self._shutdown_called = True
         self.running = False
 
-        # Clear agent pool
-        while not self.agent_pool.empty():
-            try:
-                self.agent_pool.get_nowait()
-            except queue.Empty:
-                break
+        for worker in self.workers:
+            worker.shutdown()
+        self.workers = []
         logger.info("Sub-agent orchestrator shutdown complete")
 
     def get_current_progress(self) -> dict[str, Any]:
         """Get current execution progress."""
-        # TODO: Implement real-time progress tracking
         return {}
 
     def adjust_worker_count(self, adjustment: int):
         """
         Adjust the number of workers dynamically during execution.
-        New workers are assigned LLMs continuing the round-robin sequence.
 
         Args:
             adjustment: Number of workers to add (positive) or remove (negative)
@@ -385,34 +516,45 @@ class SubAgentOrchestrator:
         new_count = self.dynamic_controller.adjust_worker_count(
             self.worker_count, adjustment
         )
-
-        if new_count > self.worker_count:
-            # Add new workers with continued round-robin LLM assignment
-            worker_llms = settings.active_worker_llms
-            num_worker_llms = len(worker_llms)
-            add_count = new_count - self.worker_count
-
-            for _ in range(add_count):
-                if num_worker_llms > 0:
-                    llm_config = worker_llms[
-                        self._llm_assignment_index % num_worker_llms
-                    ]
-                    self._llm_assignment_index += 1
-                    agent = self.agent_factory(llm_config=llm_config)
-                else:
-                    agent = self.agent_factory()
-                self.agent_pool.put(agent)
-
-            logger.info(f"Added {add_count} new sub-agents to pool")
-        elif new_count < self.worker_count:
-            # Remove excess workers
-            remove_count = self.worker_count - new_count
-            for _ in range(remove_count):
-                if not self.agent_pool.empty():
-                    try:
-                        self.agent_pool.get_nowait()
-                    except queue.Empty:
-                        pass
-            logger.info(f"Removed {remove_count} sub-agents from pool")
-
+        self.requested_worker_count = new_count
         self.worker_count = new_count
+
+    def _build_worker_id(self, index: int) -> str:
+        if index < self.dynamic_controller.permanent_base_workers:
+            return f"base-{index}"
+        return f"burst-{index - self.dynamic_controller.permanent_base_workers}"
+
+    def _get_available_worker(self) -> SubAgentWorker | None:
+        available_workers = [worker for worker in self.workers if not worker.busy]
+        if not available_workers:
+            return None
+        if self.scheduling_strategy == "fifo":
+            return available_workers[0]
+        return self.dynamic_controller.get_next_worker_round_robin(available_workers)
+
+    def _build_worker_metadata(
+        self, worker: SubAgentWorker, retry_count: int
+    ) -> dict[str, Any]:
+        llm_config = getattr(worker.agent, "llm_config", None)
+        if llm_config is None:
+            llm_config = settings.active_orchestrator_config
+        return {
+            "worker_id": worker.worker_id,
+            "provider": getattr(llm_config, "provider", None),
+            "model_id": getattr(llm_config, "model_id", None),
+            "retry_count": retry_count,
+        }
+
+    def _build_planned_worker_metadata(self, worker_index: int) -> dict[str, Any]:
+        worker_llms = settings.active_worker_llms
+        llm_config = (
+            worker_llms[worker_index % len(worker_llms)]
+            if worker_llms
+            else settings.active_orchestrator_config
+        )
+        return {
+            "worker_id": self._build_worker_id(worker_index),
+            "provider": getattr(llm_config, "provider", None),
+            "model_id": getattr(llm_config, "model_id", None),
+            "retry_count": 0,
+        }

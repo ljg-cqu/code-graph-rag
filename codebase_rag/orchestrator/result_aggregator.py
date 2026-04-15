@@ -27,10 +27,20 @@ class ResultAggregator:
             "completed_subtasks": 0,
             "failed_subtasks": 0,
             "total_execution_time": 0,
+            "unresolved_conflicts": 0,
+            "worker_count": 0,
+            "dry_run": False,
+            "scheduling_strategy": None,
         }
 
     def add_result(
-        self, subtask: dict[str, Any], result: Any, execution_time: float = 0.0
+        self,
+        subtask: dict[str, Any],
+        result: Any,
+        execution_time: float = 0.0,
+        status: str = "completed",
+        worker_metadata: dict[str, Any] | None = None,
+        scope_key: str | None = None,
     ):
         """
         Add a result from a completed sub-agent task.
@@ -41,14 +51,28 @@ class ResultAggregator:
             execution_time: Time taken to execute the subtask in seconds
         """
         with self._lock:
-            self.results.append(
-                {"subtask": subtask, "result": result, "execution_time": execution_time}
-            )
+            entry = {
+                "subtask": subtask,
+                "result": result,
+                "execution_time": execution_time,
+                "status": status,
+                "scope_key": scope_key
+                or subtask.get("target_entity")
+                or subtask.get("relative_path")
+                or subtask.get("id"),
+            }
+            if worker_metadata is not None:
+                entry["worker"] = worker_metadata
+            self.results.append(entry)
             self.metadata["completed_subtasks"] += 1
         logger.debug(f"Added result for subtask {subtask['id']}")
 
     def add_error(
-        self, subtask: dict[str, Any], error: str, execution_time: float = 0.0
+        self,
+        subtask: dict[str, Any],
+        error: str,
+        execution_time: float = 0.0,
+        worker_metadata: dict[str, Any] | None = None,
     ):
         """
         Add an error from a failed sub-agent task.
@@ -59,9 +83,17 @@ class ResultAggregator:
             execution_time: Time taken before failure in seconds
         """
         with self._lock:
-            self.errors.append(
-                {"subtask": subtask, "error": error, "execution_time": execution_time}
-            )
+            entry = {
+                "subtask": subtask,
+                "error": error,
+                "execution_time": execution_time,
+                "scope_key": subtask.get("target_entity")
+                or subtask.get("relative_path")
+                or subtask.get("id"),
+            }
+            if worker_metadata is not None:
+                entry["worker"] = worker_metadata
+            self.errors.append(entry)
             self.metadata["failed_subtasks"] += 1
         logger.warning(f"Added error for subtask {subtask['id']}: {error}")
 
@@ -114,7 +146,7 @@ class ResultAggregator:
 
     def _resolve_conflicts(
         self, results: list[dict[str, Any]]
-    ) -> tuple[list[dict[str, Any]], list[str]]:
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """
         Resolve conflicting results using priority rules:
         1. Higher confidence results > lower confidence results
@@ -145,8 +177,8 @@ class ResultAggregator:
             )
             grouped[target].append(entry)
 
-        resolved = []
-        unresolved = []
+        resolved: list[dict[str, Any]] = []
+        unresolved: list[dict[str, Any]] = []
 
         for target, entries in grouped.items():
             if len(entries) == 1:
@@ -176,12 +208,18 @@ class ResultAggregator:
                         f"Resolved conflict for {target}: selected {top.get('source_type', 'llm')} result with confidence {top.get('confidence', 0.5)}"
                     )
             else:
-                # Unresolved conflict, flag it
-                conflict_msg = f"Unresolved conflict for {target}: multiple conflicting results with similar confidence/source priority"
-                unresolved.append(conflict_msg)
+                unresolved.append(
+                    {
+                        "scope": target,
+                        "subtask_ids": [entry["subtask"]["id"] for entry in entries],
+                        "message": "Multiple conflicting results with similar confidence or source priority",
+                    }
+                )
                 resolved.append(top)
                 if settings.CGR_PARALLEL_METRICS_ENABLED:
-                    logger.warning(conflict_msg)
+                    logger.warning(
+                        f"Unresolved conflict for {target}: multiple conflicting results with similar confidence or source priority"
+                    )
 
         return resolved, unresolved
 
@@ -207,7 +245,9 @@ class ResultAggregator:
             return self._format_text(resolved_results, unresolved_conflicts)
 
     def _format_json(
-        self, resolved_results: list[dict[str, Any]], unresolved_conflicts: list[str]
+        self,
+        resolved_results: list[dict[str, Any]],
+        unresolved_conflicts: list[dict[str, Any]],
     ) -> dict[str, Any]:
         """
         Format results as structured JSON.
@@ -227,8 +267,11 @@ class ResultAggregator:
                     "file_path": entry["subtask"].get("relative_path"),
                     "result": entry["result"],
                     "execution_time": entry["execution_time"],
+                    "status": entry.get("status", "completed"),
+                    "scope": entry.get("scope_key"),
                     "confidence": entry.get("confidence", 1.0),
                     "source_type": entry.get("source_type", "llm"),
+                    "worker": entry.get("worker"),
                 }
                 for entry in resolved_results
             ],
@@ -238,6 +281,8 @@ class ResultAggregator:
                     "file_path": entry["subtask"].get("relative_path"),
                     "error": entry["error"],
                     "execution_time": entry["execution_time"],
+                    "scope": entry.get("scope_key"),
+                    "worker": entry.get("worker"),
                 }
                 for entry in self.errors
             ],
@@ -245,7 +290,9 @@ class ResultAggregator:
         }
 
     def _format_markdown(
-        self, resolved_results: list[dict[str, Any]], unresolved_conflicts: list[str]
+        self,
+        resolved_results: list[dict[str, Any]],
+        unresolved_conflicts: list[dict[str, Any]],
     ) -> str:
         """
         Format results as markdown report.
@@ -276,7 +323,9 @@ class ResultAggregator:
             lines.append("## ⚠️ Unresolved Conflicts")
             lines.append("")
             for conflict in unresolved_conflicts:
-                lines.append(f"- {conflict}")
+                lines.append(
+                    f"- {conflict['scope']}: {conflict['message']} ({', '.join(conflict['subtask_ids'])})"
+                )
             lines.append("")
 
         # Results section
@@ -297,6 +346,8 @@ class ResultAggregator:
                     result = entry["result"]
                     if isinstance(result, str):
                         lines.append(result)
+                    elif isinstance(result, dict):
+                        lines.append(str(result))
                     else:
                         lines.append(str(result))
                     lines.append("")
@@ -313,7 +364,9 @@ class ResultAggregator:
         return "\n".join(lines)
 
     def _format_text(
-        self, resolved_results: list[dict[str, Any]], unresolved_conflicts: list[str]
+        self,
+        resolved_results: list[dict[str, Any]],
+        unresolved_conflicts: list[dict[str, Any]],
     ) -> str:
         """
         Format results as plain text.
@@ -338,7 +391,9 @@ class ResultAggregator:
         if unresolved_conflicts:
             lines.append("=== WARNING: UNRESOLVED CONFLICTS ===")
             for conflict in unresolved_conflicts:
-                lines.append(f"- {conflict}")
+                lines.append(
+                    f"- {conflict['scope']}: {conflict['message']} ({', '.join(conflict['subtask_ids'])})"
+                )
             lines.append("")
 
         if resolved_results:

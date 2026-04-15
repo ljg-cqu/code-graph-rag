@@ -36,7 +36,7 @@ services:
       - "${DOC_MEMGRAPH_PORT:-7688}:7687"
     command: ["--schema-info-enabled", "--also-log-to-stderr"]
     environment:
-      - MEMGRAPH_MEMORY_LIMIT=${DOC_MEMGRAPH_MEMORY_LIMIT:-2GB}
+      - MEMGRAPH_MEMORY_LIMIT=${DOC_MEMGRAPH_MEMORY_LIMIT:-4GB}
     volumes:
       - memgraph_doc_data:/var/lib/memgraph
     healthcheck:

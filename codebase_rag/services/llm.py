@@ -243,9 +243,10 @@ class CypherGenerator:
             raise ex.LLMGenerationError(ex.LLM_GENERATION_FAILED.format(error=e)) from e
 
 
-def create_rag_orchestrator(tools: list[Tool]) -> Agent:
+def create_rag_orchestrator_with_config(
+    config: ModelConfig, tools: list[Tool]
+) -> Agent:
     try:
-        config = settings.active_orchestrator_config
         llm = _create_provider_model(config)
 
         return Agent(
@@ -258,3 +259,9 @@ def create_rag_orchestrator(tools: list[Tool]) -> Agent:
         )
     except Exception as e:
         raise ex.LLMGenerationError(ex.LLM_INIT_ORCHESTRATOR.format(error=e)) from e
+
+
+def create_rag_orchestrator(tools: list[Tool]) -> Agent:
+    return create_rag_orchestrator_with_config(
+        settings.active_orchestrator_config, tools
+    )
