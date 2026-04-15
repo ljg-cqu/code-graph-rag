@@ -5,10 +5,10 @@ import copy
 import json
 import os
 import re
-from fnmatch import fnmatch
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
 

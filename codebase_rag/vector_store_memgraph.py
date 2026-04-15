@@ -188,7 +188,9 @@ class MemgraphBackend(VectorBackend):
         except Exception:
             pass  # Non-critical
 
-    def _store_single(self, node_id: int, embedding: list[float], qualified_name: str) -> int:
+    def _store_single(
+        self, node_id: int, embedding: list[float], qualified_name: str
+    ) -> int:
         cypher = """
         MATCH (n) WHERE id(n) = $node_id
         SET n.embedding = $embedding,
@@ -208,7 +210,9 @@ class MemgraphBackend(VectorBackend):
             results = self._execute_query(cypher, params)
             return results[0].get("stored", 0) if results else 0
         except Exception as e:
-            logger.warning(ls.EMBEDDING_STORE_FAILED.format(name=qualified_name, error=e))
+            logger.warning(
+                ls.EMBEDDING_STORE_FAILED.format(name=qualified_name, error=e)
+            )
             return 0
 
     def _store_individually(

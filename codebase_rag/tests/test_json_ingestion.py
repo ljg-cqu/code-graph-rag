@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
+import tempfile
 from copy import deepcopy
 from pathlib import Path
-import tempfile
 
 import pytest
 
@@ -126,7 +126,9 @@ def test_validate_relationship_wrapper_object() -> None:
 
 
 def test_load_json_files_single_file() -> None:
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as json_file:
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", delete=False
+    ) as json_file:
         json.dump(SAMPLE_VALID_JSON, json_file)
         temp_path = Path(json_file.name)
 
@@ -168,7 +170,9 @@ def test_load_json_files_directory_skips_artifacts_and_non_ingestion_json() -> N
 
         cache_dir = temp_path / ".embedding_cache"
         cache_dir.mkdir()
-        with open(cache_dir / ".tmp_cache_123.json", "w", encoding="utf-8") as json_file:
+        with open(
+            cache_dir / ".tmp_cache_123.json", "w", encoding="utf-8"
+        ) as json_file:
             json.dump(SAMPLE_VALID_JSON, json_file)
 
         egg_info_dir = temp_path / "demo.egg-info"
@@ -178,7 +182,9 @@ def test_load_json_files_directory_skips_artifacts_and_non_ingestion_json() -> N
 
         optimize_dir = temp_path / "optimize"
         optimize_dir.mkdir()
-        with open(optimize_dir / "memory_profile_results.json", "w", encoding="utf-8") as json_file:
+        with open(
+            optimize_dir / "memory_profile_results.json", "w", encoding="utf-8"
+        ) as json_file:
             json.dump({"metadata": {"workspace": "default"}}, json_file)
 
         files = load_json_files(str(temp_path))
@@ -188,7 +194,9 @@ def test_load_json_files_directory_skips_artifacts_and_non_ingestion_json() -> N
 
 
 def test_load_json_files_single_non_ingestion_file_is_loaded_for_validation() -> None:
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as json_file:
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", delete=False
+    ) as json_file:
         json.dump({"metadata": {"workspace": "default"}}, json_file)
         temp_path = Path(json_file.name)
 

@@ -2,8 +2,8 @@
 Test suite for orchestrator parallel execution components.
 """
 
-import time
 import asyncio
+import time
 from unittest.mock import AsyncMock, Mock, patch
 
 from codebase_rag.orchestrator.concurrency_eligibility_classifier import (
@@ -24,6 +24,19 @@ class TestConcurrencyEligibilityClassifier:
             classifier.is_eligible(
                 prompt="Modify all python files to add type hints",
                 has_write_operations=True,
+            )
+        )
+        assert eligible is False
+        assert task_type == "write_operation"
+        assert confidence == 0.0
+
+    def test_explicit_parallel_request_does_not_override_write_block(self):
+        classifier = ConcurrencyEligibilityClassifier()
+        eligible, task_type, confidence = asyncio.run(
+            classifier.is_eligible(
+                prompt="Run in parallel and modify all python files to add logging",
+                has_write_operations=True,
+                subtask_count=6,
             )
         )
         assert eligible is False
@@ -72,13 +85,29 @@ class TestConcurrencyEligibilityClassifier:
         assert task_type == "insufficient_subtasks"
         assert confidence == 0.0
 
+    def test_explicit_sequential_override(self):
+        classifier = ConcurrencyEligibilityClassifier()
+        eligible, task_type, confidence = asyncio.run(
+            classifier.is_eligible(
+                prompt="Search across all files but no parallel",
+                has_write_operations=False,
+                subtask_count=5,
+            )
+        )
+        assert eligible is False
+        assert task_type == "user_requested_sequential"
+        assert confidence == 0.0
+
 
 class TestDynamicConcurrencyController:
     def test_worker_count_limited_to_max(self):
-        with patch(
-            "codebase_rag.orchestrator.dynamic_concurrency_controller.settings"
-        ) as mock_settings, patch.object(
-            DynamicConcurrencyController, "_get_cpu_core_limit", return_value=32
+        with (
+            patch(
+                "codebase_rag.orchestrator.dynamic_concurrency_controller.settings"
+            ) as mock_settings,
+            patch.object(
+                DynamicConcurrencyController, "_get_cpu_core_limit", return_value=32
+            ),
         ):
             mock_settings.CGR_MAX_PARALLEL_WORKERS = 4
             mock_settings.CGR_DEFAULT_PARALLEL_WORKERS = 2
@@ -90,10 +119,13 @@ class TestDynamicConcurrencyController:
             assert effective == 4
 
     def test_auto_scale_matches_subtask_count(self):
-        with patch(
-            "codebase_rag.orchestrator.dynamic_concurrency_controller.settings"
-        ) as mock_settings, patch.object(
-            DynamicConcurrencyController, "_get_cpu_core_limit", return_value=32
+        with (
+            patch(
+                "codebase_rag.orchestrator.dynamic_concurrency_controller.settings"
+            ) as mock_settings,
+            patch.object(
+                DynamicConcurrencyController, "_get_cpu_core_limit", return_value=32
+            ),
         ):
             mock_settings.CGR_MAX_PARALLEL_WORKERS = 8
             mock_settings.CGR_DEFAULT_PARALLEL_WORKERS = 4

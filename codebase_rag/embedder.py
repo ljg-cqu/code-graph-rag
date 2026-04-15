@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 import tempfile
+import time
 from collections import OrderedDict
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
@@ -576,8 +577,24 @@ def embed_code(code: str, max_length: int | None = None) -> list[float]:
     if (cached := cache.get(code, provider.model_id)) is not None:
         return cached
 
-    # Generate embedding
-    embedding = provider.embed(code)
+    # Generate embedding with retries (3 attempts with exponential backoff)
+    max_retries = 3
+    embedding = None
+    for attempt in range(max_retries):
+        try:
+            embedding = provider.embed(code)
+            break
+        except Exception as e:
+            if attempt == max_retries - 1:
+                logger.error(
+                    f"Embedding generation failed after {max_retries} attempts: {e}"
+                )
+                raise
+            backoff = 2**attempt
+            logger.warning(
+                f"Embedding generation failed (attempt {attempt + 1}/{max_retries}), retrying in {backoff}s: {str(e)[:100]}..."
+            )
+            time.sleep(backoff)
 
     # Cache the result
     cache.put(code, embedding, provider.model_id)
@@ -669,8 +686,26 @@ def embed_code_batch(
     uncached_indices = [i for i in range(len(snippets)) if i not in cached_results]
     uncached_snippets = [snippets[i] for i in uncached_indices]
 
-    # Generate embeddings for uncached snippets
-    new_embeddings = provider.embed_batch(uncached_snippets, batch_size=batch_size)
+    # Generate embeddings for uncached snippets with retries (3 attempts with exponential backoff)
+    max_retries = 3
+    new_embeddings = None
+    for attempt in range(max_retries):
+        try:
+            new_embeddings = provider.embed_batch(
+                uncached_snippets, batch_size=batch_size
+            )
+            break
+        except Exception as e:
+            if attempt == max_retries - 1:
+                logger.error(
+                    f"Batch embedding generation failed after {max_retries} attempts: {e}"
+                )
+                raise
+            backoff = 2**attempt
+            logger.warning(
+                f"Batch embedding generation failed (attempt {attempt + 1}/{max_retries}), retrying in {backoff}s: {str(e)[:100]}..."
+            )
+            time.sleep(backoff)
 
     # Cache new embeddings
     cache.put_many(uncached_snippets, new_embeddings, provider.model_id)

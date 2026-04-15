@@ -332,10 +332,28 @@ class CallProcessor:
                 callee_type, callee_qn = callee_info
             elif builtin_info := self._resolver.resolve_builtin_call(call_name):
                 callee_type, callee_qn = builtin_info
+                # Ensure builtin node exists in graph
+                self.ingestor.ensure_node(
+                    callee_type,
+                    {
+                        cs.KEY_QUALIFIED_NAME: callee_qn,
+                        cs.KEY_NAME: callee_qn.split(cs.SEPARATOR_DOT)[-1],
+                        cs.KEY_IS_BUILTIN: True,
+                    },
+                )
             elif operator_info := self._resolver.resolve_cpp_operator_call(
                 call_name, module_qn
             ):
                 callee_type, callee_qn = operator_info
+                # Ensure operator node exists in graph
+                self.ingestor.ensure_node(
+                    callee_type,
+                    {
+                        cs.KEY_QUALIFIED_NAME: callee_qn,
+                        cs.KEY_NAME: callee_qn.split(cs.SEPARATOR_DOT)[-1],
+                        cs.KEY_IS_BUILTIN: True,
+                    },
+                )
             else:
                 continue
             logger.debug(

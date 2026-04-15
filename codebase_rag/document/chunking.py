@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
+from ..config import settings
 from ..utils.token_utils import count_tokens
 
 if TYPE_CHECKING:
@@ -86,7 +87,9 @@ class SemanticDocumentChunker:
     OVERLAP_TOKENS = 50  # Overlap for context continuity
     ENCODING_MODEL = "cl100k_base"  # GPT-4 encoding
     MAX_REASONABLE_TOKENS = 8192  # Upper bound for max_tokens (most embedding models)
-    MAX_CHUNKS_PER_DOCUMENT = 1000  # Prevent memory exhaustion on pathological inputs
+    MAX_CHUNKS_PER_DOCUMENT = (
+        settings.DOC_MAX_CHUNKS_PER_DOCUMENT
+    )  # Prevent memory exhaustion on pathological inputs
 
     # Character-based segment reduction constants
     APPROX_CHARS_PER_TOKEN = 4  # Average characters per token
@@ -200,9 +203,19 @@ class SemanticDocumentChunker:
         Note:
             Stops yielding after MAX_CHUNKS_PER_DOCUMENT to prevent memory exhaustion.
             Handles preamble (content before first section) by chunking it separately.
+            Adjusts chunk size dynamically for large documents to avoid truncation.
         """
         # Use a mutable counter to track chunk index across recursive calls
         chunk_counter = [0]  # Use list for mutable reference
+
+        # Dynamic chunk size adjustment: increase by 50% for documents over 100k words
+        word_count = len(doc.content.split())
+        original_max_tokens = self.max_tokens
+        if word_count > 100000:
+            self.max_tokens = int(self.max_tokens * 1.5)
+            logger.debug(
+                f"Large document detected ({word_count} words), adjusted max chunk size to {self.max_tokens} tokens"
+            )
 
         if not doc.sections:
             # No sections - chunk by paragraphs
@@ -247,8 +260,12 @@ class SemanticDocumentChunker:
                         f"Document {doc.path} reached MAX_CHUNKS_PER_DOCUMENT ({self.MAX_CHUNKS_PER_DOCUMENT}) "
                         "limit. Some content may not be indexed."
                     )
+                    self.max_tokens = original_max_tokens
                     return
                 yield chunk
+
+        # Restore original chunk size for subsequent documents
+        self.max_tokens = original_max_tokens
 
     def _chunk_section_recursive(
         self, section: ExtractedSection, doc_path: str, chunk_counter: list[int]

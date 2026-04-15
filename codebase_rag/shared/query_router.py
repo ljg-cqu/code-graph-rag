@@ -276,9 +276,7 @@ class QueryRouter:
             )
             answer_parts.append(f"   {content_preview}")
             if resolved_refs:
-                answer_parts.append(
-                    f"   References: {', '.join(resolved_refs[:3])}"
-                )
+                answer_parts.append(f"   References: {', '.join(resolved_refs[:3])}")
 
             chunk_start_line = result.get("chunk_start_line", 0)
             chunk_end_line = result.get("chunk_end_line", chunk_start_line)
@@ -292,8 +290,7 @@ class QueryRouter:
                     type="document",
                     path=doc_path,
                     node_type="Chunk",
-                    qualified_name=result.get("section_qn")
-                    or result.get("chunk_qn"),
+                    qualified_name=result.get("section_qn") or result.get("chunk_qn"),
                     line_range=(chunk_start_line, chunk_end_line),
                 )
             )

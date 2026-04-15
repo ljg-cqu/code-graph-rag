@@ -2,8 +2,8 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from codebase_rag.document.chunking import DocumentChunk
-from codebase_rag.document.extractors.base import ExtractedDocument
 from codebase_rag.document.document_updater import DocumentGraphUpdater
+from codebase_rag.document.extractors.base import ExtractedDocument
 
 
 def test_collect_documents_skips_internal_artifacts(tmp_path: Path) -> None:

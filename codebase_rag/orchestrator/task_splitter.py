@@ -176,7 +176,10 @@ class TaskSplitter:
         scoped_files = [
             file_path
             for file_path in all_files
-            if any(self._path_matches_scope(file_path, scope_path) for scope_path in scope_paths)
+            if any(
+                self._path_matches_scope(file_path, scope_path)
+                for scope_path in scope_paths
+            )
         ]
         scoped_files.sort(key=lambda path: os.path.relpath(path, self.repo_path))
         logger.info(

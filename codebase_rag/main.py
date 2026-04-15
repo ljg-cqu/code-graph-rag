@@ -4,6 +4,7 @@ import asyncio
 import difflib
 import json
 import os
+import re
 import shlex
 import shutil
 import signal
@@ -894,9 +895,7 @@ def _normalize_parallel_config(
     normalized = parallel_config or ParallelExecutionConfig()
     scheduling_strategy = normalized.scheduling_strategy.lower()
     if scheduling_strategy not in {"fifo", "round-robin"}:
-        raise ValueError(
-            "Invalid scheduling strategy. Use 'fifo' or 'round-robin'."
-        )
+        raise ValueError("Invalid scheduling strategy. Use 'fifo' or 'round-robin'.")
     return ParallelExecutionConfig(
         worker_count=normalized.worker_count,
         auto_split=normalized.auto_split,
@@ -931,7 +930,8 @@ async def _run_interactive_loop(
         worker_count=normalized_parallel_config.worker_count,
         scheduling_strategy=normalized_parallel_config.scheduling_strategy,
         repo_path=str(project_root),
-        enable_document_graph=query_router is not None and query_router.doc_graph is not None,
+        enable_document_graph=query_router is not None
+        and query_router.doc_graph is not None,
         query_mode=current_mode,
         doc_workspace=normalized_parallel_config.doc_workspace,
     )
@@ -1169,13 +1169,22 @@ async def _run_interactive_loop(
                     preview_count = len(preview_subtasks)
 
                 if normalized_parallel_config.no_parallel:
-                    logger.info("Parallel execution skipped due to explicit sequential override")
-                elif preview_count is not None and preview_count > settings.CGR_PARALLEL_MAX_QUEUE_SIZE:
+                    logger.info(
+                        "Parallel execution skipped due to explicit sequential override"
+                    )
+                elif (
+                    preview_count is not None
+                    and preview_count > settings.CGR_PARALLEL_MAX_QUEUE_SIZE
+                ):
                     logger.info(
                         f"Parallel execution skipped because preview split exceeded queue limit ({preview_count} > {settings.CGR_PARALLEL_MAX_QUEUE_SIZE})"
                     )
                 else:
-                    eligible, task_type, confidence = await concurrency_classifier.is_eligible(
+                    (
+                        eligible,
+                        task_type,
+                        confidence,
+                    ) = await concurrency_classifier.is_eligible(
                         question_with_context,
                         subtask_count=preview_count,
                         has_write_operations=has_write_operations,
@@ -1186,7 +1195,9 @@ async def _run_interactive_loop(
                             f"Parallel execution skipped: task_type={task_type}, confidence={confidence:.2f}"
                         )
                     elif not normalized_parallel_config.auto_split:
-                        logger.info("Parallel execution skipped because auto-splitting is disabled")
+                        logger.info(
+                            "Parallel execution skipped because auto-splitting is disabled"
+                        )
                     elif preview_count is None or preview_count < 2:
                         logger.info(
                             f"Parallel execution downgraded to sequential because only {preview_count or 0} safe subtasks were found"
@@ -1216,7 +1227,11 @@ async def _run_interactive_loop(
                             dry_run=normalized_parallel_config.dry_run,
                         )
                         parallel_result = aggregator.consolidate()
-                        summary_label = "plan generated" if normalized_parallel_config.dry_run else "completed"
+                        summary_label = (
+                            "plan generated"
+                            if normalized_parallel_config.dry_run
+                            else "completed"
+                        )
                         app_context.console.print(
                             style(
                                 f"⚡ Parallel execution {summary_label} in {aggregator.metadata['total_execution_time']:.2f}s",

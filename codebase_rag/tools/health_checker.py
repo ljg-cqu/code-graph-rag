@@ -20,7 +20,9 @@ class HealthChecker:
 
     @staticmethod
     def _parse_label_expression(label_expression: str) -> list[str]:
-        labels = [label.strip() for label in label_expression.split("|") if label.strip()]
+        labels = [
+            label.strip() for label in label_expression.split("|") if label.strip()
+        ]
         return labels or [label_expression]
 
     def check_docker(self) -> HealthCheckResult:
@@ -352,9 +354,7 @@ class HealthChecker:
                 port=settings.MEMGRAPH_PORT,
             )
             cursor = conn.cursor()
-            cursor.execute(
-                "MATCH (m:Module) RETURN count(m) AS module_count"
-            )
+            cursor.execute("MATCH (m:Module) RETURN count(m) AS module_count")
             module_row = cursor.fetchone()
             module_count = int(module_row[0]) if module_row else 0
 
@@ -468,6 +468,7 @@ class HealthChecker:
 
     def check_json_ingestion_schema(self, json_path: str) -> HealthCheckResult:
         import json
+
         import jsonschema  # ty: ignore[unresolved-import]
 
         try:
@@ -625,7 +626,15 @@ class HealthChecker:
                 {"embedded_labels": embedded_labels},
             )
             embedded_node_count = cursor.fetchone()[0]
-            missing_embeddings_passed = missing_embeddings_count == 0
+
+            # Calculate allowed missing embeddings based on threshold
+            if embedded_node_count == 0:
+                missing_embeddings_passed = True
+            else:
+                missing_pct = (missing_embeddings_count / embedded_node_count) * 100
+                missing_embeddings_passed = (
+                    missing_pct <= settings.MAX_MISSING_EMBEDDINGS_PCT
+                )
             results.append(
                 HealthCheckResult(
                     name=cs.HEALTH_CHECK_MISSING_EMBEDDINGS,

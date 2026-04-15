@@ -235,6 +235,8 @@ class AppConfig(BaseSettings):
     MEMGRAPH_PASSWORD: str | None = None
     LAB_PORT: int = 3000
     MEMGRAPH_BATCH_SIZE: int = 1000
+    MEMGRAPH_QUERY_MAX_RETRIES: int = Field(default=2, ge=0)
+    MEMGRAPH_RETRY_BASE_DELAY: float = Field(default=0.25, gt=0)
     MEMGRAPH_USE_DYNAMIC_ALGORITHMS: bool | None = None
     AGENT_RETRIES: int = 3
     ORCHESTRATOR_OUTPUT_RETRIES: int = 100
@@ -447,6 +449,9 @@ class AppConfig(BaseSettings):
     RUN_INGESTION_QUALITY_CHECKS: bool = True
     """Whether to run post-ingestion data quality validation checks after indexing completes."""
 
+    MAX_MISSING_EMBEDDINGS_PCT: float = Field(default=2.0, gt=0, lt=100)
+    """Maximum allowed percentage of nodes missing embeddings before quality check fails."""
+
     CACHE_MAX_ENTRIES: int = 1000
     CACHE_MAX_MEMORY_MB: int = 500
     CACHE_EVICTION_DIVISOR: int = 10
@@ -463,7 +468,10 @@ class AppConfig(BaseSettings):
     DOC_MEMGRAPH_BATCH_SIZE: int = 1000
     DOC_MEMGRAPH_VECTOR_DIM: int = 768
     DOC_MEMGRAPH_USE_DYNAMIC_ALGORITHMS: bool | None = None
-    DOC_MEMGRAPH_MEMORY_LIMIT: str = "2GB"  # Memory limit for document graph container
+    DOC_MEMGRAPH_MEMORY_LIMIT: str = "4GB"  # Memory limit for document graph container
+    DOC_MAX_CHUNKS_PER_DOCUMENT: int = (
+        5000  # Maximum chunks per document to prevent memory exhaustion
+    )
     DOC_LAB_PORT: int = 3001  # Memgraph Lab for document graph
     DOC_VECTOR_STORE_BACKEND: str = "memgraph"
 

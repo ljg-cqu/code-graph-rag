@@ -340,36 +340,7 @@ class GraphUpdater:
 
         self._generate_semantic_embeddings()
 
-        # Run post-ingestion graph algorithms (Memgraph MAGE integration)
-        from .graph_algorithms import get_shared_algorithms
-
-        logger.info(
-            "Running post-ingestion graph algorithms to improve retrieval quality..."
-        )
-        algo = get_shared_algorithms()
-
-        # Run ANALYZE GRAPH first to update query planner statistics
-        algo.analyze_graph()
-        logger.debug("ANALYZE GRAPH completed, query planner optimized")
-
-        # Run PageRank for result ranking
-        pagerank_updated = algo.run_pagerank()
-        if pagerank_updated > 0:
-            logger.info(
-                f"PageRank computed for {pagerank_updated} nodes, retrieval ranking improved"
-            )
-
-        # Run community detection (only if there are enough nodes)
-        if pagerank_updated >= 10:  # Minimum 10 nodes for meaningful communities
-            community_updated = algo.run_community_detection()
-            if community_updated > 0:
-                logger.info(
-                    f"Community detection completed, {community_updated} nodes assigned to communities"
-                )
-
-        # Close algorithm connection
-        algo.close()
-        logger.info("Post-ingestion graph algorithm processing complete")
+        self._run_post_ingestion_algorithms()
 
         # Run post-ingestion data quality validation
         if settings.RUN_INGESTION_QUALITY_CHECKS:
@@ -387,6 +358,68 @@ class GraphUpdater:
                 logger.warning(f"Quality check failed: {fail.name} - {fail.message}")
                 if fail.error:
                     logger.debug(f"Error details: {fail.error}")
+
+    def _run_post_ingestion_algorithms(self) -> None:
+        from .graph_algorithms import get_shared_algorithms
+
+        logger.info(
+            "Running post-ingestion graph algorithms to improve retrieval quality..."
+        )
+        algo = get_shared_algorithms()
+
+        try:
+            algo.analyze_graph()
+            logger.debug("ANALYZE GRAPH completed, query planner optimized")
+
+            if not settings.ALGORITHM_RUN_POST_INGESTION:
+                logger.info(
+                    "Skipping PageRank and community detection optimizations (disabled by configuration)"
+                )
+                return
+
+            if settings.ALGORITHM_ENABLE_PAGERANK:
+                pagerank_updated = algo.run_pagerank()
+                if pagerank_updated > 0:
+                    logger.info(
+                        f"PageRank computed for {pagerank_updated} nodes, retrieval ranking improved"
+                    )
+            else:
+                logger.info(
+                    "Skipping PageRank optimization (disabled by configuration)"
+                )
+
+            if not settings.ALGORITHM_ENABLE_COMMUNITY_DETECTION:
+                logger.info(
+                    "Skipping community detection optimization (disabled by configuration)"
+                )
+                return
+
+            node_count = algo.count_nodes()
+            if node_count < 10:
+                logger.info(
+                    f"Skipping community detection optimization (graph too small: {node_count} nodes)"
+                )
+                return
+
+            configured_algorithm = (
+                settings.ALGORITHM_COMMUNITY_ALGORITHM.strip().lower()
+            )
+            if configured_algorithm not in {"leiden", "louvain"}:
+                logger.warning(
+                    f"Unknown community algorithm '{settings.ALGORITHM_COMMUNITY_ALGORITHM}', defaulting to Leiden"
+                )
+                configured_algorithm = "leiden"
+
+            community_updated = algo.run_community_detection(
+                use_leiden=configured_algorithm == "leiden"
+            )
+            if community_updated > 0:
+                logger.info(
+                    f"Community detection completed, {community_updated} nodes assigned to communities"
+                )
+        finally:
+            algo.close()
+            logger.info("Post-ingestion graph algorithm processing complete")
 
     def remove_file_from_state(self, file_path: Path) -> None:
         logger.debug(ls.REMOVING_STATE, path=file_path)
@@ -883,9 +916,7 @@ class GraphUpdater:
                     f"Repaired {repaired_count} legacy Function parent relationships"
                 )
         except Exception as e:
-            logger.warning(
-                f"Legacy Function parent relationship repair failed: {e}"
-            )
+            logger.warning(f"Legacy Function parent relationship repair failed: {e}")
 
     def _generate_semantic_embeddings(self) -> None:
         if not has_semantic_dependencies():
@@ -941,40 +972,44 @@ class GraphUpdater:
                 effective_start = start_line if start_line is not None else 0
                 effective_end = end_line if end_line is not None else 0
 
-                if source_code := self._extract_source_code(
-                    qualified_name, file_path, effective_start, effective_end
-                ):
-                    try:
+                try:
+                    if source_code := self._extract_source_code(
+                        qualified_name, file_path, effective_start, effective_end
+                    ):
                         embedding = embed_code(source_code)
                         logger.debug(
                             f"Generated embedding for {qualified_name} (node_id={node_id})"
                         )
-                        batch_buffer.append((node_id, embedding, qualified_name))
-                        expected_ids.add(node_id)
-
-                        if len(batch_buffer) >= batch_size:
-                            logger.debug(
-                                f"Flushing batch of {len(batch_buffer)} embeddings"
-                            )
-                            embedded_count += store_embedding_batch(batch_buffer)
-                            batch_buffer = []
-
-                        if (
-                            embedded_count % settings.EMBEDDING_PROGRESS_INTERVAL == 0
-                            and embedded_count > 0
-                        ):
-                            logger.debug(
-                                ls.EMBEDDING_PROGRESS,
-                                done=embedded_count,
-                                total=len(results),
-                            )
-
-                    except Exception as e:
-                        logger.warning(
-                            ls.EMBEDDING_FAILED, name=qualified_name, error=e
+                    else:
+                        # Fallback: generate embedding from metadata when source is missing
+                        logger.debug(
+                            f"No source for {qualified_name}, using metadata for embedding"
                         )
-                else:
-                    logger.debug(ls.NO_SOURCE_FOR, name=qualified_name)
+                        metadata_text = f"{qualified_name} function in {file_path}"
+                        embedding = embed_code(metadata_text)
+
+                    batch_buffer.append((node_id, embedding, qualified_name))
+                    expected_ids.add(node_id)
+
+                    if len(batch_buffer) >= batch_size:
+                        logger.debug(
+                            f"Flushing batch of {len(batch_buffer)} embeddings"
+                        )
+                        embedded_count += store_embedding_batch(batch_buffer)
+                        batch_buffer = []
+
+                    if (
+                        embedded_count % settings.EMBEDDING_PROGRESS_INTERVAL == 0
+                        and embedded_count > 0
+                    ):
+                        logger.debug(
+                            ls.EMBEDDING_PROGRESS,
+                            done=embedded_count,
+                            total=len(results),
+                        )
+
+                except Exception as e:
+                    logger.warning(ls.EMBEDDING_FAILED, name=qualified_name, error=e)
 
             if batch_buffer:
                 logger.debug(

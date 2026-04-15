@@ -65,7 +65,7 @@ An accurate Retrieval-Augmented Generation (RAG) system that analyzes multi-lang
   - PageRank calculation identifies important code entities (core classes, frequently called functions) for better ranking
   - Leiden/Louvain community detection groups related code entities for global architecture analysis
   - BFS context expansion automatically retrieves related code context during search
-- **⚡ Automatic Parallel Execution**: No explicit user request needed! The system automatically detects parallelizable tasks (multi-file search, bulk validation, large repo ingestion, multi-tool workflows, etc.) and spawns 10 round-robin parallel workers to speed up execution by up to 10x. Fully transparent, with graceful fallback to sequential execution for non-parallel tasks.
+- **⚡ Automatic Parallel Execution**: No explicit user request needed for safe read-only work. The system can preview path-scoped subtasks, block write-like requests from parallel execution, run real read-only sub-agents in parallel, and fall back to sequential execution when the task is unsafe or underspecified.
 - **⚡ Blazing Fast Parallel Indexing**: Up to 20x faster codebase ingestion with perfect round-robin load distribution across parallel workers, auto-optimized at runtime to match your CPU core count and workload size (never uses more workers than needed, no wasted overhead). Fully backward compatible with sequential mode, no configuration required out of the box.
 - **🧠 Intelligent Context Window Compression**: Automatically prevents LLM context window overflow with zero semantic loss for critical content, no manual intervention required. Uses 10 parallel round-robin workers (supports up to 20 for high throughput workloads) to evaluate 5 compression strategies and select the optimal one per scenario using weighted scoring (60% semantic retention, 30% token reduction, 10% execution speed). Features include: automatic 85% usage trigger with 5% hysteresis buffer, manual `/compress` CLI command with aggressive mode and custom preserve patterns, 24h context archive for restore capability, automatic rollback if retention falls below 70% threshold, and guaranteed preservation of latest 2 user turns, all system prompts, and tool call history. Delivers average 40% token reduction with >88% semantic retention in <200ms per compression run.
 - **🧠 Context Window Management System**: Flexible, multi-level context window configuration with automatic model detection:
@@ -478,16 +478,21 @@ Example queries (works across all supported languages):
 - "Optimize this function for better performance"
 
 ### Automatic Parallel Execution (No Explicit Request Needed!)
-For eligible parallelizable queries (multi-file search, bulk validation, large repo analysis, etc.), the system automatically:
+For eligible read-only queries such as multi-file search, audits, and scoped analysis, the system automatically:
 1. Shows a green notification: `✅ Auto-activating parallel execution: [task_type] (confidence: 0.xx)`
-2. Splits the task into independent subtasks distributed across 10 round-robin parallel workers
-3. Displays progress: `📋 Split into [X] independent subtasks`
-4. Aggregates results from all workers and includes them in the final answer
+2. Previews a scope-aware file split and only keeps safe subtasks inside the requested scope
+3. Distributes those subtasks across the configured worker pool, scaled down to the safe subtask count and CPU guardrails
+4. Aggregates evidence-based worker output, including execution metadata and unresolved conflicts, into the final answer
 5. Shows execution time: `⚡ Parallel execution completed in [X]s`
 
 If you want to disable automatic parallelism for a specific run, use the `--no-parallel` flag:
 ```bash
 cgr start --repo-path /path/to/repo --no-parallel
+```
+
+You can also inspect the execution plan without running worker LLM calls:
+```bash
+cgr start --parallel-dry-run --parallel-workers 8 --auto-split
 ```
 
 ### Step 3: Export Graph Data
@@ -1058,20 +1063,20 @@ Configure dedicated LLMs for parallel sub-agent workers to optimize cost/perform
 - `CGR_WORKER_LLM_ASSIGNMENT_STRATEGY`: LLM assignment strategy for sub-agents. Only `round-robin` is supported currently, which evenly distributes configured LLMs across workers.
 
 #### Automatic Parallel Execution Configuration
-No explicit user request required! The system automatically detects parallelizable tasks and executes them with 10 round-robin parallel workers for up to 10x speedup:
+No explicit user request is required for safe read-only tasks. The runtime previews subtasks, blocks write-like prompts from parallel execution, and uses the configured worker pool only when at least two safe subtasks remain:
 - `CGR_AUTO_PARALLEL_ENABLED`: Enable automatic parallel execution detection (default: `true`)
-- `CGR_DEFAULT_PARALLEL_WORKERS`: Default number of parallel workers (default: `10`, round-robin scheduling)
-- `CGR_MAX_PARALLEL_WORKERS`: Maximum allowed parallel workers (default: `20`)
+- `CGR_DEFAULT_PARALLEL_WORKERS`: Default number of parallel workers (default: `20`)
+- `CGR_MAX_PARALLEL_WORKERS`: Maximum allowed parallel workers (default: `30`)
 - `CGR_ALLOW_DYNAMIC_MAX_OVERRIDE`: Allow overriding the max worker limit for large workloads (default: `true`)
 - `CGR_AUTO_SCALE_WORKERS`: Automatically scale worker count to match number of subtasks (default: `true`)
-- `CGR_PARALLEL_ELIGIBILITY_THRESHOLD`: Confidence threshold for automatic parallel activation (default: `0.8`)
-- `CGR_PARALLEL_MAX_QUEUE_SIZE`: Maximum size of the parallel task queue, falls back to sequential when full (default: `100`)
+- `CGR_PARALLEL_ELIGIBILITY_THRESHOLD`: Confidence threshold for automatic parallel activation (default: `0.7`)
+- `CGR_PARALLEL_MAX_QUEUE_SIZE`: Maximum size of the parallel subtask queue before runtime falls back to sequential behavior (default: `100`)
 - `CGR_SUBAGENT_TIMEOUT`: Timeout per subtask execution in seconds (default: `300`)
-- `CGR_SUBAGENT_ALLOW_WRITE`: Allow sub-agents to perform write operations (default: `false`, writes are executed sequentially to prevent corruption)
+- `CGR_SUBAGENT_ALLOW_WRITE`: Worker write access toggle (default: `false`; write-like tasks stay sequential in v1)
 - `CGR_AUTO_SPLIT_ENABLED`: Enable automatic task splitting for parallel execution (default: `true`)
 - `CGR_SUBAGENT_RETRY_ATTEMPTS`: Number of retry attempts for failed subtasks (default: `2`)
 
-**Optional Override Flag**: You can disable automatic parallelism for a single run with `--no-parallel` CLI flag if needed.
+**CLI Overrides**: `--parallel-workers`, `--auto-split/--no-auto-split`, `--parallel-dry-run`, `--scheduling-strategy`, and `--no-parallel` all affect the interactive runtime path.
 
 **Key Behavior**:
 - If no worker LLMs are configured, sub-agents automatically use the orchestrator LLM as default

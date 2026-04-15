@@ -641,7 +641,9 @@ class DocumentGraphUpdater:
         return resolved
 
     def _extract_chunk_reference_names(self, content: str) -> list[str]:
-        return [reference.qualified_name for reference in extract_code_references(content)]
+        return [
+            reference.qualified_name for reference in extract_code_references(content)
+        ]
 
     def _process_document(
         self,
@@ -673,7 +675,9 @@ class DocumentGraphUpdater:
 
         # Extract content
         doc = extractor.extract(file_path)
-        resolved_code_references = self._resolve_code_reference_names(doc.code_references)
+        resolved_code_references = self._resolve_code_reference_names(
+            doc.code_references
+        )
 
         # Generate embeddings BEFORE deleting existing nodes
         # This ensures rollback safety: if embedding fails, old data is preserved
@@ -789,7 +793,9 @@ class DocumentGraphUpdater:
 
         # Async extraction
         doc = await extractor.extract_async(file_path)
-        resolved_code_references = self._resolve_code_reference_names(doc.code_references)
+        resolved_code_references = self._resolve_code_reference_names(
+            doc.code_references
+        )
 
         # Generate embeddings BEFORE deleting existing nodes (rollback safety)
         chunks = list(self.chunker.chunk_document(doc))

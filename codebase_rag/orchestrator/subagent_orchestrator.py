@@ -19,7 +19,10 @@ from rich.console import Console
 
 from codebase_rag.config import ModelConfig, settings
 from codebase_rag.services.graph_service import MemgraphIngestor
-from codebase_rag.services.llm import CypherGenerator, create_rag_orchestrator_with_config
+from codebase_rag.services.llm import (
+    CypherGenerator,
+    create_rag_orchestrator_with_config,
+)
 from codebase_rag.shared.query_router import QueryMode, QueryRouter
 from codebase_rag.tools.code_retrieval import CodeRetriever, create_code_retrieval_tool
 from codebase_rag.tools.codebase_query import create_query_tool
@@ -48,7 +51,6 @@ from codebase_rag.tools.semantic_search import (
 
 from .dynamic_concurrency_controller import DynamicConcurrencyController
 from .result_aggregator import ResultAggregator
-
 
 READ_ONLY_SUBAGENT_PROMPT = """
 You are a read-only parallel analysis worker for a codebase RAG system.
@@ -175,7 +177,9 @@ class ReadOnlySubAgent:
         if self.agent is None:
             raise RuntimeError("Parallel sub-agent was not initialized")
 
-        response = asyncio.run(self.agent.run(subtask.get("prompt", ""), message_history=[]))
+        response = asyncio.run(
+            self.agent.run(subtask.get("prompt", ""), message_history=[])
+        )
         if not isinstance(response.output, str):
             return str(response.output)
         return response.output
@@ -250,7 +254,9 @@ class SubAgentOrchestrator:
     ):
         self.dynamic_controller = DynamicConcurrencyController()
         self.requested_worker_count = worker_count
-        self.worker_count = self.dynamic_controller.get_effective_worker_count(worker_count)
+        self.worker_count = self.dynamic_controller.get_effective_worker_count(
+            worker_count
+        )
         self.repo_path = repo_path or settings.TARGET_REPO_PATH
         self.enable_document_graph = enable_document_graph
         self.query_mode = query_mode
@@ -414,7 +420,9 @@ class SubAgentOrchestrator:
                             retry_counts.get(subtask["id"], 0),
                         )
 
-                        if hasattr(worker.agent, "reset") and callable(worker.agent.reset):
+                        if hasattr(worker.agent, "reset") and callable(
+                            worker.agent.reset
+                        ):
                             worker.agent.reset()
 
                         try:

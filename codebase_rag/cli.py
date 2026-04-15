@@ -14,9 +14,9 @@ from . import logs as ls
 from .config import load_cgrignore_patterns, settings
 from .graph_updater import GraphUpdater
 from .main import (
+    ParallelExecutionConfig,
     _check_graph_freshness,
     _prompt_for_reindex,
-    ParallelExecutionConfig,
     app_context,
     connect_doc_memgraph,
     connect_memgraph,
@@ -486,28 +486,28 @@ def start(
         None,
         "--parallel-workers",
         "-p",
-        help="Number of parallel sub-agents to use for parallel tasks",
+        help=ch.HELP_PARALLEL_WORKERS,
         min=1,
     ),
     auto_split: bool = typer.Option(
         settings.CGR_AUTO_SPLIT_ENABLED,
         "--auto-split/--no-auto-split",
-        help="Enable or disable automatic subtask generation for parallel execution",
+        help=ch.HELP_AUTO_SPLIT,
     ),
     no_parallel: bool = typer.Option(
         False,
         "--no-parallel",
-        help="Disable parallel sub-agent execution (default behavior)",
+        help=ch.HELP_NO_PARALLEL,
     ),
     parallel_dry_run: bool = typer.Option(
         False,
         "--parallel-dry-run",
-        help="Simulate parallel execution without making actual LLM calls (for cost estimation and testing)",
+        help=ch.HELP_PARALLEL_DRY_RUN,
     ),
     scheduling_strategy: str = typer.Option(
         "fifo",
         "--scheduling-strategy",
-        help="Task scheduling strategy for parallel workers: 'fifo' (default) or 'round-robin'",
+        help=ch.HELP_SCHEDULING_STRATEGY,
     ),
     # New JSON ingestion flags (disabled by default, backward compatible)
     ingest_json: bool = typer.Option(
@@ -593,6 +593,14 @@ def start(
         typer.echo(
             f"ERROR: Invalid workspace '{doc_workspace}'. "
             f"Must be 1-64 chars: letters, numbers, underscore, hyphen only.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    normalized_scheduling_strategy = scheduling_strategy.lower()
+    if normalized_scheduling_strategy not in {"fifo", "round-robin"}:
+        typer.echo(
+            "ERROR: Invalid scheduling strategy. Use 'fifo' or 'round-robin'.",
             err=True,
         )
         raise typer.Exit(1)
@@ -733,7 +741,7 @@ def start(
         auto_split=auto_split,
         no_parallel=no_parallel,
         dry_run=parallel_dry_run,
-        scheduling_strategy=scheduling_strategy,
+        scheduling_strategy=normalized_scheduling_strategy,
         doc_workspace=doc_workspace,
     )
 

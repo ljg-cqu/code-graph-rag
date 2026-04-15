@@ -261,6 +261,53 @@ class TestExecuteQuery:
             "MATCH (n {id: $id}) RETURN n", {"id": 123}
         )
 
+    def test_retries_transient_query_failure_with_reconnect(self) -> None:
+        ingestor = MemgraphIngestor(host="localhost", port=7687)
+        first_conn = MagicMock()
+        second_conn = MagicMock()
+        first_cursor = MagicMock()
+        second_cursor = MagicMock()
+        col = MagicMock()
+        col.name = "value"
+
+        first_conn.cursor.return_value = first_cursor
+        second_conn.cursor.return_value = second_cursor
+        first_cursor.execute.side_effect = Exception("broken pipe")
+        second_cursor.description = [col]
+        second_cursor.fetchall.return_value = [(1,)]
+
+        ingestor.conn = first_conn
+
+        with (
+            patch.object(
+                MemgraphIngestor, "_create_connection", return_value=second_conn
+            ),
+            patch("codebase_rag.services.graph_service.time.sleep"),
+        ):
+            result = ingestor._execute_query("RETURN 1 AS value")
+
+        first_conn.close.assert_called_once()
+        assert ingestor.conn is second_conn
+        assert result == [{"value": 1}]
+        assert first_cursor.execute.call_count == 1
+        assert second_cursor.execute.call_count == 1
+
+    def test_does_not_retry_non_transient_query_failure(self) -> None:
+        ingestor = MemgraphIngestor(host="localhost", port=7687)
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        mock_cursor.execute.side_effect = ValueError("syntax error")
+        ingestor.conn = mock_conn
+
+        with (
+            patch.object(MemgraphIngestor, "_create_connection") as mock_create,
+            pytest.raises(ValueError, match="syntax error"),
+        ):
+            ingestor._execute_query("RETURN 1")
+
+        mock_create.assert_not_called()
+
     def test_closes_cursor_on_exception(self) -> None:
         ingestor = MemgraphIngestor(host="localhost", port=7687)
         mock_conn = MagicMock()
@@ -321,6 +368,113 @@ class TestExecuteBatchOn:
         ingestor._execute_batch_on(mock_conn, "MERGE (n:Test)", [{"id": 1}])
 
         mock_cursor.close.assert_called_once()
+
+    def test_retries_transient_batch_failure_with_reconnect_for_shared_connection(
+        self,
+    ) -> None:
+        ingestor = MemgraphIngestor(host="localhost", port=7687)
+        first_conn = MagicMock()
+        second_conn = MagicMock()
+        first_cursor = MagicMock()
+        second_cursor = MagicMock()
+
+        first_conn.cursor.return_value = first_cursor
+        second_conn.cursor.return_value = second_cursor
+        first_cursor.execute.side_effect = Exception("bad session")
+        ingestor.conn = first_conn
+
+        with (
+            patch.object(
+                MemgraphIngestor, "_create_connection", return_value=second_conn
+            ),
+            patch("codebase_rag.services.graph_service.time.sleep"),
+        ):
+            ingestor._execute_batch_on(
+                first_conn, "MERGE (n:Test {id: row.id})", [{"id": 1}]
+            )
+
+        first_conn.close.assert_called_once()
+        assert ingestor.conn is second_conn
+        assert first_cursor.execute.call_count == 1
+        assert second_cursor.execute.call_count == 1
+
+    def test_does_not_retry_transient_batch_failure_for_non_shared_connection(
+        self,
+    ) -> None:
+        ingestor = MemgraphIngestor(host="localhost", port=7687)
+        ingestor.conn = MagicMock()
+        worker_conn = MagicMock()
+        worker_cursor = MagicMock()
+        worker_conn.cursor.return_value = worker_cursor
+        worker_cursor.execute.side_effect = Exception("broken pipe")
+
+        with (
+            patch.object(MemgraphIngestor, "_create_connection") as mock_create,
+            pytest.raises(Exception, match="broken pipe"),
+        ):
+            ingestor._execute_batch_on(
+                worker_conn, "MERGE (n:Test {id: row.id})", [{"id": 1}]
+            )
+
+        mock_create.assert_not_called()
+
+
+class TestExecuteBatchWithReturnOn:
+    def test_retries_transient_batch_return_failure_with_reconnect_for_shared_connection(
+        self,
+    ) -> None:
+        ingestor = MemgraphIngestor(host="localhost", port=7687)
+        first_conn = MagicMock()
+        second_conn = MagicMock()
+        first_cursor = MagicMock()
+        second_cursor = MagicMock()
+        col = MagicMock()
+        col.name = "created"
+
+        first_conn.cursor.return_value = first_cursor
+        second_conn.cursor.return_value = second_cursor
+        first_cursor.execute.side_effect = Exception("connection closed")
+        second_cursor.description = [col]
+        second_cursor.fetchall.return_value = [(1,)]
+        ingestor.conn = first_conn
+
+        with (
+            patch.object(
+                MemgraphIngestor, "_create_connection", return_value=second_conn
+            ),
+            patch("codebase_rag.services.graph_service.time.sleep"),
+        ):
+            result = ingestor._execute_batch_with_return_on(
+                first_conn,
+                "MERGE (a)-[r:REL]->(b) RETURN count(r) AS created",
+                [{"id": 1}],
+            )
+
+        first_conn.close.assert_called_once()
+        assert ingestor.conn is second_conn
+        assert result == [{"created": 1}]
+        assert first_cursor.execute.call_count == 1
+        assert second_cursor.execute.call_count == 1
+
+    def test_does_not_retry_non_transient_batch_return_failure(self) -> None:
+        ingestor = MemgraphIngestor(host="localhost", port=7687)
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        mock_cursor.execute.side_effect = ValueError("syntax error")
+        ingestor.conn = mock_conn
+
+        with (
+            patch.object(MemgraphIngestor, "_create_connection") as mock_create,
+            pytest.raises(ValueError, match="syntax error"),
+        ):
+            ingestor._execute_batch_with_return_on(
+                mock_conn,
+                "MERGE (a)-[r:REL]->(b) RETURN count(r) AS created",
+                [{"id": 1}],
+            )
+
+        mock_create.assert_not_called()
 
 
 class TestCleanDatabase:

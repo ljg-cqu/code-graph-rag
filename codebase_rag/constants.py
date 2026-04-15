@@ -223,6 +223,7 @@ KEY_EXPORTED_AT = "exported_at"
 KEY_PARSER = "parser"
 KEY_NAME = "name"
 KEY_QUALIFIED_NAME = "qualified_name"
+KEY_IS_BUILTIN = "is_builtin"
 KEY_START_LINE = "start_line"
 KEY_END_LINE = "end_line"
 KEY_PATH = "path"
@@ -4058,7 +4059,9 @@ HEALTH_CHECK_FILE_LAYER_PASS_MSG = "Code graph contains File nodes for indexed m
 HEALTH_CHECK_FILE_LAYER_FAIL_MSG = (
     "Found {module_count} Module nodes but no File nodes in the code graph"
 )
-HEALTH_CHECK_FILE_LAYER_SKIP_MSG = "File layer check skipped because no Module nodes exist"
+HEALTH_CHECK_FILE_LAYER_SKIP_MSG = (
+    "File layer check skipped because no Module nodes exist"
+)
 HEALTH_CHECK_FILE_LAYER_ERROR_MSG = "File layer check failed: {error}"
 
 HEALTH_CHECK_DOC_CHUNK_PASS = "Large document chunk coverage valid"
@@ -4067,7 +4070,9 @@ HEALTH_CHECK_DOC_CHUNK_PASS_MSG = "All large documents have chunk coverage"
 HEALTH_CHECK_DOC_CHUNK_FAIL_MSG = (
     "{count} large documents have no chunks in the document graph"
 )
-HEALTH_CHECK_DOC_CHUNK_SKIP_MSG = "Document chunk coverage check skipped because no large documents exist"
+HEALTH_CHECK_DOC_CHUNK_SKIP_MSG = (
+    "Document chunk coverage check skipped because no large documents exist"
+)
 HEALTH_CHECK_DOC_CHUNK_ERROR_MSG = "Document chunk coverage check failed: {error}"
 
 HEALTH_CHECK_JSON_SCHEMA_PASS = "JSON schema validation passed"

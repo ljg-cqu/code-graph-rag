@@ -176,6 +176,15 @@ HELP_CHECK_FRESHNESS = (
     "If stale, prompts to re-index. Disable with --no-check-freshness for faster startup."
 )
 HELP_INDEX_TIMEOUT = "Maximum seconds for indexing operations (default: 300s)"
+HELP_PARALLEL_WORKERS = "Maximum number of parallel sub-agents to use when the read-only parallel path is selected"
+HELP_AUTO_SPLIT = "Enable or disable automatic safe subtask preview and generation for parallel execution"
+HELP_NO_PARALLEL = "Force sequential execution for this session"
+HELP_PARALLEL_DRY_RUN = (
+    "Preview the parallel execution plan without running worker LLM calls"
+)
+HELP_SCHEDULING_STRATEGY = (
+    "Task scheduling strategy for parallel workers: 'fifo' or 'round-robin'"
+)
 
 CLI_COMMANDS: dict[CLICommandName, str] = {
     CLICommandName.START: CMD_START,

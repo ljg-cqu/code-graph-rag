@@ -13,7 +13,6 @@ from typing import Any
 import mgclient
 from loguru import logger
 
-from . import logs as ls
 from .config import settings
 
 
@@ -272,6 +271,17 @@ class GraphAlgorithms:
             self._execute_query("ANALYZE GRAPH;")
         except Exception as e:
             logger.warning(f"ANALYZE GRAPH failed: {e}")
+
+    def count_nodes(self) -> int:
+        try:
+            results = self._execute_query("MATCH (n) RETURN count(n) AS node_count;")
+            if results:
+                node_count = results[0].get("node_count", 0)
+                if isinstance(node_count, int):
+                    return node_count
+        except Exception as e:
+            logger.warning(f"Node count query failed: {e}")
+        return 0
 
     def health_check(self) -> bool:
         """Check if MAGE algorithms are available."""

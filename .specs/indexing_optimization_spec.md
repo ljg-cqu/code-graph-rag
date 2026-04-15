@@ -1,60 +1,102 @@
 # Code Graph RAG Indexing Optimization Specification
-## Issues Identified & Fixes
----
-### 1. Missing Code Node Embeddings
-**Issue**: 81 code nodes (functions/classes/modules) have no embeddings after ingestion
-**Root Cause**: Embedding generation skipped for certain node types, error handling missing for failed embedding requests
-**Proposed Fix**:
-- Add retry mechanism (3 attempts) for failed embedding requests
-- Add validation step to identify missing embeddings before finalization
-- Add fallback embedding generation for edge case node types
-- Log all missing embedding node IDs for debugging
----
-### 2. Memgraph Connection Stability Issues
-**Issue**: "Broken pipe" / "bad session" errors when deleting existing document nodes during indexing
-**Root Cause**: Connection pool exhaustion, idle connections not recycled properly
-**Proposed Fix**:
-- Implement connection health check before executing write queries
-- Add connection retry logic (2 attempts) for failed database operations
-- Increase connection pool size to 10 from default 5
-- Add explicit connection reset on error to avoid stale sessions
-- Increase Document Graph Memgraph memory limit from 2GB to 4GB (prevents OOM/segfault crashes during large document indexing)
-- Fix embedding dimension mismatch between OpenAI text-embedding-v4 (1024d) and local fallback model microsoft/unixcoder-base (768d) to prevent indexing failures on network/API errors
----
-### 3. Large Document Chunking Limit
-**Issue**: Large documents hit MAX_CHUNKS_PER_DOCUMENT (1000) limit, partial content indexing
-**Root Cause**: Static limit not scaled for large documentation files
-**Proposed Fix**:
-- Increase MAX_CHUNKS_PER_DOCUMENT to 5000 for documentation graph
-- Add dynamic chunk size adjustment for large documents (increase chunk size by 50% for documents over 100k words)
-- Add warning to CLI when content is truncated
-- Allow configuration of chunk limit via environment variable `MAX_CHUNKS_PER_DOCUMENT`
----
-### 4. Community Detection Algorithm Unavailability
-**Issue**: Leiden/Louvain community detection skipped in Memgraph Community edition
-**Root Cause**: Algorithms only available in Memgraph Enterprise edition
-**Proposed Fix**:
-- Implement lightweight native community detection fallback for Community edition (graph-based connected components with naming)
-- Add configuration toggle to disable community detection entirely for users who don't need it
-- Update logging to clearly indicate which algorithm is being used
----
-### 5. Embedding Batch Size Limitation
-**Issue**: API endpoint caps batch size to 10, but system is configured for 50 causing repeated requests
-**Root Cause**: Static batch size not adjusted for different embedding providers
-**Proposed Fix**:
-- Add provider-specific batch size configuration
-- Auto-detect batch size limits from API responses
-- Add exponential backoff for rate limited embedding requests
----
-## Implementation Priority
-1. **High**: Memgraph connection stability fixes
-2. **High**: Missing embeddings validation & retry
-3. **Medium**: Large document chunking limit adjustment
-4. **Low**: Community detection fallback
-5. **Low**: Batch size auto-configuration
----
-## Success Metrics
-- 100% of code nodes have embeddings after indexing
-- 0 database connection errors during indexing
-- 0 content truncation for documents under 1 million words
-- Indexing speed improved by 20% via optimized batch handling
+
+## Purpose
+
+This revision narrows the scope to indexing changes that are both needed in the current codebase and safe to implement without changing the data model or deployment topology.
+
+The original draft mixed together three categories of work:
+
+- defects that are still open in the indexing path
+- behaviors that are already implemented elsewhere in the repository
+- speculative changes that do not map cleanly to current components
+
+This spec keeps only the first category as implementation work, documents the second as already satisfied, and rejects the third for now.
+
+## Codebase Findings
+
+### Already implemented and not part of this change
+
+1. Embedding reconciliation already exists in `GraphUpdater._reconcile_embeddings()` and logs missing stored IDs after batch persistence.
+2. OpenAI-compatible embedding batch caps are already handled in `codebase_rag/embeddings/openai.py` via endpoint-specific limits, including DashScope's batch size of 10.
+3. Dimension-mismatched local fallback embeddings already fail fast with a clear error instead of silently storing incompatible vectors.
+4. Community detection already falls back from Leiden to Louvain and then exits cleanly when the procedures are unavailable.
+
+### Problems that remain open
+
+1. Memgraph indexing operations use long-lived connections without automatic reconnect on transient session failures such as `broken pipe` or `bad session`.
+2. Post-ingestion graph algorithm execution in `GraphUpdater.run()` does not fully honor existing configuration flags:
+	- `ALGORITHM_RUN_POST_INGESTION`
+	- `ALGORITHM_ENABLE_PAGERANK`
+	- `ALGORITHM_ENABLE_COMMUNITY_DETECTION`
+	- `ALGORITHM_COMMUNITY_ALGORITHM`
+3. Community detection gating is incorrectly tied to the PageRank update count instead of actual graph size, so disabling PageRank implicitly disables community detection.
+
+### Rejected from this revision
+
+1. Raising a document `MAX_CHUNKS_PER_DOCUMENT` limit is not applicable because the current document updater does not enforce that static cap.
+2. Adding a new native community-detection algorithm for Memgraph Community edition is not justified in this patch set because the repository already treats missing procedures as a supported degraded mode.
+3. Increasing Docker memory defaults is an operational change, not an indexing implementation change, and should be handled separately if needed.
+
+## Accepted Design
+
+### 1. Transient Memgraph retry and reconnect
+
+Add bounded retry support to `MemgraphIngestor` for the persistent connection path used by indexing writes and reads.
+
+Requirements:
+
+1. Retry only transient session/transport failures.
+2. On retry, close the stale connection, create a fresh connection, and rerun the query.
+3. Keep retries bounded and configurable.
+4. Preserve existing behavior for non-transient errors.
+5. Apply the retry behavior to:
+	- `_execute_query()`
+	- `_execute_batch_on()` when using the shared connection
+	- `_execute_batch_with_return_on()` when using the shared connection
+
+Configuration:
+
+1. `MEMGRAPH_QUERY_MAX_RETRIES`: default `2`
+2. `MEMGRAPH_RETRY_BASE_DELAY`: default `0.25`
+
+Non-goals:
+
+1. No connection pooling changes
+2. No retry loop for short-lived worker-owned flush connections
+3. No retry for deterministic Cypher/model errors
+
+### 2. Config-driven post-ingestion algorithms
+
+Refactor post-ingestion graph algorithm execution into a dedicated helper so behavior is explicit and testable.
+
+Requirements:
+
+1. Always run `ANALYZE GRAPH` after ingestion.
+2. Treat `ALGORITHM_RUN_POST_INGESTION` as the master switch for optional enrichment steps after `ANALYZE GRAPH`.
+3. Run PageRank only when both `ALGORITHM_RUN_POST_INGESTION` and `ALGORITHM_ENABLE_PAGERANK` are true.
+4. Run community detection only when both `ALGORITHM_RUN_POST_INGESTION` and `ALGORITHM_ENABLE_COMMUNITY_DETECTION` are true.
+5. Use `ALGORITHM_COMMUNITY_ALGORITHM` to choose Leiden vs Louvain.
+6. Gate community detection on total node count, not on PageRank output.
+7. If the configured algorithm value is invalid, fall back to Leiden and log a warning.
+
+### 3. Validation strategy
+
+Tests added in this revision must prove:
+
+1. A transient Memgraph query failure reconnects and succeeds on retry.
+2. Non-transient failures are not retried.
+3. PageRank can be disabled without suppressing `ANALYZE GRAPH`.
+4. Community detection respects both the enable flag and the configured algorithm choice.
+
+## Implementation Plan
+
+1. Extend config with bounded Memgraph retry settings.
+2. Add retry/reconnect helpers to `MemgraphIngestor` and wire them into query execution.
+3. Extract post-ingestion algorithm handling from `GraphUpdater.run()` into a helper method that preserves the existing master config gate.
+4. Add focused unit tests for retry behavior and algorithm configuration.
+
+## Success Criteria
+
+1. Indexing survives transient Memgraph session failures without manual rerun.
+2. Post-ingestion algorithm execution matches the configuration surface already exposed by `settings`, including the existing master post-ingestion toggle.
+3. The revised spec maps directly to concrete code paths and tests in the repository.
