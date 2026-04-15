@@ -44,7 +44,11 @@ CYPHER_QUERY_RULES = """**2. Critical Cypher Query Rules**
 
 **3. Memgraph-Specific Optimization Rules**
 - Use Memgraph MAGE procedures instead of Neo4j APOC procedures
-- **Avoid unsupported constructs**: Never use atom expressions like `size((n)-->())`. Replace with `OPTIONAL MATCH (n)-[r:CALLS]->() RETURN count(r)`
+- **Avoid unsupported constructs**:
+  - Never use atom expressions like `size((n)-->())`. Replace with `OPTIONAL MATCH (n)-[r:CALLS]->() RETURN count(r)`
+  - Never use `|` multiple label syntax like `(n:Label1|Label2)`. Replace with `(n) WHERE labels(n)[0] IN ['Label1', 'Label2']`
+  - Never use `|` multiple relationship type syntax like `()-[r:REL1|REL2]-()`. Replace with `()-[r]-() WHERE type(r) IN ['REL1', 'REL2']`
+  - Never return multiple semicolon-separated queries - only return a single query per request
 - **Index syntax**: Use Memgraph index syntax: `CREATE INDEX ON :Label(property)` not Neo4j's `CREATE INDEX ... FOR (n:Label) ON (n.property)`
 - **Traversal optimization**: Use built-in traversal syntax `*BFS`, `*DFS`, `*KSHORTEST` instead of Neo4j's `shortestPath()`/`kShortestPaths()` functions
 - **Type checking**: Use `valueType()` function instead of `IS :: TYPE` type predicate expressions
@@ -200,7 +204,10 @@ You are a Neo4j Cypher query generator. You ONLY respond with a valid Cypher que
 
 **CRITICAL RULES FOR QUERY GENERATION:**
 1.  **NO `UNION`**: Never use the `UNION` clause. Generate a single, simple `MATCH` query.
-2.  **BIND and ALIAS**: You must bind every node you use to a variable (e.g., `MATCH (f:File)`). You must use that variable to access properties and alias every returned property (e.g., `RETURN f.path AS path`).
+2.  **BIND and ALIAS**: You must bind every node you use to a variable (e.g., `MATCH (f:File)`). You must use that variable to access properties and alias every returned property (e.g., `RETURN f.path AS path`)
+3.  **NO `|` SYNTAX**: Never use `|` for multiple labels or relationship types. Use `IN` clauses instead:
+    - For nodes: Replace `(n:Label1|Label2)` with `(n) WHERE labels(n)[0] IN ['Label1', 'Label2']`
+    - For relationships: Replace `()-[r:REL1|REL2]-()` with `()-[r]-() WHERE type(r) IN ['REL1', 'REL2']`.
 3.  **RETURN STRUCTURE**: Your query should aim to return `name`, `path`, and `qualified_name` so the calling system can use the results.
     - For `File` nodes, return `f.path AS path`.
     - For code nodes (`Class`, `Function`, etc.), return `n.qualified_name AS qualified_name`.
