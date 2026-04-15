@@ -157,6 +157,10 @@ class EmbeddingConfig:
         provider_type: Google provider type (gla/vertex).
         service_account_file: Path to Google service account JSON.
         device: Device for local models (auto/cpu/cuda).
+        ssl_verify: SSL verification — True (default), False to disable, or path to CA bundle.
+        proxy: Optional HTTP proxy URL for external API requests.
+        fallback_to_local: Fall back to local embedding model on API failure.
+        fallback_model: Local model to use when fallback is triggered.
     """
 
     provider: str
@@ -170,6 +174,10 @@ class EmbeddingConfig:
     provider_type: str | None = None
     service_account_file: str | None = None
     device: str | None = None
+    ssl_verify: bool = True
+    proxy: str | None = None
+    fallback_to_local: bool = True
+    fallback_model: str = "microsoft/unixcoder-base"
 
     def to_update_kwargs(self) -> EmbeddingConfigKwargs:
         result = asdict(self)
@@ -411,6 +419,10 @@ class AppConfig(BaseSettings):
     EMBEDDING_PROVIDER_TYPE: str | None = None  # Google: gla/vertex
     EMBEDDING_SERVICE_ACCOUNT_FILE: str | None = None  # Google service account
     EMBEDDING_DEVICE: str = "auto"  # Local: auto/cpu/cuda
+    EMBEDDING_SSL_VERIFY: bool = True
+    EMBEDDING_PROXY: str | None = None
+    EMBEDDING_FALLBACK_TO_LOCAL: bool = True
+    EMBEDDING_FALLBACK_MODEL: str = "microsoft/unixcoder-base"
 
     EMBEDDING_MAX_LENGTH: int = 512
     EMBEDDING_PROGRESS_INTERVAL: int = 10
@@ -431,6 +443,9 @@ class AppConfig(BaseSettings):
     """Number of parallel workers to use for codebase indexing.
     Auto-optimized at runtime: will not exceed available CPU cores or number of changed files.
     Set to 1 to disable parallel processing entirely (sequential mode)."""
+
+    RUN_INGESTION_QUALITY_CHECKS: bool = True
+    """Whether to run post-ingestion data quality validation checks after indexing completes."""
 
     CACHE_MAX_ENTRIES: int = 1000
     CACHE_MAX_MEMORY_MB: int = 500
@@ -786,6 +801,10 @@ class AppConfig(BaseSettings):
             provider_type=self.EMBEDDING_PROVIDER_TYPE,
             service_account_file=self.EMBEDDING_SERVICE_ACCOUNT_FILE,
             device=self.EMBEDDING_DEVICE,
+            ssl_verify=self.EMBEDDING_SSL_VERIFY,
+            proxy=self.EMBEDDING_PROXY,
+            fallback_to_local=self.EMBEDDING_FALLBACK_TO_LOCAL,
+            fallback_model=self.EMBEDDING_FALLBACK_MODEL,
         )
 
     @property

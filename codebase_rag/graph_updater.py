@@ -17,6 +17,7 @@ from .config import settings
 from .language_spec import LANGUAGE_FQN_SPECS, get_language_spec
 from .parsers.factory import ProcessorFactory
 from .services import IngestorProtocol, QueryProtocol
+from .tools.health_checker import HealthChecker
 from .types_defs import (
     EmbeddingQueryResult,
     FunctionRegistry,
@@ -368,6 +369,21 @@ class GraphUpdater:
         algo.close()
         logger.info("Post-ingestion graph algorithm processing complete")
 
+        # Run post-ingestion data quality validation
+        if settings.RUN_INGESTION_QUALITY_CHECKS:
+            health_checker = HealthChecker()
+            validation_results = health_checker.validate_ingestion_quality()
+            passed = sum(1 for res in validation_results if res.passed)
+            total = len(validation_results)
+            logger.info(
+                f"Ingestion quality validation completed: {passed}/{total} checks passed"
+            )
+            failed = [res for res in validation_results if not res.passed]
+            for fail in failed:
+                logger.warning(f"Quality check failed: {fail.name} - {fail.message}")
+                if fail.error:
+                    logger.debug(f"Error details: {fail.error}")
+
     def remove_file_from_state(self, file_path: Path) -> None:
         logger.debug(ls.REMOVING_STATE, path=file_path)
 
@@ -649,7 +665,6 @@ class GraphUpdater:
         queries: dict[SupportedLanguage, LanguageQueries] = {}
         for lang in get_supported_languages():
             queries[lang] = load_queries_for_language(lang)
-        from .language_spec import LANGUAGE_SPECS
         from .parser_loader import LANGUAGE_LIBRARIES
         from .parsers.factory import ProcessorFactory
         from .services.memory_ingestor import MemoryIngestor
@@ -661,7 +676,6 @@ class GraphUpdater:
                 lang_lib = LANGUAGE_LIBRARIES.get(lang)
                 if not lang_lib:
                     continue
-                lang_spec = LANGUAGE_SPECS[lang]
                 parser = Parser()
                 # Handle both callable loaders and raw objects, wrap with Language if needed
                 if callable(lang_lib):

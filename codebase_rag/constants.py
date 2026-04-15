@@ -642,6 +642,54 @@ WHERE m.qualified_name STARTS WITH ($project_name + '.')
 MATCH (m)-[:DEFINES]->(n:Union)
 RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
        n.start_line AS start_line, n.end_line AS end_line, n.path AS path
+UNION
+MATCH (m:Module)
+WHERE m.qualified_name STARTS WITH ($project_name + '.')
+MATCH (m)-[:DEFINES]->(c)-[:DEFINES_EVENT]->(n:Event)
+RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
+       n.start_line AS start_line, n.end_line AS end_line, n.path AS path
+UNION
+MATCH (m:Module)
+WHERE m.qualified_name STARTS WITH ($project_name + '.')
+MATCH (m)-[:DEFINES]->(c)-[:DEFINES_MODIFIER]->(n:Modifier)
+RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
+       n.start_line AS start_line, n.end_line AS end_line, n.path AS path
+UNION
+MATCH (m:Module)
+WHERE m.qualified_name STARTS WITH ($project_name + '.')
+MATCH (m)-[:DEFINES]->(c)-[:DEFINES_STATE]->(n:StateVariable)
+RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
+       n.start_line AS start_line, n.end_line AS end_line, n.path AS path
+UNION
+MATCH (m:Module)
+WHERE m.qualified_name STARTS WITH ($project_name + '.')
+MATCH (m)-[:DEFINES]->(c)-[:DEFINES_CUSTOM_ERROR]->(n:CustomError)
+RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
+       n.start_line AS start_line, n.end_line AS end_line, n.path AS path
+UNION
+MATCH (m:Module)
+WHERE m.qualified_name STARTS WITH ($project_name + '.')
+MATCH (m)-[:DEFINES]->(n:Hotkey)
+RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
+       n.start_line AS start_line, n.end_line AS end_line, n.path AS path
+UNION
+MATCH (m:Module)
+WHERE m.qualified_name STARTS WITH ($project_name + '.')
+MATCH (m)-[:DEFINES]->(n:Hotstring)
+RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
+       n.start_line AS start_line, n.end_line AS end_line, n.path AS path
+UNION
+MATCH (m:Module)
+WHERE m.qualified_name STARTS WITH ($project_name + '.')
+MATCH (m)-[:DEFINES]->(n:Label)
+RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
+       n.start_line AS start_line, n.end_line AS end_line, n.path AS path
+UNION
+MATCH (m:Module)
+WHERE m.qualified_name STARTS WITH ($project_name + '.')
+MATCH (m)-[:DEFINES]->(n:AhkClass)
+RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
+       n.start_line AS start_line, n.end_line AS end_line, n.path AS path
 """
 
 CYPHER_QUERY_PROJECT_NODE_IDS = """
@@ -688,6 +736,46 @@ UNION
 MATCH (m:Module)
 WHERE m.qualified_name STARTS WITH ($project_name + '.')
 MATCH (m)-[:DEFINES]->(n:Union)
+RETURN id(n) AS node_id
+UNION
+MATCH (m:Module)
+WHERE m.qualified_name STARTS WITH ($project_name + '.')
+MATCH (m)-[:DEFINES]->(c)-[:DEFINES_EVENT]->(n:Event)
+RETURN id(n) AS node_id
+UNION
+MATCH (m:Module)
+WHERE m.qualified_name STARTS WITH ($project_name + '.')
+MATCH (m)-[:DEFINES]->(c)-[:DEFINES_MODIFIER]->(n:Modifier)
+RETURN id(n) AS node_id
+UNION
+MATCH (m:Module)
+WHERE m.qualified_name STARTS WITH ($project_name + '.')
+MATCH (m)-[:DEFINES]->(c)-[:DEFINES_STATE]->(n:StateVariable)
+RETURN id(n) AS node_id
+UNION
+MATCH (m:Module)
+WHERE m.qualified_name STARTS WITH ($project_name + '.')
+MATCH (m)-[:DEFINES]->(c)-[:DEFINES_CUSTOM_ERROR]->(n:CustomError)
+RETURN id(n) AS node_id
+UNION
+MATCH (m:Module)
+WHERE m.qualified_name STARTS WITH ($project_name + '.')
+MATCH (m)-[:DEFINES]->(n:Hotkey)
+RETURN id(n) AS node_id
+UNION
+MATCH (m:Module)
+WHERE m.qualified_name STARTS WITH ($project_name + '.')
+MATCH (m)-[:DEFINES]->(n:Hotstring)
+RETURN id(n) AS node_id
+UNION
+MATCH (m:Module)
+WHERE m.qualified_name STARTS WITH ($project_name + '.')
+MATCH (m)-[:DEFINES]->(n:Label)
+RETURN id(n) AS node_id
+UNION
+MATCH (m:Module)
+WHERE m.qualified_name STARTS WITH ($project_name + '.')
+MATCH (m)-[:DEFINES]->(n:AhkClass)
 RETURN id(n) AS node_id
 """
 
@@ -1326,6 +1414,86 @@ SHELL_CMD_GREP = "grep"
 SHELL_CMD_GIT = "git"
 SHELL_CMD_RM = "rm"
 SHELL_RM_RF_FLAG = "-rf"
+SHELL_CMD_WHICH = "which"
+SHELL_CMD_WHERE = "where"
+
+# (H) Health check constants
+HEALTH_CHECK_MEMGRAPH_QUERY = "MATCH (n) RETURN count(n) LIMIT 1"
+
+# Docker health checks
+HEALTH_CHECK_DOCKER_RUNNING = "Docker running"
+HEALTH_CHECK_DOCKER_RUNNING_MSG = "Docker is running, version: {version}"
+HEALTH_CHECK_DOCKER_NOT_RUNNING = "Docker not running"
+HEALTH_CHECK_DOCKER_NOT_RESPONDING_MSG = "Docker is not responding"
+HEALTH_CHECK_DOCKER_EXIT_CODE = "Docker exited with non-zero code"
+HEALTH_CHECK_DOCKER_NOT_INSTALLED_MSG = "Docker is not installed"
+HEALTH_CHECK_DOCKER_NOT_IN_PATH = "Docker executable not found in PATH"
+HEALTH_CHECK_DOCKER_TIMEOUT_MSG = "Docker check timed out"
+HEALTH_CHECK_DOCKER_TIMEOUT_ERROR = "Docker check took longer than 5 seconds"
+HEALTH_CHECK_DOCKER_FAILED_MSG = "Docker check failed unexpectedly"
+
+# Memgraph health checks
+HEALTH_CHECK_MEMGRAPH_SUCCESSFUL = "Memgraph connection successful"
+HEALTH_CHECK_MEMGRAPH_CONNECTED_MSG = (
+    "Successfully connected to Memgraph at {host}:{port}"
+)
+HEALTH_CHECK_MEMGRAPH_FAILED = "Memgraph connection failed"
+HEALTH_CHECK_MEMGRAPH_CONNECTION_FAILED_MSG = "Failed to connect to Memgraph"
+HEALTH_CHECK_MEMGRAPH_ERROR = "Memgraph error: {error}"
+HEALTH_CHECK_MEMGRAPH_UNEXPECTED_FAILURE_MSG = "Memgraph check failed unexpectedly"
+
+# API key health checks
+HEALTH_CHECK_API_KEY_SET = "{display_name} API key set"
+HEALTH_CHECK_API_KEY_NOT_SET = "{display_name} API key not set"
+HEALTH_CHECK_API_KEY_CONFIGURED = "API key is properly configured"
+HEALTH_CHECK_API_KEY_NOT_CONFIGURED = "API key is missing"
+HEALTH_CHECK_API_KEY_MISSING_MSG = "Environment variable {env_name} is not set"
+HEALTH_CHECK_TOOLS = [
+    ("OPENAI_API_KEY", "OpenAI"),
+    ("ANTHROPIC_API_KEY", "Anthropic"),
+    ("GOOGLE_API_KEY", "Google"),
+]
+
+# External tool health checks
+HEALTH_CHECK_TOOL_INSTALLED = "{tool_name} installed"
+HEALTH_CHECK_TOOL_INSTALLED_MSG = "{tool_name} installed at: {path}"
+HEALTH_CHECK_TOOL_NOT_INSTALLED = "{tool_name} not installed"
+HEALTH_CHECK_TOOL_NOT_IN_PATH_MSG = "{cmd} not found in PATH"
+HEALTH_CHECK_TOOL_TIMEOUT_MSG = "{tool_name} check timed out"
+HEALTH_CHECK_TOOL_TIMEOUT_ERROR = "{cmd} check took longer than 4 seconds"
+HEALTH_CHECK_TOOL_FAILED_MSG = "{tool_name} check failed unexpectedly"
+HEALTH_CHECK_EXTERNAL_TOOLS = [
+    ("rg", "rg"),
+    ("git", "git"),
+    ("docker", "docker"),
+]
+
+# Ingestion quality validation checks
+HEALTH_CHECK_NODE_COUNT = "Node count validation"
+HEALTH_CHECK_NODE_COUNT_OK_MSG = "Node count matches expected: {actual} == {expected}"
+HEALTH_CHECK_NODE_COUNT_MISMATCH_MSG = "Node count mismatch: {actual} != {expected}"
+HEALTH_CHECK_NODE_COUNT_SKIP_MSG = "Node count check skipped, found {count} nodes"
+HEALTH_CHECK_EDGE_COUNT = "Edge count validation"
+HEALTH_CHECK_EDGE_COUNT_OK_MSG = "Edge count matches expected: {actual} == {expected}"
+HEALTH_CHECK_EDGE_COUNT_MISMATCH_MSG = "Edge count mismatch: {actual} != {expected}"
+HEALTH_CHECK_EDGE_COUNT_SKIP_MSG = "Edge count check skipped, found {count} edges"
+HEALTH_CHECK_MISSING_EMBEDDINGS = "Missing embeddings check"
+HEALTH_CHECK_MISSING_EMBEDDINGS_OK_MSG = "No missing embeddings found"
+HEALTH_CHECK_MISSING_EMBEDDINGS_FOUND_MSG = (
+    "Found {count} nodes with missing embeddings"
+)
+HEALTH_CHECK_EMBEDDING_DIMENSION = "Embedding dimension validation"
+HEALTH_CHECK_EMBEDDING_DIMENSION_OK_MSG = "Embedding dimension is correct: {dim}"
+HEALTH_CHECK_EMBEDDING_DIMENSION_MISMATCH_MSG = (
+    "Embedding dimension mismatch: {actual} != {expected}"
+)
+HEALTH_CHECK_DUPLICATE_NODES = "Duplicate nodes check"
+HEALTH_CHECK_DUPLICATE_NODES_OK_MSG = "No duplicate nodes found"
+HEALTH_CHECK_DUPLICATE_NODES_FOUND_MSG = "Found {count} duplicate node paths"
+HEALTH_CHECK_INGESTION_VALIDATION_FAILED = "Ingestion validation failed"
+HEALTH_CHECK_INGESTION_VALIDATION_ERROR_MSG = (
+    "Error running ingestion quality validation"
+)
 SHELL_RETURN_CODE_ERROR = -1
 SHELL_PIPE_OPERATORS = ("|", "&&", "||", ";")
 SHELL_SUBSHELL_PATTERNS = ("$(", "`")
@@ -3752,6 +3920,113 @@ HEALTH_CHECK_EXTERNAL_TOOLS = [
     ("ripgrep", "rg"),
     ("cmake", "cmake"),
 ]
+
+HEALTH_CHECK_NODE_COUNT = "Node count"
+HEALTH_CHECK_NODE_COUNT_OK_MSG = "Node count matched: {actual} == {expected}"
+HEALTH_CHECK_NODE_COUNT_MISMATCH_MSG = (
+    "Node count mismatch: expected {expected}, got {actual}"
+)
+HEALTH_CHECK_NODE_COUNT_SKIP_MSG = "Node count not checked (found {count} nodes)"
+
+HEALTH_CHECK_EDGE_COUNT = "Edge count"
+HEALTH_CHECK_EDGE_COUNT_OK_MSG = "Edge count matched: {actual} == {expected}"
+HEALTH_CHECK_EDGE_COUNT_MISMATCH_MSG = (
+    "Edge count mismatch: expected {expected}, got {actual}"
+)
+HEALTH_CHECK_EDGE_COUNT_SKIP_MSG = "Edge count not checked (found {count} edges)"
+
+HEALTH_CHECK_MISSING_EMBEDDINGS = "Missing embeddings"
+HEALTH_CHECK_MISSING_EMBEDDINGS_OK_MSG = "All nodes have embeddings"
+HEALTH_CHECK_MISSING_EMBEDDINGS_FOUND_MSG = "{count} nodes are missing embeddings"
+
+HEALTH_CHECK_EMBEDDING_DIMENSION = "Embedding dimension"
+HEALTH_CHECK_EMBEDDING_DIMENSION_OK_MSG = "Embedding dimension correct: {dim}"
+HEALTH_CHECK_EMBEDDING_DIMENSION_MISMATCH_MSG = (
+    "Embedding dimension mismatch: expected {expected}, got {actual}"
+)
+
+HEALTH_CHECK_DUPLICATE_NODES = "Duplicate nodes"
+HEALTH_CHECK_DUPLICATE_NODES_OK_MSG = "No duplicate nodes found"
+HEALTH_CHECK_DUPLICATE_NODES_FOUND_MSG = "{count} duplicate node paths found"
+
+HEALTH_CHECK_INGESTION_VALIDATION_FAILED = "Ingestion validation failed"
+HEALTH_CHECK_INGESTION_VALIDATION_ERROR_MSG = (
+    "Validation could not complete due to an error"
+)
+
+QUERY_GEN_SHOW_VERSION = "SHOW VERSION;"
+QUERY_GEN_SHOW_LICENSE = "SHOW LICENSE INFO;"
+QUERY_GEN_ENTERPRISE_KEYWORD = "enterprise"
+QUERY_GEN_FALLBACK_VERSION: tuple[int, ...] = (2, 0, 0)
+QUERY_GEN_MIN_ENTERPRISE_VERSION: tuple[int, ...] = (2, 5, 0)
+
+QUERY_GEN_DISCONNECTED_NODES = """
+MATCH (n)
+WHERE NOT n:Project AND NOT n:Package AND NOT n:Folder AND NOT n:File
+OPTIONAL MATCH (n)-[out]->()
+WITH n, count(out) AS outgoing
+OPTIONAL MATCH ()-[in]->(n)
+WITH n, outgoing, count(in) AS incoming
+WHERE outgoing = 0 AND incoming = 0
+RETURN count(*) AS total_disconnected"""
+
+QUERY_GEN_DISCONNECTED_NODES_PARALLEL = """
+USING PARALLEL EXECUTION
+MATCH (n)
+WHERE NOT n:Project AND NOT n:Package AND NOT n:Folder AND NOT n:File
+OPTIONAL MATCH (n)-[out]->()
+WITH n, count(out) AS outgoing
+OPTIONAL MATCH ()-[in]->(n)
+WITH n, outgoing, count(in) AS incoming
+WHERE outgoing = 0 AND incoming = 0
+RETURN count(*) AS total_disconnected"""
+
+QUERY_GEN_REQUIRED_PROPS = """
+MATCH (n)
+WHERE (n:Function OR n:Method OR n:Class OR n:Interface OR n:Enum OR n:Type
+       OR n:Union OR n:Contract OR n:Library OR n:Event OR n:Modifier
+       OR n:StateVariable OR n:CustomError OR n:Hotkey OR n:Hotstring
+       OR n:Label OR n:AhkClass)
+  AND (n.qualified_name IS NULL OR n.path IS NULL
+       OR n.start_line IS NULL OR n.end_line IS NULL)
+RETURN count(n) AS total_invalid"""
+
+QUERY_GEN_EMBEDDING_MODEL_MISMATCH = """
+MATCH (n)
+WHERE n.embedding IS NOT NULL AND n.embedding_model IS NOT NULL
+  AND n.embedding_model <> $expected_model
+RETURN count(n) AS mismatched_count"""
+
+HEALTH_CHECK_DISCONNECTED_PASS = "No disconnected production nodes"
+HEALTH_CHECK_DISCONNECTED_FAIL = "Disconnected production nodes detected"
+HEALTH_CHECK_DISCONNECTED_PASS_MSG = "All production nodes are connected in the graph"
+HEALTH_CHECK_DISCONNECTED_FAIL_MSG = "{count} disconnected production nodes found"
+HEALTH_CHECK_DISCONNECTED_ERROR_MSG = "Disconnected node check failed: {error}"
+
+HEALTH_CHECK_REQUIRED_PROPS_PASS = "Required properties present"
+HEALTH_CHECK_REQUIRED_PROPS_FAIL = "Missing required properties detected"
+HEALTH_CHECK_REQUIRED_PROPS_PASS_MSG = "All code nodes have required properties"
+HEALTH_CHECK_REQUIRED_PROPS_FAIL_MSG = (
+    "{count} code nodes are missing required properties"
+)
+HEALTH_CHECK_REQUIRED_PROPS_ERROR_MSG = "Required property check failed: {error}"
+
+HEALTH_CHECK_EMBEDDING_CORR_PASS = "Embedding model correlation valid"
+HEALTH_CHECK_EMBEDDING_CORR_FAIL = "Embedding model correlation mismatch"
+HEALTH_CHECK_EMBEDDING_CORR_PASS_MSG = (
+    "All embeddings match the configured model: {model}"
+)
+HEALTH_CHECK_EMBEDDING_CORR_FAIL_MSG = (
+    "{count} embeddings use a different model than configured ({model})"
+)
+HEALTH_CHECK_EMBEDDING_CORR_ERROR_MSG = "Embedding correlation check failed: {error}"
+
+HEALTH_CHECK_JSON_SCHEMA_PASS = "JSON schema validation passed"
+HEALTH_CHECK_JSON_SCHEMA_FAIL = "JSON schema validation failed"
+HEALTH_CHECK_JSON_SCHEMA_PASS_MSG = "JSON file conforms to the ingestion schema"
+HEALTH_CHECK_JSON_SCHEMA_FAIL_MSG = "JSON validation error: {error}"
+HEALTH_CHECK_JSON_SCHEMA_IO_ERROR_MSG = "Cannot read schema or data file: {error}"
+HEALTH_CHECK_JSON_SCHEMA_FILE = "ingestion_schema.json"
 
 SHELL_CMD_WHERE = "where"
 SHELL_CMD_WHICH = "which"

@@ -1,5 +1,6 @@
 # Unified Ingestion Data Quality Fix Design Specification
-Version: 1.0 | Status: Implementation Ready | Last Updated: 2024-05-20
+Version: 1.1 | Status: Implementation Ready (Review Completed) | Last Updated: 2025-04-15
+> **Review Updates**: Corrected file paths, marked redundant document parsing fix as already implemented, added dependency note for JSON schema validation
 
 ## Executive Summary
 This unified specification addresses all identified ingestion and data modeling issues in the Code Graph RAG system, with prioritized, implementation-ready fixes. The specification covers:
@@ -130,7 +131,7 @@ def _make_request(self, texts: list[str], batch_size: int) -> list[list[float]]:
 ```
 
 ### 3.2 Critical Fix: Memgraph Query Compatibility
-**File path**: `codebase_rag/graph/query_generator.py`
+**File path**: `codebase_rag/graph/query_generator.py` (new `codebase_rag/graph` directory will be created for this component)
 **Changes**:
 ```python
 import mgclient
@@ -230,26 +231,17 @@ def check_json_ingestion_schema(self, json_path: str) -> HealthCheckResult:
     except jsonschema.ValidationError as e:
         return HealthCheckResult(passed=False, message=f"JSON schema validation failed: {e.message}")
 ```
+> **Dependency Note**: `jsonschema` will be added to `pyproject.toml` dependencies to support JSON schema validation
 
-### 3.4 Medium Fix: Document Parsing Improvements
-**File path**: `codebase_rag/ingestion/parsers/document_parser.py`
-**Changes**:
-Add mandatory source metadata to all generated chunks:
-```python
-def split_document(self, file_path: str, content: str) -> list[Chunk]:
-    # Existing splitting logic
-    chunks = self.splitter.split_text(content)
-    
-    # Add source metadata to each chunk
-    for idx, chunk in enumerate(chunks):
-        chunk.metadata["source_file"] = file_path
-        chunk.metadata["start_offset"] = chunk.start_index
-        chunk.metadata["end_offset"] = chunk.end_index
-        if file_path.endswith(".pdf"):
-            chunk.metadata["page_number"] = chunk.page_number
-    
-    return chunks
-```
+### 3.4 Medium Fix: Document Parsing Improvements (✅ Already Implemented)
+Source metadata tracking is already natively implemented in the existing `DocumentChunk` class in `codebase_rag/document/chunking.py`, which includes:
+- `document_path`: Full path to source file
+- `start_line`/`end_line`: Exact line positions in source document
+- `section_title`: Containing section for context
+- `chunk_index`: Unique sequential ID within document
+- `qualified_name`: Fully unique identifier for graph storage
+
+No further implementation required for this fix. PDF page number tracking will be added as an optional enhancement in Phase 3 if needed.
 
 ---
 
@@ -275,9 +267,9 @@ Run the following validation steps after every ingestion job:
 1. Deploy embedding generation and query compatibility critical fixes
 2. Validate core functionality is restored: document search works, structural queries run without errors
 
-### Phase 2 (Next Sprint, 8 hours effort)
+### Phase 2 (Next Sprint, 6 hours effort)
 1. Deploy data quality validation framework
-2. Deploy JSON schema validation and document parsing improvements
+2. Deploy JSON schema validation
 3. Run full ingestion of sample codebase and confirm all quality checks pass
 
 ### Phase 3 (Future Sprint, 3 hours effort)
@@ -293,4 +285,4 @@ Run the following validation steps after every ingestion job:
 | Graph query success rate | 100% |
 | Ingestion quality score | >=95% |
 | Invalid JSON ingestion rejection rate | 100% |
-| Document chunk source attribution completeness | 100% |
+| Document chunk source attribution completeness | 100% (✅ Already Achieved) |

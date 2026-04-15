@@ -78,6 +78,10 @@ class NodeType(StrEnum):
     EVENT = "Event"
     STATE_VARIABLE = "StateVariable"
     CUSTOM_ERROR = "CustomError"
+    HOTKEY = "Hotkey"
+    HOTSTRING = "Hotstring"
+    LABEL = "Label"
+    CLASS_AHK = "AhkClass"
 
 
 type TrieNode = dict[str, TrieNode | QualifiedName | NodeType]
@@ -171,6 +175,10 @@ class EmbeddingConfigKwargs(TypedDict, total=False):
     provider_type: str | None
     service_account_file: str | None
     device: str | None
+    ssl_verify: bool | str
+    proxy: str | None
+    fallback_to_local: bool
+    fallback_model: str
 
 
 class GraphMetadata(TypedDict):

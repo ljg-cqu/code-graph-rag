@@ -234,6 +234,19 @@ class FunctionIngestMixin:
         )
         return nested_qn or f"{module_qn}.{func_name}"
 
+    def _get_function_node_type(
+        self, func_node: Node, language: cs.SupportedLanguage
+    ) -> NodeType:
+        if language == cs.SupportedLanguage.AUTOHOTKEY:
+            match func_node.type:
+                case cs.TS_AHK_HOTKEY:
+                    return NodeType.HOTKEY
+                case cs.TS_AHK_HOTSTRING_DEFINITION:
+                    return NodeType.HOTSTRING
+                case cs.TS_AHK_LABEL:
+                    return NodeType.LABEL
+        return NodeType.FUNCTION
+
     def _register_function(
         self,
         func_node: Node,
@@ -246,14 +259,15 @@ class FunctionIngestMixin:
         logger.info(
             ls.FUNC_FOUND.format(name=resolution.name, qn=resolution.qualified_name)
         )
-        self.ingestor.ensure_node_batch(cs.NodeLabel.FUNCTION, func_props)
+        node_type = self._get_function_node_type(func_node, language)
+        self.ingestor.ensure_node_batch(node_type, func_props)
 
-        self.function_registry[resolution.qualified_name] = NodeType.FUNCTION
+        self.function_registry[resolution.qualified_name] = node_type
         if resolution.name:
             self.simple_name_lookup[resolution.name].add(resolution.qualified_name)
 
         self._create_function_relationships(
-            func_node, resolution, module_qn, language, lang_config
+            func_node, resolution, module_qn, language, lang_config, node_type
         )
 
     def _build_function_props(
@@ -281,6 +295,7 @@ class FunctionIngestMixin:
         module_qn: str,
         language: cs.SupportedLanguage,
         lang_config: LanguageSpec,
+        node_type: NodeType = NodeType.FUNCTION,
     ) -> None:
         parent_type, parent_qn = self._determine_function_parent(
             func_node, module_qn, lang_config
@@ -288,7 +303,7 @@ class FunctionIngestMixin:
         self.ingestor.ensure_relationship_batch(
             (parent_type, cs.KEY_QUALIFIED_NAME, parent_qn),
             cs.RelationshipType.DEFINES,
-            (cs.NodeLabel.FUNCTION, cs.KEY_QUALIFIED_NAME, resolution.qualified_name),
+            (node_type, cs.KEY_QUALIFIED_NAME, resolution.qualified_name),
         )
 
         if resolution.is_exported and language == cs.SupportedLanguage.CPP:
@@ -296,7 +311,7 @@ class FunctionIngestMixin:
                 (cs.NodeLabel.MODULE, cs.KEY_QUALIFIED_NAME, module_qn),
                 cs.RelationshipType.EXPORTS,
                 (
-                    cs.NodeLabel.FUNCTION,
+                    node_type,
                     cs.KEY_QUALIFIED_NAME,
                     resolution.qualified_name,
                 ),

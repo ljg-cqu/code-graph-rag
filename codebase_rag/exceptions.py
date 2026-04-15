@@ -1,3 +1,5 @@
+from enum import StrEnum
+
 # (H) Provider validation errors
 GOOGLE_GLA_NO_KEY = (
     "Gemini GLA provider requires api_key. "
@@ -72,8 +74,13 @@ class LLMGenerationError(Exception):
     pass
 
 
+class MemgraphCompatibilityError(Exception):
+    """Raised when Memgraph instance does not support requested feature."""
+
+    pass
+
+
 # (H) Embedding exception hierarchy
-from enum import StrEnum
 
 
 class EmbeddingErrorCode(StrEnum):

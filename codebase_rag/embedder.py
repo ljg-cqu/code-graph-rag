@@ -425,6 +425,10 @@ def get_embedding_provider_instance() -> EmbeddingProvider:
             provider_type=config.provider_type,
             service_account_file=config.service_account_file,
             device=config.device,
+            ssl_verify=config.ssl_verify,
+            proxy=config.proxy,
+            fallback_to_local=config.fallback_to_local,
+            fallback_model=config.fallback_model,
         )
         _embedding_provider.validate_config()
 

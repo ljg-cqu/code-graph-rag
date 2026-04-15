@@ -60,6 +60,9 @@ def determine_node_type(
         case cs.TS_SOL_LIBRARY_DECLARATION:
             logger.info(logs.CLASS_FOUND_LIBRARY.format(name=class_name, qn=class_qn))
             return NodeType.LIBRARY
+        case cs.TS_AHK_CLASS_DEFINITION if language == cs.SupportedLanguage.AUTOHOTKEY:
+            logger.info(logs.CLASS_FOUND_CLASS.format(name=class_name, qn=class_qn))
+            return NodeType.CLASS_AHK
         case _:
             logger.info(logs.CLASS_FOUND_CLASS.format(name=class_name, qn=class_qn))
             return NodeType.CLASS

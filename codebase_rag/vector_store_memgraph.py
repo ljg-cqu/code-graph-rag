@@ -13,6 +13,7 @@ from loguru import logger
 
 from . import logs as ls
 from .config import settings
+from .graph.query_generator import MemgraphQueryGenerator
 from .vector_backend import VectorBackend
 
 # Model info
@@ -42,11 +43,20 @@ class MemgraphBackend(VectorBackend):
         "Enum",
         "Type",
         "Union",
+        "Event",
+        "Modifier",
+        "StateVariable",
+        "CustomError",
+        "Hotkey",
+        "Hotstring",
+        "Label",
+        "AhkClass",
     )
 
     def __init__(self, is_document: bool = False) -> None:
         self.is_document = is_document
         self._conn: mgclient.Connection | None = None
+        self._query_generator: MemgraphQueryGenerator | None = None
 
     def _create_connection(self) -> mgclient.Connection:
         """Create a new Memgraph connection."""
@@ -102,6 +112,15 @@ class MemgraphBackend(VectorBackend):
             finally:
                 cursor.close()
 
+    @property
+    def query_generator(self) -> MemgraphQueryGenerator:
+        """Get lazy-initialized query generator for Memgraph compatibility."""
+        if self._query_generator is None:
+            # Create a persistent connection for the query generator
+            self._conn = self._create_connection()
+            self._query_generator = MemgraphQueryGenerator(self._conn)
+        return self._query_generator
+
     def initialize(self) -> None:
         """Create vector indexes for embeddable node types.
 
@@ -110,23 +129,34 @@ class MemgraphBackend(VectorBackend):
         """
         logger.info(ls.MG_VECTOR_INIT.format(index=settings.MEMGRAPH_VECTOR_INDEX_NAME))
 
+        capabilities = self.query_generator.capabilities
         for label in self.LABELS_TO_INDEX:
             index_name = f"{label.lower()}_embedding_index"
-            cypher = f"""
-            CREATE VECTOR INDEX {index_name}
-            ON :{label}(embedding)
-            WITH CONFIG {{
-                "dimension": {settings.MEMGRAPH_VECTOR_DIM},
-                "capacity": {settings.MEMGRAPH_VECTOR_CAPACITY},
-                "metric": "{settings.MEMGRAPH_VECTOR_METRIC}"
-            }};
-            """
 
             try:
-                self._execute_query(cypher)
+                if capabilities.supports_vector_index:
+                    # Use query generator to create compatible index creation query
+                    cypher, params = (
+                        self.query_generator.generate_vector_index_creation_query(
+                            index_name=index_name,
+                            node_label=label,
+                            vector_property="embedding",
+                            vector_dim=settings.MEMGRAPH_VECTOR_DIM,
+                            metric=settings.MEMGRAPH_VECTOR_METRIC,
+                            capacity=settings.MEMGRAPH_VECTOR_CAPACITY,
+                        )
+                    )
+                    self._execute_query(cypher, params)
+                else:
+                    # Fallback: no vector index support, just proceed without indexes
+                    logger.debug(
+                        f"Vector index not supported for label {label}, skipping index creation"
+                    )
+                    continue
+
                 logger.info(
                     ls.MG_VECTOR_INDEX_CREATED.format(
-                        index=f"{label.lower()}_embedding_index",
+                        index=index_name,
                         label=label,
                         dim=settings.MEMGRAPH_VECTOR_DIM,
                         capacity=settings.MEMGRAPH_VECTOR_CAPACITY,
@@ -135,15 +165,11 @@ class MemgraphBackend(VectorBackend):
             except Exception as e:
                 error_str = str(e).lower()
                 if "already exists" in error_str or "duplicate" in error_str:
-                    logger.info(
-                        ls.MG_VECTOR_INDEX_EXISTS.format(
-                            index=f"{label.lower()}_embedding_index"
-                        )
-                    )
+                    logger.info(ls.MG_VECTOR_INDEX_EXISTS.format(index=index_name))
                 else:
                     logger.error(
                         ls.MG_VECTOR_INDEX_FAILED.format(
-                            index=f"{label.lower()}_embedding_index",
+                            index=index_name,
                             error=e,
                         )
                     )
@@ -187,7 +213,7 @@ class MemgraphBackend(VectorBackend):
 
         params = {
             "points": [{"node_id": nid, "embedding": emb} for nid, emb, _ in points],
-            "model_name": UNIXCODER_MODEL,
+            "model_name": settings.EMBEDDING_MODEL,
             "version": EMBEDDING_VERSION,
         }
 
@@ -212,7 +238,7 @@ class MemgraphBackend(VectorBackend):
         """Hybrid vector + graph retrieval using Memgraph native capabilities.
 
         Implements atomic retrieval pipeline:
-        1. Vector similarity search
+        1. Vector similarity search (auto-detects Memgraph version and uses compatible syntax)
         2. BFS context expansion to get related nodes
         3. Ranking by combined similarity + PageRank score
         4. Optional context inclusion for richer results
@@ -230,71 +256,144 @@ class MemgraphBackend(VectorBackend):
         """
         effective_top_k = top_k if top_k > 0 else settings.VECTOR_SEARCH_TOP_K
         project_prefix = filters.get("project_prefix") if filters else None
-
-        # Atomic hybrid retrieval pipeline (single Cypher query)
-        if include_context:
-            cypher = """
-            WITH $embedding AS query_vec, $top_k AS top_k, $project_prefix AS project_prefix, $max_depth AS max_depth
-            // Step 1: Vector search to get top matching nodes
-            CALL vector_search.search($index_name, top_k * 3, query_vec)
-            YIELD node AS start_node, similarity AS sim
-            WHERE ($project_prefix IS NULL OR start_node.qualified_name STARTS WITH $project_prefix)
-            
-            // Step 2: BFS expansion to get related context (fixed Memgraph BFS syntax with parentheses)
-            MATCH path = (start_node)-[:CALLS|:DEFINES|:IMPORTS *BFS (1..max_depth)]-(related)
-            WHERE related:Function OR related:Class OR related:Module
-            
-            // Step 3: Rank by combined similarity + PageRank score
-            WITH
-                DISTINCT related,
-                sim,
-                COALESCE(related.pagerank_score, 0.1) AS pr_score,
-                collect(DISTINCT [n IN nodes(path) | n.qualified_name]) AS context_paths
-            ORDER BY (sim * 0.7) + (pr_score * 0.3) DESC
-            LIMIT top_k
-            
-            // Step 4: Return full result details
-            RETURN
-                id(related) AS node_id,
-                related.name AS name,
-                related.qualified_name AS qualified_name,
-                related.path AS file_path,
-                related.docstring AS docstring,
-                related.start_line AS start_line,
-                related.end_line AS end_line,
-                sim AS similarity,
-                pr_score AS pagerank_score,
-                context_paths
-            """
-        else:
-            # Lightweight search without context for speed
-            cypher = """
-            WITH $embedding AS query_vec, $top_k AS top_k, $project_prefix AS project_prefix
-            CALL vector_search.search($index_name, top_k * 2, query_vec)
-            YIELD node AS n, similarity AS sim
-            WHERE ($project_prefix IS NULL OR n.qualified_name STARTS WITH $project_prefix)
-            WITH n, sim, COALESCE(n.pagerank_score, 0.1) AS pr_score
-            ORDER BY (sim * 0.7) + (pr_score * 0.3) DESC
-            LIMIT top_k
-            RETURN id(n) AS node_id, sim AS similarity
-            """
+        capabilities = self.query_generator.capabilities
 
         all_results = []
         seen_node_ids = set()
 
         # Search across all label indexes
         for label in self.LABELS_TO_INDEX:
-            index_name = f"{label.lower()}_embedding_index"
-            params = {
-                "index_name": index_name,
-                "embedding": query_embedding,
-                "top_k": effective_top_k,
-                "project_prefix": project_prefix,
-                "max_depth": max_context_depth,
-            }
-
             try:
-                label_results = self._execute_query(cypher, params)
+                if capabilities.supports_vector_search_procedure:
+                    # Use optimized vector_search.search() procedure (newer Memgraph versions)
+                    if include_context:
+                        cypher = """
+                        WITH $embedding AS query_vec, $top_k AS top_k, $project_prefix AS project_prefix, $max_depth AS max_depth
+                        CALL vector_search.search($index_name, top_k * 3, query_vec)
+                        YIELD node AS start_node, similarity AS sim
+                        WHERE ($project_prefix IS NULL OR start_node.qualified_name STARTS WITH $project_prefix)
+
+                        MATCH path = (start_node)-[:CALLS|:DEFINES|:IMPORTS *BFS (1..max_depth)]-(related)
+                        WHERE related:Function OR related:Class OR related:Module
+
+                        WITH
+                            DISTINCT related,
+                            sim,
+                            COALESCE(related.pagerank_score, 0.1) AS pr_score,
+                            collect(DISTINCT [n IN nodes(path) | n.qualified_name]) AS context_paths
+                        ORDER BY (sim * 0.7) + (pr_score * 0.3) DESC
+                        LIMIT top_k
+
+                        RETURN
+                            id(related) AS node_id,
+                            related.name AS name,
+                            related.qualified_name AS qualified_name,
+                            related.path AS file_path,
+                            related.docstring AS docstring,
+                            related.start_line AS start_line,
+                            related.end_line AS end_line,
+                            sim AS similarity,
+                            pr_score AS pagerank_score,
+                            context_paths
+                        """
+                    else:
+                        cypher = """
+                        WITH $embedding AS query_vec, $top_k AS top_k, $project_prefix AS project_prefix
+                        CALL vector_search.search($index_name, top_k * 2, query_vec)
+                        YIELD node AS n, similarity AS sim
+                        WHERE ($project_prefix IS NULL OR n.qualified_name STARTS WITH $project_prefix)
+                        WITH n, sim, COALESCE(n.pagerank_score, 0.1) AS pr_score
+                        ORDER BY (sim * 0.7) + (pr_score * 0.3) DESC
+                        LIMIT top_k
+                        RETURN id(n) AS node_id, sim AS similarity
+                        """
+
+                    params = {
+                        "index_name": f"{label.lower()}_embedding_index",
+                        "embedding": query_embedding,
+                        "top_k": effective_top_k,
+                        "project_prefix": project_prefix,
+                        "max_depth": max_context_depth,
+                    }
+
+                    label_results = self._execute_query(cypher, params)
+                else:
+                    # Use compatibility mode: direct similarity function call (older Memgraph versions)
+                    additional_filters = ""
+                    if project_prefix:
+                        additional_filters = (
+                            f"node.qualified_name STARTS WITH '{project_prefix}'"
+                        )
+
+                    # Generate compatible vector search query
+                    cypher_base, params_base = (
+                        self.query_generator.generate_vector_search_query(
+                            node_label=label,
+                            vector_property="embedding",
+                            query_vector=query_embedding,
+                            top_k=effective_top_k * 3,
+                            additional_filters=additional_filters,
+                        )
+                    )
+
+                    if include_context:
+                        # Add context expansion to generated query
+                        cypher = f"""
+                        WITH $embedding AS query_vec, $top_k AS top_k, $project_prefix AS project_prefix, $max_depth AS max_depth
+                        MATCH (start_node:{label})
+                        {f"WHERE {additional_filters}" if additional_filters else ""}
+                        WITH start_node, {capabilities.vector_function_syntax}(start_node.embedding, query_vec) AS sim
+                        ORDER BY sim DESC
+                        LIMIT top_k * 3
+
+                        MATCH path = (start_node)-[:CALLS|:DEFINES|:IMPORTS *BFS (1..max_depth)]-(related)
+                        WHERE related:Function OR related:Class OR related:Module
+
+                        WITH
+                            DISTINCT related,
+                            sim,
+                            COALESCE(related.pagerank_score, 0.1) AS pr_score,
+                            collect(DISTINCT [n IN nodes(path) | n.qualified_name]) AS context_paths
+                        ORDER BY (sim * 0.7) + (pr_score * 0.3) DESC
+                        LIMIT top_k
+
+                        RETURN
+                            id(related) AS node_id,
+                            related.name AS name,
+                            related.qualified_name AS qualified_name,
+                            related.path AS file_path,
+                            related.docstring AS docstring,
+                            related.start_line AS start_line,
+                            related.end_line AS end_line,
+                            sim AS similarity,
+                            pr_score AS pagerank_score,
+                            context_paths
+                        """
+                        params = {
+                            "embedding": query_embedding,
+                            "top_k": effective_top_k,
+                            "project_prefix": project_prefix,
+                            "max_depth": max_context_depth,
+                        }
+                    else:
+                        # Lightweight search without context
+                        cypher = f"""
+                        MATCH (n:{label})
+                        {f"WHERE {additional_filters}" if additional_filters else ""}
+                        WITH n, {capabilities.vector_function_syntax}(n.embedding, $query_vector) AS sim
+                        WITH n, sim, COALESCE(n.pagerank_score, 0.1) AS pr_score
+                        ORDER BY (sim * 0.7) + (pr_score * 0.3) DESC
+                        LIMIT $top_k
+                        RETURN id(n) AS node_id, sim AS similarity
+                        """
+                        params = {
+                            "query_vector": query_embedding,
+                            "top_k": effective_top_k,
+                        }
+
+                    label_results = self._execute_query(cypher, params)
+
+                # Process results
                 for res in label_results:
                     node_id = int(res["node_id"])
                     if node_id not in seen_node_ids:
@@ -303,8 +402,9 @@ class MemgraphBackend(VectorBackend):
                             all_results.append(res)
                         else:
                             all_results.append((node_id, float(res["similarity"])))
+
             except Exception as e:
-                logger.debug(f"Search failed for index {index_name}: {e}")
+                logger.debug(f"Search failed for label {label}: {e}")
                 continue
 
         # Sort final results and return top_k
@@ -469,7 +569,7 @@ class MemgraphBackend(VectorBackend):
         params = {
             "node_id": id,
             "embedding": embedding,
-            "model_name": UNIXCODER_MODEL,
+            "model_name": settings.EMBEDDING_MODEL,
             "version": EMBEDDING_VERSION,
             "metadata": metadata,
         }

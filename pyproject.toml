@@ -66,6 +66,7 @@ dependencies = [
     "tree-sitter-c-sharp>=0.23.1",
     "tree-sitter-php>=0.24.1",
     "tree-sitter-lua>=0.4.1",
+    "jsonschema>=4.23.0",
 ]
 
 [project.scripts]

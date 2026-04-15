@@ -190,8 +190,385 @@ class HealthChecker:
         self.results.extend(self.check_api_keys())
         for tool_name, cmd in cs.HEALTH_CHECK_EXTERNAL_TOOLS:
             self.results.append(self.check_external_tool(tool_name, cmd))
+        self.results.append(self.check_disconnected_nodes())
+        self.results.append(self.check_required_properties())
+        self.results.append(self.check_embedding_correlation())
         return self.results
 
     def get_summary(self) -> tuple[int, int]:
         passed = sum(1 for r in self.results if r.passed)
         return passed, len(self.results)
+
+    def check_disconnected_nodes(self) -> HealthCheckResult:
+        from ..graph.query_generator import QueryGenerator
+
+        conn = None
+        cursor = None
+        try:
+            query = QueryGenerator().get_disconnected_nodes_query()
+            conn = mgclient.connect(
+                host=settings.MEMGRAPH_HOST, port=settings.MEMGRAPH_PORT
+            )
+            cursor = conn.cursor()
+            cursor.execute(query)
+            row = cursor.fetchone()
+            count = int(row[0]) if row else 0
+            if count == 0:
+                return HealthCheckResult(
+                    name=cs.HEALTH_CHECK_DISCONNECTED_PASS,
+                    passed=True,
+                    message=cs.HEALTH_CHECK_DISCONNECTED_PASS_MSG,
+                )
+            return HealthCheckResult(
+                name=cs.HEALTH_CHECK_DISCONNECTED_FAIL,
+                passed=False,
+                message=cs.HEALTH_CHECK_DISCONNECTED_FAIL_MSG.format(count=count),
+            )
+        except Exception as e:
+            return HealthCheckResult(
+                name=cs.HEALTH_CHECK_DISCONNECTED_FAIL,
+                passed=False,
+                message=cs.HEALTH_CHECK_DISCONNECTED_FAIL,
+                error=cs.HEALTH_CHECK_DISCONNECTED_ERROR_MSG.format(error=str(e)),
+            )
+        finally:
+            if cursor is not None:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    def check_required_properties(self) -> HealthCheckResult:
+        conn = None
+        cursor = None
+        try:
+            conn = mgclient.connect(
+                host=settings.MEMGRAPH_HOST, port=settings.MEMGRAPH_PORT
+            )
+            cursor = conn.cursor()
+            cursor.execute(cs.QUERY_GEN_REQUIRED_PROPS)
+            row = cursor.fetchone()
+            count = int(row[0]) if row else 0
+            if count == 0:
+                return HealthCheckResult(
+                    name=cs.HEALTH_CHECK_REQUIRED_PROPS_PASS,
+                    passed=True,
+                    message=cs.HEALTH_CHECK_REQUIRED_PROPS_PASS_MSG,
+                )
+            return HealthCheckResult(
+                name=cs.HEALTH_CHECK_REQUIRED_PROPS_FAIL,
+                passed=False,
+                message=cs.HEALTH_CHECK_REQUIRED_PROPS_FAIL_MSG.format(count=count),
+            )
+        except Exception as e:
+            return HealthCheckResult(
+                name=cs.HEALTH_CHECK_REQUIRED_PROPS_FAIL,
+                passed=False,
+                message=cs.HEALTH_CHECK_REQUIRED_PROPS_FAIL,
+                error=cs.HEALTH_CHECK_REQUIRED_PROPS_ERROR_MSG.format(error=str(e)),
+            )
+        finally:
+            if cursor is not None:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    def check_embedding_correlation(self) -> HealthCheckResult:
+        conn = None
+        cursor = None
+        try:
+            conn = mgclient.connect(
+                host=settings.MEMGRAPH_HOST, port=settings.MEMGRAPH_PORT
+            )
+            cursor = conn.cursor()
+            cursor.execute(
+                cs.QUERY_GEN_EMBEDDING_MODEL_MISMATCH,
+                {"expected_model": settings.EMBEDDING_MODEL},
+            )
+            row = cursor.fetchone()
+            count = int(row[0]) if row else 0
+            if count == 0:
+                return HealthCheckResult(
+                    name=cs.HEALTH_CHECK_EMBEDDING_CORR_PASS,
+                    passed=True,
+                    message=cs.HEALTH_CHECK_EMBEDDING_CORR_PASS_MSG.format(
+                        model=settings.EMBEDDING_MODEL
+                    ),
+                )
+            return HealthCheckResult(
+                name=cs.HEALTH_CHECK_EMBEDDING_CORR_FAIL,
+                passed=False,
+                message=cs.HEALTH_CHECK_EMBEDDING_CORR_FAIL_MSG.format(
+                    count=count, model=settings.EMBEDDING_MODEL
+                ),
+            )
+        except Exception as e:
+            return HealthCheckResult(
+                name=cs.HEALTH_CHECK_EMBEDDING_CORR_FAIL,
+                passed=False,
+                message=cs.HEALTH_CHECK_EMBEDDING_CORR_FAIL,
+                error=cs.HEALTH_CHECK_EMBEDDING_CORR_ERROR_MSG.format(error=str(e)),
+            )
+        finally:
+            if cursor is not None:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    def check_json_ingestion_schema(self, json_path: str) -> HealthCheckResult:
+        import json
+        import jsonschema  # ty: ignore[unresolved-import]
+
+        try:
+            with open(cs.HEALTH_CHECK_JSON_SCHEMA_FILE) as f:
+                schema = json.load(f)
+            with open(json_path) as f:
+                data = json.load(f)
+            try:
+                jsonschema.validate(instance=data, schema=schema)
+                return HealthCheckResult(
+                    name=cs.HEALTH_CHECK_JSON_SCHEMA_PASS,
+                    passed=True,
+                    message=cs.HEALTH_CHECK_JSON_SCHEMA_PASS_MSG,
+                )
+            except jsonschema.ValidationError as e:
+                return HealthCheckResult(
+                    name=cs.HEALTH_CHECK_JSON_SCHEMA_FAIL,
+                    passed=False,
+                    message=cs.HEALTH_CHECK_JSON_SCHEMA_FAIL_MSG.format(
+                        error=e.message
+                    ),
+                )
+        except OSError as e:
+            return HealthCheckResult(
+                name=cs.HEALTH_CHECK_JSON_SCHEMA_FAIL,
+                passed=False,
+                message=cs.HEALTH_CHECK_JSON_SCHEMA_FAIL,
+                error=cs.HEALTH_CHECK_JSON_SCHEMA_IO_ERROR_MSG.format(error=str(e)),
+            )
+
+    def validate_ingestion_quality(
+        self,
+        expected_node_count: int | None = None,
+        expected_edge_count: int | None = None,
+        node_label: str = "File",
+        embedding_property: str = "embedding",
+        vector_dim: int | None = None,
+    ) -> list[HealthCheckResult]:
+        """Run post-ingestion data quality validation checks.
+
+        Args:
+            expected_node_count: Expected number of nodes ingested (optional).
+            expected_edge_count: Expected number of edges ingested (optional).
+            node_label: Label of nodes to validate (default: "File").
+            embedding_property: Name of embedding property on nodes (default: "embedding").
+            vector_dim: Expected vector dimension (optional, auto-detected if not provided).
+
+        Returns:
+            List of HealthCheckResult objects for each validation check.
+        """
+        results: list[HealthCheckResult] = []
+        conn = None
+        cursor = None
+
+        if vector_dim is None:
+            vector_dim = settings.get_effective_vector_dim()
+
+        try:
+            conn = mgclient.connect(
+                host=settings.MEMGRAPH_HOST,
+                port=settings.MEMGRAPH_PORT,
+            )
+            cursor = conn.cursor()
+
+            # 1. Check node count
+            cursor.execute(f"MATCH (n:{node_label}) RETURN count(n) AS count")
+            actual_node_count = cursor.fetchone()[0]
+            if expected_node_count is not None:
+                node_count_passed = actual_node_count == expected_node_count
+                results.append(
+                    HealthCheckResult(
+                        name=cs.HEALTH_CHECK_NODE_COUNT,
+                        passed=node_count_passed,
+                        message=(
+                            cs.HEALTH_CHECK_NODE_COUNT_OK_MSG.format(
+                                actual=actual_node_count, expected=expected_node_count
+                            )
+                            if node_count_passed
+                            else cs.HEALTH_CHECK_NODE_COUNT_MISMATCH_MSG.format(
+                                actual=actual_node_count, expected=expected_node_count
+                            )
+                        ),
+                        error=None
+                        if node_count_passed
+                        else f"Expected {expected_node_count} nodes, got {actual_node_count}",
+                    )
+                )
+            else:
+                results.append(
+                    HealthCheckResult(
+                        name=cs.HEALTH_CHECK_NODE_COUNT,
+                        passed=True,
+                        message=cs.HEALTH_CHECK_NODE_COUNT_SKIP_MSG.format(
+                            count=actual_node_count
+                        ),
+                        error=None,
+                    )
+                )
+
+            # 2. Check edge count
+            cursor.execute("MATCH ()-->() RETURN count(*) AS count")
+            actual_edge_count = cursor.fetchone()[0]
+            if expected_edge_count is not None:
+                edge_count_passed = actual_edge_count == expected_edge_count
+                results.append(
+                    HealthCheckResult(
+                        name=cs.HEALTH_CHECK_EDGE_COUNT,
+                        passed=edge_count_passed,
+                        message=(
+                            cs.HEALTH_CHECK_EDGE_COUNT_OK_MSG.format(
+                                actual=actual_edge_count, expected=expected_edge_count
+                            )
+                            if edge_count_passed
+                            else cs.HEALTH_CHECK_EDGE_COUNT_MISMATCH_MSG.format(
+                                actual=actual_edge_count, expected=expected_edge_count
+                            )
+                        ),
+                        error=None
+                        if edge_count_passed
+                        else f"Expected {expected_edge_count} edges, got {actual_edge_count}",
+                    )
+                )
+            else:
+                results.append(
+                    HealthCheckResult(
+                        name=cs.HEALTH_CHECK_EDGE_COUNT,
+                        passed=True,
+                        message=cs.HEALTH_CHECK_EDGE_COUNT_SKIP_MSG.format(
+                            count=actual_edge_count
+                        ),
+                        error=None,
+                    )
+                )
+
+            # 3. Check missing embeddings
+            cursor.execute(f"""
+                MATCH (n:{node_label})
+                WHERE n.{embedding_property} IS NULL
+                RETURN count(n) AS count
+            """)
+            missing_embeddings_count = cursor.fetchone()[0]
+            missing_embeddings_passed = missing_embeddings_count == 0
+            results.append(
+                HealthCheckResult(
+                    name=cs.HEALTH_CHECK_MISSING_EMBEDDINGS,
+                    passed=missing_embeddings_passed,
+                    message=(
+                        cs.HEALTH_CHECK_MISSING_EMBEDDINGS_OK_MSG
+                        if missing_embeddings_passed
+                        else cs.HEALTH_CHECK_MISSING_EMBEDDINGS_FOUND_MSG.format(
+                            count=missing_embeddings_count
+                        )
+                    ),
+                    error=None
+                    if missing_embeddings_passed
+                    else f"{missing_embeddings_count} nodes have missing embeddings",
+                )
+            )
+
+            # 4. Check invalid embeddings dimension
+            if missing_embeddings_count < actual_node_count:
+                cursor.execute(f"""
+                    MATCH (n:{node_label})
+                    WHERE n.{embedding_property} IS NOT NULL
+                    RETURN size(n.{embedding_property}) AS dim
+                    LIMIT 1
+                """)
+                result = cursor.fetchone()
+                if result:
+                    actual_dim = result[0]
+                    dim_passed = actual_dim == vector_dim
+                    results.append(
+                        HealthCheckResult(
+                            name=cs.HEALTH_CHECK_EMBEDDING_DIMENSION,
+                            passed=dim_passed,
+                            message=(
+                                cs.HEALTH_CHECK_EMBEDDING_DIMENSION_OK_MSG.format(
+                                    dim=actual_dim
+                                )
+                                if dim_passed
+                                else cs.HEALTH_CHECK_EMBEDDING_DIMENSION_MISMATCH_MSG.format(
+                                    actual=actual_dim, expected=vector_dim
+                                )
+                            ),
+                            error=None
+                            if dim_passed
+                            else f"Expected dimension {vector_dim}, got {actual_dim}",
+                        )
+                    )
+
+            # 5. Check duplicate nodes (by path)
+            cursor.execute(f"""
+                MATCH (n:{node_label})
+                WITH n.path AS path, count(n) AS cnt
+                WHERE cnt > 1
+                RETURN count(path) AS duplicate_count
+            """)
+            duplicate_count = cursor.fetchone()[0]
+            duplicates_passed = duplicate_count == 0
+            results.append(
+                HealthCheckResult(
+                    name=cs.HEALTH_CHECK_DUPLICATE_NODES,
+                    passed=duplicates_passed,
+                    message=(
+                        cs.HEALTH_CHECK_DUPLICATE_NODES_OK_MSG
+                        if duplicates_passed
+                        else cs.HEALTH_CHECK_DUPLICATE_NODES_FOUND_MSG.format(
+                            count=duplicate_count
+                        )
+                    ),
+                    error=None
+                    if duplicates_passed
+                    else f"{duplicate_count} duplicate node paths found",
+                )
+            )
+
+        except Exception as e:
+            results.append(
+                HealthCheckResult(
+                    name=cs.HEALTH_CHECK_INGESTION_VALIDATION_FAILED,
+                    passed=False,
+                    message=cs.HEALTH_CHECK_INGESTION_VALIDATION_ERROR_MSG,
+                    error=str(e),
+                )
+            )
+        finally:
+            if cursor is not None:
+                try:
+                    cursor.close()
+                except Exception as e:
+                    logger.warning(f"Failed to close Memgraph cursor: {e}")
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception as e:
+                    logger.warning(f"Failed to close Memgraph connection: {e}")
+
+        return results

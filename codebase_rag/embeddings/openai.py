@@ -13,6 +13,7 @@ from loguru import logger
 from .. import constants as cs
 from ..exceptions import EmbeddingAuthenticationError, EmbeddingGenerationError
 from .base import EmbeddingProvider
+from .local import LocalEmbeddingProvider
 
 if TYPE_CHECKING:
     import httpx
@@ -81,13 +82,17 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
         dimension: int | None = None,
         api_key: str | None = None,
         endpoint: str | None = None,
-        # Additional config parameters that may be passed by factory (ignored)
+        # Additional config parameters that may be passed by factory
         keep_alive: str | None = None,
         project_id: str | None = None,
         region: str | None = None,
         provider_type: str | None = None,
         service_account_file: str | None = None,
         device: str | None = None,
+        ssl_verify: bool = True,
+        proxy: str | None = None,
+        fallback_to_local: bool = True,
+        fallback_model: str = "microsoft/unixcoder-base",
     ) -> None:
         # Determine dimension from known models or default
         if dimension is None:
@@ -97,6 +102,11 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
         self._api_key = api_key
         self._endpoint = endpoint or "https://api.openai.com/v1/embeddings"
         self._client: httpx.Client | None = None
+        self._ssl_verify = ssl_verify
+        self._proxy = proxy
+        self._fallback_to_local = fallback_to_local
+        self._fallback_model = fallback_model
+        self._fallback_provider: EmbeddingProvider | None = None
 
     @property
     def provider_name(self) -> cs.EmbeddingProvider:
@@ -107,7 +117,14 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
         if self._client is None:
             import httpx
 
-            self._client = httpx.Client(timeout=60.0)
+            client_kwargs = {
+                "timeout": 60.0,
+                "verify": self._ssl_verify,
+            }
+            if self._proxy:
+                client_kwargs["proxy"] = self._proxy
+
+            self._client = httpx.Client(**client_kwargs)
         return self._client
 
     def validate_config(self) -> None:
@@ -183,11 +200,23 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
                     all_embeddings.append(embedding)
 
             except Exception as e:
-                raise EmbeddingGenerationError(
-                    f"OpenAI embedding request failed: {e}",
-                    provider="openai",
-                    model=self.model_id,
-                ) from e
+                if self._fallback_to_local:
+                    logger.warning(
+                        f"OpenAI embedding request failed, falling back to local model: {e}"
+                    )
+                    # Initialize fallback provider if not already done
+                    if not self._fallback_provider:
+                        self._fallback_provider = LocalEmbeddingProvider(
+                            model_id=self._fallback_model
+                        )
+                    # Use fallback provider for this batch
+                    return self._fallback_provider.embed_batch(texts)
+                else:
+                    raise EmbeddingGenerationError(
+                        f"OpenAI embedding request failed: {e}",
+                        provider="openai",
+                        model=self.model_id,
+                    ) from e
 
         return all_embeddings
 
