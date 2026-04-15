@@ -3,7 +3,7 @@ services:
   # Code Graph (existing)
   # ============================================
   memgraph:
-    image: memgraph/memgraph:latest
+    image: memgraph/memgraph-mage:latest
     ports:
       - "${MEMGRAPH_PORT:-7687}:7687"
       - "${MEMGRAPH_HTTP_PORT:-7444}:7444"
@@ -31,7 +31,7 @@ services:
   # Document Graph (new)
   # ============================================
   memgraph-doc:
-    image: memgraph/memgraph:latest
+    image: memgraph/memgraph-mage:latest
     ports:
       - "${DOC_MEMGRAPH_PORT:-7688}:7687"
     command: ["--schema-info-enabled", "--also-log-to-stderr"]
@@ -58,7 +58,7 @@ services:
   # JSON Graph (NEW)
   # ============================================
   memgraph-json:
-    image: memgraph/memgraph:latest
+    image: memgraph/memgraph-mage:latest
     ports:
       - "${JSON_MEMGRAPH_PORT:-7689}:7687"
     command: ["--schema-info-enabled", "--also-log-to-stderr"]

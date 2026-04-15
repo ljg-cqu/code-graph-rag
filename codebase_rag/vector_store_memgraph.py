@@ -261,6 +261,13 @@ class MemgraphBackend(VectorBackend):
         all_results = []
         seen_node_ids = set()
 
+        # Skip vector search entirely if not supported
+        if not capabilities.supports_vector_search:
+            logger.debug(
+                "Memgraph vector search not supported, skipping vector retrieval"
+            )
+            return all_results
+
         # Search across all label indexes
         for label in self.LABELS_TO_INDEX:
             try:

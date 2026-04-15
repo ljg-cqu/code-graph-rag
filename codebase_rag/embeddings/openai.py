@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from .. import constants as cs
+from ..config import settings
 from ..exceptions import EmbeddingAuthenticationError, EmbeddingGenerationError
 from .base import EmbeddingProvider
 from .local import LocalEmbeddingProvider
@@ -181,6 +182,11 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
             if self._endpoint.startswith("https://api.openai.com"):
                 payload["encoding_format"] = "float"
 
+            # Truncate long texts to avoid 400 Bad Request errors (1 token ~ 4 chars, safe buffer)
+            max_chars = settings.EMBEDDING_MAX_LENGTH * 4
+            truncated_batch = [text[:max_chars] for text in batch]
+            payload["input"] = truncated_batch
+
             try:
                 response = client.post(
                     self._endpoint,
@@ -207,8 +213,14 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
                     # Initialize fallback provider if not already done
                     if not self._fallback_provider:
                         self._fallback_provider = LocalEmbeddingProvider(
-                            model_id=self._fallback_model
+                            model_id=self._fallback_model, dimension=self.dimension
                         )
+                        # Verify fallback dimension matches expected dimension
+                        if self._fallback_provider.dimension != self.dimension:
+                            logger.warning(
+                                f"Fallback model {self._fallback_model} has dimension {self._fallback_provider.dimension}, "
+                                f"expected {self.dimension}. This may cause errors when storing embeddings."
+                            )
                     # Use fallback provider for this batch
                     return self._fallback_provider.embed_batch(texts)
                 else:

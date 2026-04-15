@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from .. import constants as cs
+from ..config import settings
 from ..exceptions import EmbeddingAuthenticationError, EmbeddingGenerationError
 from .base import EmbeddingProvider
 
@@ -218,8 +219,12 @@ class GoogleEmbeddingProvider(EmbeddingProvider):
         endpoint = self._get_endpoint()
         all_embeddings: list[list[float]] = []
 
+        # Truncate long texts to avoid tokenization issues (consistent across all providers)
+        max_chars = settings.EMBEDDING_MAX_LENGTH * 4
+        truncated_texts = [text[:max_chars] for text in texts]
+
         # GLA processes one text at a time
-        for text in texts:
+        for text in truncated_texts:
             params = {"key": self._api_key}
             payload = {
                 "model": f"models/{self.model_id}",
@@ -268,6 +273,10 @@ class GoogleEmbeddingProvider(EmbeddingProvider):
         token = self._get_auth_token()
         all_embeddings: list[list[float]] = []
 
+        # Truncate long texts to avoid tokenization issues (consistent across all providers)
+        max_chars = settings.EMBEDDING_MAX_LENGTH * 4
+        truncated_texts = [text[:max_chars] for text in texts]
+
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
@@ -282,8 +291,8 @@ class GoogleEmbeddingProvider(EmbeddingProvider):
                 f"Vertex AI batch size capped from {batch_size} to {effective_batch_size}"
             )
 
-        for start in range(0, len(texts), effective_batch_size):
-            batch = texts[start : start + effective_batch_size]
+        for start in range(0, len(truncated_texts), effective_batch_size):
+            batch = truncated_texts[start : start + effective_batch_size]
 
             instances = [{"content": text} for text in batch]
 

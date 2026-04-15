@@ -34,18 +34,18 @@
     ],
     "relationships": [
         {
-            "source_entity_id": "job_001",
-            "target_entity_id": "skill_001",
-            "type": "REQUIRES_SKILL",
+            "source": "job_001",
+            "target": "skill_001",
+            "relationship": "REQUIRES_SKILL",
             "properties": {
                 "description": "Job requires Python proficiency",
                 "minimum_experience_years": 3
             }
         },
         {
-            "source_entity_id": "job_001",
-            "target_entity_id": "skill_002",
-            "type": "REQUIRES_SKILL",
+            "source": "job_001",
+            "target": "skill_002",
+            "relationship": "REQUIRES_SKILL",
             "properties": {
                 "description": "Job requires Neo4j proficiency",
                 "minimum_experience_years": 2

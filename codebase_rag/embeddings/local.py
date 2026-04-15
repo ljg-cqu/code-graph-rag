@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from .. import constants as cs
+from ..config import settings
 from ..exceptions import EmbeddingGenerationError
 from .base import EmbeddingProvider
 
@@ -133,16 +134,24 @@ class LocalEmbeddingProvider(EmbeddingProvider):
         Returns:
             List of floats representing the embedding vector.
         """
+        from ..config import settings
+
         self._ensure_model_loaded()
 
-        assert self._model is not None
-        assert self._torch is not None
+        assert self._model is not None, "Local embedding model failed to load"
+        assert self._torch is not None, "PyTorch is not available for local embedding"
 
         device = self._get_device()
         model = self._model
         torch = self._torch
 
-        tokens = model.tokenize([text], max_length=1024)
+        # Truncate long texts to avoid tokenization issues (consistent with OpenAI provider)
+        max_chars = settings.EMBEDDING_MAX_LENGTH * 4
+        truncated_text = text[:max_chars]
+
+        tokens = model.tokenize(
+            [truncated_text], max_length=settings.EMBEDDING_MAX_LENGTH
+        )
         tokens_tensor = torch.tensor(tokens).to(device)
 
         with torch.no_grad():
@@ -166,8 +175,8 @@ class LocalEmbeddingProvider(EmbeddingProvider):
 
         self._ensure_model_loaded()
 
-        assert self._model is not None
-        assert self._torch is not None
+        assert self._model is not None, "Local embedding model failed to load"
+        assert self._torch is not None, "PyTorch is not available for local embedding"
 
         device = self._get_device()
         model = self._model
@@ -175,9 +184,15 @@ class LocalEmbeddingProvider(EmbeddingProvider):
 
         all_embeddings: list[list[float]] = []
 
-        for start in range(0, len(texts), batch_size):
-            batch = texts[start : start + batch_size]
-            tokens_list = model.tokenize(batch, max_length=1024, padding=True)
+        # Truncate long texts to avoid tokenization issues (consistent with OpenAI provider)
+        max_chars = settings.EMBEDDING_MAX_LENGTH * 4
+        truncated_texts = [text[:max_chars] for text in texts]
+
+        for start in range(0, len(truncated_texts), batch_size):
+            batch = truncated_texts[start : start + batch_size]
+            tokens_list = model.tokenize(
+                batch, max_length=settings.EMBEDDING_MAX_LENGTH, padding=True
+            )
             tokens_tensor = torch.tensor(tokens_list).to(device)
 
             with torch.no_grad():

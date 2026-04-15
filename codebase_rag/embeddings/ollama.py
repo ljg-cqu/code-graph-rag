@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from .. import constants as cs
+from ..config import settings
 from ..exceptions import EmbeddingConnectionError, EmbeddingGenerationError
 from .base import EmbeddingProvider
 
@@ -101,9 +102,13 @@ class OllamaEmbeddingProvider(EmbeddingProvider):
         client = self._get_client()
         all_embeddings: list[list[float]] = []
 
+        # Truncate long texts to avoid tokenization issues (consistent across all providers)
+        max_chars = settings.EMBEDDING_MAX_LENGTH * 4
+        truncated_texts = [text[:max_chars] for text in texts]
+
         # Ollama's /api/embeddings endpoint processes one text at a time
         # The /api/embed (newer) endpoint supports batch, but we use single for compatibility
-        for i, text in enumerate(texts):
+        for i, text in enumerate(truncated_texts):
             if i > 0 and i % batch_size == 0:
                 logger.debug(f"Ollama embedding progress: {i}/{len(texts)}")
 
