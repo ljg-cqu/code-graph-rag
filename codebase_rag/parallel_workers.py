@@ -11,10 +11,11 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from threading import Lock
-from typing import Any, Generic, TypeVar
+from typing import Any, TypeVar
+
+from loguru import logger
 
 import mgclient
-from loguru import logger
 
 from .config import settings
 
@@ -23,7 +24,7 @@ R = TypeVar("R")
 
 
 @dataclass
-class TaskResult(Generic[R]):
+class TaskResult[R]:
     """Result of a worker task execution."""
 
     task_id: str
@@ -224,8 +225,11 @@ class ParallelWorkerPool:
 
         # Submit all tasks
         for task_id, func, params in tasks:
+            task_params = params or {}
             future = self._executor.submit(
-                self._execute_task_with_retry, task_id, func, params or {}
+                lambda task_id=task_id, func=func, task_params=task_params: self._execute_task_with_retry(
+                    task_id, func, task_params
+                )
             )
             futures[future] = task_id
 

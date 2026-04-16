@@ -13,13 +13,13 @@ from ...config import settings
 from ...embeddings import get_embedding_provider
 
 if TYPE_CHECKING:
-    from ...services.graph_service import MemgraphIngestor
+    from ...services import QueryProtocol
     from ...vector_backend import VectorBackend
 
 
 def document_semantic_search(
     query: str,
-    ingestor: MemgraphIngestor | None = None,
+    ingestor: QueryProtocol | None = None,
     vector_backend: VectorBackend | None = None,
     workspace: str = "default",
     limit: int = 10,
@@ -124,7 +124,7 @@ def document_semantic_search(
 
 
 def _search_memgraph_native(
-    ingestor: MemgraphIngestor,
+    ingestor: QueryProtocol,
     embedding: list[float],
     workspace: str,
     limit: int,
@@ -174,7 +174,7 @@ def _search_memgraph_native(
 
 
 def search_documents_by_keywords(
-    ingestor: MemgraphIngestor,
+    ingestor: QueryProtocol,
     keywords: list[str],
     workspace: str = "default",
     limit: int = 20,

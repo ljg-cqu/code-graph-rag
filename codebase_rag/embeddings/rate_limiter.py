@@ -134,8 +134,22 @@ class AdaptiveRateLimiter:
             return self._consecutive_429s >= self._max_consecutive_429s
 
 
-class AsyncAdaptiveRateLimiter(AdaptiveRateLimiter):
+class AsyncAdaptiveRateLimiter:
     """Async-compatible adaptive rate limiter using asyncio.sleep for non-blocking waits."""
+
+    def __init__(
+        self,
+        requests_per_minute: int = 500,
+        tokens_per_minute: int = 300_000,
+    ) -> None:
+        rpm_rate = requests_per_minute / 60.0
+        tpm_rate = tokens_per_minute / 60.0
+
+        self._lock = threading.Lock()
+        self.rpm_bucket = TokenBucket(rpm_rate, requests_per_minute)
+        self.tpm_bucket = TokenBucket(tpm_rate, tokens_per_minute)
+        self._consecutive_429s: int = 0
+        self._max_consecutive_429s: int = 10
 
     async def acquire(self, tokens: int) -> float:
         """Wait until capacity is available without blocking the event loop.
@@ -172,6 +186,15 @@ class AsyncAdaptiveRateLimiter(AdaptiveRateLimiter):
 
         await asyncio.sleep(backoff)
         return backoff
+
+    def reset_429_counter(self) -> None:
+        with self._lock:
+            self._consecutive_429s = 0
+
+    @property
+    def is_circuit_open(self) -> bool:
+        with self._lock:
+            return self._consecutive_429s >= self._max_consecutive_429s
 
 
 __all__ = ["TokenBucket", "AdaptiveRateLimiter", "AsyncAdaptiveRateLimiter"]

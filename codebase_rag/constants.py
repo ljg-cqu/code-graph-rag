@@ -239,6 +239,7 @@ KEY_VERSION_SPEC = "version_spec"
 KEY_PREFIX = "prefix"
 KEY_PROJECT_NAME = "project_name"
 KEY_IS_EXTERNAL = "is_external"
+KEY_INDEX = "index"
 
 ERR_SUBSTR_ALREADY_EXISTS = "already exists"
 ERR_SUBSTR_CONSTRAINT = "constraint"
@@ -574,6 +575,26 @@ KEY_JSON_VALUE = "value"
 KEY_JSON_VALUE_TYPE = "value_type"
 KEY_JSON_DEPTH = "depth"
 KEY_JSON_LENGTH = "length"
+
+EMBEDDABLE_CODE_NODE_LABELS = (
+    "Function",
+    "Method",
+    "Class",
+    "Interface",
+    "Contract",
+    "Library",
+    "Enum",
+    "Type",
+    "Union",
+    "Event",
+    "Modifier",
+    "StateVariable",
+    "CustomError",
+    "Hotkey",
+    "Hotstring",
+    "Label",
+    "AhkClass",
+)
 
 # (H) Method signature formatting
 EMPTY_PARENS = "()"

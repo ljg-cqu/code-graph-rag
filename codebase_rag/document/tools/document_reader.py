@@ -132,8 +132,12 @@ def _get_sections_with_content(
         }
 
         if include_chunks:
+            section_qn = section.get("qualified_name")
             section_data["chunks"] = _get_chunks_for_section(
-                ingestor, section.get("qualified_name"), workspace, include_subsections
+                ingestor,
+                section_qn if isinstance(section_qn, str) else "",
+                workspace,
+                include_subsections,
             )
 
         section_list.append(section_data)

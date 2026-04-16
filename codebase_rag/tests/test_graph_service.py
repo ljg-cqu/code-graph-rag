@@ -4,8 +4,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from codebase_rag.constants import NODE_UNIQUE_CONSTRAINTS
 from codebase_rag.config import settings
+from codebase_rag.constants import NODE_UNIQUE_CONSTRAINTS
 from codebase_rag.cypher_queries import (
     build_create_node_query,
     build_create_relationship_query,

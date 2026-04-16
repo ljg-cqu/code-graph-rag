@@ -2,6 +2,7 @@ import asyncio
 import itertools
 import sys
 from pathlib import Path
+from typing import Literal, cast
 
 from loguru import logger
 from pydantic_ai import Agent
@@ -56,6 +57,15 @@ from codebase_rag.types_defs import (
 )
 from codebase_rag.utils.dependencies import has_semantic_dependencies
 from codebase_rag.vector_store import delete_project_embeddings
+
+type ValidationScope = Literal["all", "sections", "claims"]
+
+
+def _normalize_validation_scope(scope: str) -> ValidationScope:
+    if scope in {"all", "sections", "claims"}:
+        return cast(ValidationScope, scope)
+    logger.warning("Unknown validation scope '{}', defaulting to 'all'", scope)
+    return "all"
 
 
 class MCPToolsRegistry:
@@ -940,10 +950,11 @@ class MCPToolsRegistry:
         try:
             # Step 1: Cost estimation
             validation_api = ValidationTriggerAPI(llm_provider="google")
+            normalized_scope = _normalize_validation_scope(scope)
             validation_request = ValidationRequest(
                 document_path=spec_document_path,
                 mode="CODE_VS_DOC",
-                scope=scope,
+                scope=normalized_scope,
                 max_cost_usd=max_cost_usd,
                 dry_run=dry_run,
             )
@@ -964,7 +975,7 @@ class MCPToolsRegistry:
             request = QueryRequest(
                 question=f"Validate code against {spec_document_path}",
                 mode=QueryMode.CODE_VS_DOC,
-                scope=scope,
+                scope=normalized_scope,
             )
             response = self.query_router.query(request)
             result = asdict(response)
@@ -1001,10 +1012,11 @@ class MCPToolsRegistry:
         try:
             # Step 1: Cost estimation
             validation_api = ValidationTriggerAPI(llm_provider="google")
+            normalized_scope = _normalize_validation_scope(scope)
             validation_request = ValidationRequest(
                 document_path=document_path,
                 mode="DOC_VS_CODE",
-                scope=scope,
+                scope=normalized_scope,
                 max_cost_usd=max_cost_usd,
                 dry_run=dry_run,
             )
@@ -1025,7 +1037,7 @@ class MCPToolsRegistry:
             request = QueryRequest(
                 question=f"Validate {document_path} against code",
                 mode=QueryMode.DOC_VS_CODE,
-                scope=scope,
+                scope=normalized_scope,
             )
             response = self.query_router.query(request)
             result = asdict(response)

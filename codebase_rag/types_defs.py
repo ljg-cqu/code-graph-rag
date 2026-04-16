@@ -18,8 +18,9 @@ if TYPE_CHECKING:
 
 type LanguageLoader = Callable[[], object] | None
 
-PropertyValue = str | int | float | bool | list[str] | None
-PropertyDict = dict[str, PropertyValue]
+type PropertyScalar = str | int | float | bool
+type PropertyValue = PropertyScalar | Sequence[PropertyValue] | dict[str, PropertyValue] | None
+type PropertyDict = dict[str, PropertyValue]
 
 type ResultScalar = str | int | float | bool | None
 type ResultValue = ResultScalar | list[ResultValue] | dict[str, ResultValue]
@@ -45,7 +46,7 @@ class RelBatchRow(TypedDict):
     props: PropertyDict
 
 
-BatchParams = NodeBatchRow | RelBatchRow | PropertyDict
+type BatchParams = NodeBatchRow | RelBatchRow | PropertyDict
 
 
 class BatchWrapper(TypedDict):
@@ -56,7 +57,7 @@ type SimpleName = str
 type QualifiedName = str
 type SimpleNameLookup = defaultdict[SimpleName, set[QualifiedName]]
 
-NodeIdentifier = tuple[NodeLabel | str, str, str | None]
+type NodeIdentifier = tuple[NodeLabel | str, str, str | None]
 
 
 type ASTNode = Node
@@ -372,13 +373,13 @@ class FunctionNodeProps(TypedDict, total=False):
     docstring: str | None
 
 
-MCPToolArguments = dict[str, str | int | None]
+MCPToolArguments = dict[str, str | int | float | bool | None]
 
 
 class MCPInputSchemaProperty(TypedDict, total=False):
     type: str
     description: str
-    default: str | int
+    default: str | int | float | bool
 
 
 MCPInputSchemaProperties = dict[str, MCPInputSchemaProperty]
@@ -784,7 +785,7 @@ RELATIONSHIP_SCHEMAS: tuple[RelationshipSchema, ...] = (
     RelationshipSchema(
         (NodeLabel.FILE,),
         RelationshipType.CONTAINS_JSON,
-        (NodeLabel.JSON_OBJECT,),
+        (NodeLabel.JSON_OBJECT, NodeLabel.JSON_ARRAY, NodeLabel.JSON_VALUE),
     ),
     RelationshipSchema(
         (NodeLabel.JSON_OBJECT,),
@@ -794,7 +795,7 @@ RELATIONSHIP_SCHEMAS: tuple[RelationshipSchema, ...] = (
     RelationshipSchema(
         (NodeLabel.JSON_FIELD,),
         RelationshipType.HAS_VALUE,
-        (NodeLabel.JSON_VALUE,),
+        (NodeLabel.JSON_VALUE, NodeLabel.JSON_OBJECT, NodeLabel.JSON_ARRAY),
     ),
     RelationshipSchema(
         (NodeLabel.JSON_ARRAY,),

@@ -5,6 +5,7 @@ Dynamic Concurrency Controller module for parallel sub-agent execution.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 import psutil
@@ -31,7 +32,7 @@ class DynamicConcurrencyController:
         self.permanent_workers: list[SubAgentWorker] = []
         self.burst_workers: list[SubAgentWorker] = []
 
-    def _initialize_permanent_workers(self, agent_factory: callable) -> None:
+    def _initialize_permanent_workers(self, agent_factory: Callable[[], object]) -> None:
         from codebase_rag.orchestrator.subagent_orchestrator import SubAgentWorker
 
         logger.info(f"Initializing {self.default_workers} baseline workers")
@@ -124,7 +125,7 @@ class DynamicConcurrencyController:
         return new_count
 
     def scale_workers(
-        self, target_count: int, agent_factory: callable
+        self, target_count: int, agent_factory: Callable[[], object]
     ) -> list[SubAgentWorker]:
         """
         Scale worker pool to the requested count using baseline workers first and

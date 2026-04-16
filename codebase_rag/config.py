@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-import sys
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal, TypedDict, Unpack
@@ -97,6 +97,37 @@ def format_missing_api_key_errors(
 
 
 LOCAL_PROVIDERS = frozenset({cs.Provider.OLLAMA, cs.Provider.LOCAL, cs.Provider.VLLM})
+
+
+def _model_config_from_mapping(entry: Mapping[object, object]) -> ModelConfig:
+    if not all(isinstance(key, str) for key in entry):
+        raise ValueError("ModelConfig mapping keys must be strings")
+    provider = entry.get("provider")
+    model_id = entry.get("model_id")
+    if not isinstance(provider, str) or not isinstance(model_id, str):
+        raise ValueError("ModelConfig mappings require string provider and model_id")
+
+    api_key = entry.get("api_key")
+    endpoint = entry.get("endpoint")
+    project_id = entry.get("project_id")
+    region = entry.get("region")
+    provider_type = entry.get("provider_type")
+    thinking_budget = entry.get("thinking_budget")
+    service_account_file = entry.get("service_account_file")
+
+    return ModelConfig(
+        provider=provider,
+        model_id=model_id,
+        api_key=api_key if isinstance(api_key, str) else None,
+        endpoint=endpoint if isinstance(endpoint, str) else None,
+        project_id=project_id if isinstance(project_id, str) else None,
+        region=region if isinstance(region, str) else None,
+        provider_type=provider_type if isinstance(provider_type, str) else None,
+        thinking_budget=thinking_budget if isinstance(thinking_budget, int) else None,
+        service_account_file=(
+            service_account_file if isinstance(service_account_file, str) else None
+        ),
+    )
 
 
 @dataclass
@@ -740,7 +771,7 @@ class AppConfig(BaseSettings):
                     )
                 elif isinstance(entry, dict):
                     # Full ModelConfig dict
-                    parsed_llms.append(ModelConfig(**entry))
+                    parsed_llms.append(_model_config_from_mapping(entry))
 
         # Validate all parsed LLMs
         valid_llms = []
@@ -765,13 +796,13 @@ class AppConfig(BaseSettings):
         parsed_llms: list[ModelConfig] = []
 
         for llm_entry in llms:
-            if isinstance(llm_entry, str):
+            if isinstance(llm_entry, ModelConfig):
+                parsed_llms.append(llm_entry)
+            elif isinstance(llm_entry, str):
                 provider, model = self.parse_model_string(llm_entry)
                 parsed_llms.append(self._get_model_config_for_provider(provider, model))
             elif isinstance(llm_entry, dict):
-                parsed_llms.append(ModelConfig(**llm_entry))
-            elif isinstance(llm_entry, ModelConfig):
-                parsed_llms.append(llm_entry)
+                parsed_llms.append(_model_config_from_mapping(llm_entry))
 
         # Validate all configs
         valid_llms = []

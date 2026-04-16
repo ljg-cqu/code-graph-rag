@@ -132,14 +132,11 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
         if self._client is None:
             import httpx
 
-            client_kwargs = {
-                "timeout": 60.0,
-                "verify": self._ssl_verify,
-            }
-            if self._proxy:
-                client_kwargs["proxy"] = self._proxy
-
-            self._client = httpx.Client(**client_kwargs)
+            self._client = httpx.Client(
+                timeout=60.0,
+                verify=self._ssl_verify,
+                proxy=self._proxy,
+            )
         return self._client
 
     def validate_config(self) -> None:

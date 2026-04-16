@@ -216,8 +216,11 @@ class SubAgentWorker:
         """Execute a subtask using this worker's agent."""
         self.busy = True
         try:
+            agent = self.agent
+            if agent is None or not hasattr(agent, "execute") or not callable(agent.execute):
+                raise RuntimeError("Sub-agent worker has no executable agent")
             start_time = time.time()
-            result = self.agent.execute(subtask)
+            result = agent.execute(subtask)
             execution_time = time.time() - start_time
             self.last_task_time = time.time()
             return result, execution_time

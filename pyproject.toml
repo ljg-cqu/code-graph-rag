@@ -144,6 +144,7 @@ exclude = ["codebase_rag/tests/test_cypher_queries.py", "codebase_rag/tests/test
 [tool.pytest.ini_options]
 testpaths = ["codebase_rag/tests"]
 norecursedirs = ["grammars", ".git", "__pycache__", "*.egg-info", ".venv", "venv"]
+addopts = ["--import-mode=importlib"]
 python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]

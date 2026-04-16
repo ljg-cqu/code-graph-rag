@@ -10,6 +10,16 @@ from ..providers import get_provider_from_config
 from ..services.graph_service import MemgraphIngestor
 
 
+def _coerce_int(value: object, default: int = 0) -> int:
+    return value if isinstance(value, int) else default
+
+
+def _coerce_str_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
 @dataclass
 class CommunitySummary:
     """Summary of a detected community."""
@@ -37,6 +47,13 @@ class CommunityQFS:
         self.llm = self.provider.create_model(
             settings.active_orchestrator_config.model_id
         )
+
+    def _complete_prompt(self, prompt: str) -> str:
+        complete = getattr(self.llm, "complete", None)
+        if not callable(complete):
+            raise TypeError("Configured orchestrator model does not support complete()")
+        response = complete(prompt)
+        return response.strip() if isinstance(response, str) else str(response).strip()
 
     def build_community_summaries(self, min_size: int = 5) -> list[CommunitySummary]:
         """
@@ -104,12 +121,12 @@ class CommunityQFS:
 
             summaries.append(
                 CommunitySummary(
-                    community_id=record["community_id"],
-                    node_count=record["node_count"],
-                    representative_nodes=record["rep_names"],
+                    community_id=_coerce_int(record.get("community_id"), 0),
+                    node_count=_coerce_int(record.get("node_count"), 0),
+                    representative_nodes=_coerce_str_list(record.get("rep_names")),
                     summary_text=summary_text,
-                    key_functions=record["key_functions"],
-                    key_classes=record["key_classes"],
+                    key_functions=_coerce_str_list(record.get("key_functions")),
+                    key_classes=_coerce_str_list(record.get("key_classes")),
                 )
             )
 
@@ -119,18 +136,17 @@ class CommunityQFS:
         """Generate natural language summary of a community using LLM."""
         prompt = f"""
         Generate a concise summary of this code community:
-        
+
         Community ID: {community_data["community_id"]}
         Size: {community_data["node_count"]} nodes
         Key functions: {", ".join(community_data["key_functions"][:5])}
         Key classes: {", ".join(community_data["key_classes"][:3])}
         Representative nodes: {", ".join(community_data["rep_names"])}
-        
+
         Summarize what this module/component likely does in 2-3 sentences.
         """
 
-        response = self.llm.complete(prompt)
-        return response.strip()
+        return self._complete_prompt(prompt)
 
     def query_focused_summary(
         self, question: str, top_communities: int = 3, min_community_size: int = 5
@@ -208,13 +224,12 @@ class CommunityQFS:
 
         prompt = f"""
         Answer the user's question using the following information about relevant code communities:
-        
+
         {comm_info}
-        
+
         User question: {question}
-        
+
         Provide a clear, concise answer based only on the information above. If you don't have enough information, say so.
         """
 
-        response = self.llm.complete(prompt)
-        return response.strip()
+        return self._complete_prompt(prompt)

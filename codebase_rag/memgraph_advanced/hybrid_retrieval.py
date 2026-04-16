@@ -10,8 +10,24 @@ from loguru import logger
 if TYPE_CHECKING:
     from ..config import HybridRetrievalConfig
     from ..embeddings.protocols import EmbeddingProviderProtocol
-    from ..services.graph_service import MemgraphIngestor
+    from ..services import QueryProtocol
     from ..vector_backend import VectorBackend
+
+
+def _coerce_str(value: object, default: str = "") -> str:
+    return value if isinstance(value, str) else default
+
+
+def _coerce_int(value: object, default: int = 0) -> int:
+    return value if isinstance(value, int) else default
+
+
+def _coerce_float(value: object, default: float = 0.0) -> float:
+    if isinstance(value, bool):
+        return float(value)
+    if isinstance(value, int | float):
+        return float(value)
+    return default
 
 
 @dataclass
@@ -38,7 +54,7 @@ class HybridRetriever:
 
     def __init__(
         self,
-        graph_ingestor: MemgraphIngestor | None = None,
+        graph_ingestor: QueryProtocol | None = None,
         vector_backend: VectorBackend | None = None,
         embedding_provider: EmbeddingProviderProtocol | None = None,
         config: HybridRetrievalConfig | None = None,
@@ -89,10 +105,10 @@ class HybridRetriever:
         graph_weight = cfg.pagerank_weight + cfg.community_weight
 
         for record in records:
-            node_id = int(record["node_id"])
+            node_id = _coerce_int(record.get("node_id"), 0)
             vector_score = similarity_map.get(node_id, 0.0)
-            pagerank_score = float(record.get("pagerank_score") or 0.1)
-            community_score = float(record.get("community_score") or 0.0)
+            pagerank_score = _coerce_float(record.get("pagerank_score"), 0.1)
+            community_score = _coerce_float(record.get("community_score"), 0.0)
             graph_score = (
                 (
                     pagerank_score * cfg.pagerank_weight
@@ -108,12 +124,12 @@ class HybridRetriever:
             results.append(
                 HybridSearchResult(
                     node_id=node_id,
-                    name=str(record.get("name") or ""),
-                    qualified_name=str(record.get("qualified_name") or ""),
-                    node_type=str(record.get("node_type") or ""),
-                    file_path=str(record.get("file_path") or ""),
-                    start_line=int(record.get("start_line") or 0),
-                    end_line=int(record.get("end_line") or 0),
+                    name=_coerce_str(record.get("name")),
+                    qualified_name=_coerce_str(record.get("qualified_name")),
+                    node_type=_coerce_str(record.get("node_type")),
+                    file_path=_coerce_str(record.get("file_path")),
+                    start_line=_coerce_int(record.get("start_line"), 0),
+                    end_line=_coerce_int(record.get("end_line"), 0),
                     vector_score=vector_score,
                     text_score=0.0,
                     pagerank_score=pagerank_score,

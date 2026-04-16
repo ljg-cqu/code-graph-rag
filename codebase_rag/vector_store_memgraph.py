@@ -7,13 +7,17 @@ from __future__ import annotations
 
 from collections.abc import Generator, Sequence
 from contextlib import contextmanager
+from typing import Literal, overload
 
-import mgclient
 from loguru import logger
 
+import mgclient
+
+from . import constants as cs
 from . import logs as ls
 from .config import settings
 from .graph.query_generator import MemgraphQueryGenerator
+from .types_defs import ResultRow
 from .vector_backend import VectorBackend
 
 # Model info
@@ -59,25 +63,7 @@ class MemgraphBackend(VectorBackend):
     - Lower latency: no cross-database coordination
     """
 
-    LABELS_TO_INDEX = (
-        "Function",
-        "Method",
-        "Class",
-        "Interface",
-        "Contract",
-        "Library",
-        "Enum",
-        "Type",
-        "Union",
-        "Event",
-        "Modifier",
-        "StateVariable",
-        "CustomError",
-        "Hotkey",
-        "Hotstring",
-        "Label",
-        "AhkClass",
-    )
+    LABELS_TO_INDEX = cs.EMBEDDABLE_CODE_NODE_LABELS
 
     def __init__(self, is_document: bool = False) -> None:
         self.is_document = is_document
@@ -91,13 +77,11 @@ class MemgraphBackend(VectorBackend):
             port = settings.DOC_MEMGRAPH_PORT
             username = settings.DOC_MEMGRAPH_USERNAME
             password = settings.DOC_MEMGRAPH_PASSWORD
-            timeout = settings.DOC_MEMGRAPH_CONNECTION_TIMEOUT
         else:
             host = settings.MEMGRAPH_HOST
             port = settings.MEMGRAPH_PORT
             username = settings.MEMGRAPH_USERNAME
             password = settings.MEMGRAPH_PASSWORD
-            timeout = settings.MEMGRAPH_CONNECTION_TIMEOUT
 
         if username:
             conn = mgclient.connect(
@@ -368,6 +352,26 @@ class MemgraphBackend(VectorBackend):
             stored = self._store_individually(points)
             return self._verified_count(node_ids, stored)
 
+    @overload
+    def search(
+        self,
+        query_embedding: list[float],
+        top_k: int = 5,
+        filters: dict | None = None,
+        include_context: Literal[False] = False,
+        max_context_depth: int = 2,
+    ) -> list[tuple[int, float]]: ...
+
+    @overload
+    def search(
+        self,
+        query_embedding: list[float],
+        top_k: int = 5,
+        filters: dict | None = None,
+        include_context: Literal[True] = True,
+        max_context_depth: int = 2,
+    ) -> list[ResultRow]: ...
+
     def search(
         self,
         query_embedding: list[float],
@@ -375,7 +379,7 @@ class MemgraphBackend(VectorBackend):
         filters: dict | None = None,
         include_context: bool = False,
         max_context_depth: int = 2,
-    ) -> list[tuple[int, float]] | list[dict]:
+    ) -> list[tuple[int, float]] | list[ResultRow]:
         """Hybrid vector + graph retrieval using Memgraph native capabilities.
 
         Implements atomic retrieval pipeline:

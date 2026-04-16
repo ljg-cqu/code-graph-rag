@@ -10,9 +10,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager, nullcontext
 from datetime import UTC, datetime
 
-import mgclient  # ty: ignore[unresolved-import]
 from loguru import logger
 
+import mgclient
 from codebase_rag.config import settings
 from codebase_rag.types_defs import CursorProtocol, ResultValue
 
@@ -236,8 +236,8 @@ class MemgraphIngestor:
 
     def __exit__(
         self,
-        exc_type: type | None,
-        exc_val: Exception | None,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
         exc_tb: types.TracebackType | None,
     ) -> None:
         try:
@@ -267,8 +267,8 @@ class MemgraphIngestor:
 
     async def __aexit__(
         self,
-        exc_type: type | None,
-        exc_val: Exception | None,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
         exc_tb: types.TracebackType | None,
     ) -> None:
         import asyncio

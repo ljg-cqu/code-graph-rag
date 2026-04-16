@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import importlib
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from loguru import logger
 
@@ -24,6 +24,11 @@ from .token_utils import count_tokens
 
 if TYPE_CHECKING:
     from tree_sitter import Node, Parser
+
+
+type ChunkType = Literal[
+    "class", "function", "method", "block", "statement", "truncated"
+]
 
 
 # Tree-sitter language module mapping
@@ -302,7 +307,11 @@ class SemanticCodeChunker:
 
     def _chunk_with_ast(self, code: str) -> list[CodeChunk]:
         """Chunk using Tree-sitter AST parsing."""
-        tree = self._parser.parse(bytes(code, "utf-8"))
+        parser = self._parser
+        if parser is None:
+            return self._chunk_at_line_boundaries(code)
+
+        tree = parser.parse(bytes(code, "utf-8"))
         root = tree.root_node
 
         # Check for parse errors
@@ -357,7 +366,9 @@ class SemanticCodeChunker:
 
         return chunks[: self.max_chunks_per_node]
 
-    def _process_node(self, node: Node, code: str, chunk_type: str) -> list[CodeChunk]:
+    def _process_node(
+        self, node: Node, code: str, chunk_type: ChunkType
+    ) -> list[CodeChunk]:
         """Process a single AST node, potentially splitting if too large."""
         node_text = code[node.start_byte : node.end_byte]
         node_tokens = count_tokens(node_text)
@@ -503,7 +514,7 @@ class SemanticCodeChunker:
         return chunks
 
     def _chunk_text_at_lines(
-        self, text: str, start_line: int, chunk_type: str
+        self, text: str, start_line: int, chunk_type: ChunkType
     ) -> list[CodeChunk]:
         """Chunk text at line boundaries with token awareness."""
         lines = text.split("\n")

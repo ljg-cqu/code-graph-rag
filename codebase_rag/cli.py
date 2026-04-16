@@ -2,6 +2,7 @@ import asyncio
 from collections.abc import Callable
 from importlib.metadata import version as get_version
 from pathlib import Path
+from typing import Literal, cast
 
 import typer
 from loguru import logger
@@ -37,6 +38,14 @@ from .tools.health_checker import HealthChecker
 from .tools.language import cli as language_cli
 from .types_defs import ResultRow
 from .vector_store_memgraph import MemgraphBackend
+
+type ValidationScope = Literal["all", "sections", "claims"]
+
+
+def _normalize_validation_scope(scope: str) -> ValidationScope:
+    if scope in {"all", "sections", "claims"}:
+        return cast(ValidationScope, scope)
+    raise typer.BadParameter("--scope must be one of: all, sections, claims")
 
 app = typer.Typer(
     name=cs.PACKAGE_NAME,
@@ -1449,12 +1458,13 @@ def validate_spec(
         ):
             query_router = QueryRouter(code_graph=code_graph, doc_graph=doc_graph)
             validation_api = ValidationTriggerAPI(llm_provider="google")
+            normalized_scope = _normalize_validation_scope(scope)
 
             # Step 1: Cost estimation
             validation_request = ValidationRequest(
                 document_path=spec_path,
                 mode="CODE_VS_DOC",
-                scope=scope,
+                scope=normalized_scope,
                 max_cost_usd=max_cost,
                 dry_run=dry_run,
             )
@@ -1488,7 +1498,7 @@ def validate_spec(
             request = QueryRequest(
                 question=f"Validate code against {spec_path}",
                 mode=QueryMode.CODE_VS_DOC,
-                scope=scope,
+                scope=normalized_scope,
             )
             response = query_router.query(request)
 
@@ -1561,12 +1571,13 @@ def validate_doc(
         ):
             query_router = QueryRouter(code_graph=code_graph, doc_graph=doc_graph)
             validation_api = ValidationTriggerAPI(llm_provider="google")
+            normalized_scope = _normalize_validation_scope(scope)
 
             # Step 1: Cost estimation
             validation_request = ValidationRequest(
                 document_path=doc_path,
                 mode="DOC_VS_CODE",
-                scope=scope,
+                scope=normalized_scope,
                 max_cost_usd=max_cost,
                 dry_run=dry_run,
             )
@@ -1600,7 +1611,7 @@ def validate_doc(
             request = QueryRequest(
                 question=f"Validate {doc_path} against code",
                 mode=QueryMode.DOC_VS_CODE,
-                scope=scope,
+                scope=normalized_scope,
             )
             response = query_router.query(request)
 

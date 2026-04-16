@@ -6,6 +6,7 @@ Optional extractor that requires PyPDF2 or pdfplumber.
 from __future__ import annotations
 
 import asyncio
+import importlib
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -34,7 +35,8 @@ class PDFExtractor(BaseDocumentExtractor):
         validated_path = file_path
 
         # Check file size
-        max_size_mb = self.get_config("max_file_size_mb", 50)
+        max_size_mb_value = self.get_config("max_file_size_mb", 50)
+        max_size_mb = max_size_mb_value if isinstance(max_size_mb_value, int) else 50
         file_size_mb = validated_path.stat().st_size / (1024 * 1024)
         if file_size_mb > max_size_mb:
             raise ExtractionException(
@@ -45,10 +47,10 @@ class PDFExtractor(BaseDocumentExtractor):
 
         # Try to import PDF library
         try:
-            import pdfplumber  # type: ignore # noqa: F401
+            import pdfplumber  # noqa: F401
         except ImportError:
             try:
-                from PyPDF2 import PdfReader  # type: ignore # noqa: F401
+                importlib.import_module("PyPDF2")
             except ImportError:
                 raise ExtractionException(
                     path=str(file_path),
@@ -84,7 +86,7 @@ class PDFExtractor(BaseDocumentExtractor):
         self, validated_path: Path, original_path: Path
     ) -> ExtractedDocument:
         """Extract using PyPDF2 (fallback)."""
-        from PyPDF2 import PdfReader
+        PdfReader = getattr(importlib.import_module("PyPDF2"), "PdfReader")
 
         reader = PdfReader(validated_path)
         page_texts: list[str] = []

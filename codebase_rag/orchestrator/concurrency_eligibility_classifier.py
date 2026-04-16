@@ -3,7 +3,10 @@ Concurrency Eligibility Classifier module for automatic parallel execution detec
 Determines if a task can be safely parallelized without explicit user request.
 """
 
+from __future__ import annotations
+
 import re
+from typing import cast
 
 from loguru import logger
 from pydantic_ai import Agent
@@ -57,6 +60,19 @@ class ConcurrencyEligibilityClassifier:
     2. "confidence": float between 0.0 and 1.0 indicating how confident you are in this assessment
     """
 
+    @staticmethod
+    def _coerce_float(value: object, default: float = 0.0) -> float:
+        if isinstance(value, bool):
+            return float(value)
+        if isinstance(value, int | float):
+            return float(value)
+        if isinstance(value, str):
+            try:
+                return float(value)
+            except ValueError:
+                return default
+        return default
+
     def __init__(self):
         self.enabled: bool = getattr(settings, "CGR_AUTO_PARALLEL_ENABLED", True)
         self.threshold: float = getattr(
@@ -84,15 +100,22 @@ class ConcurrencyEligibilityClassifier:
 
         try:
             result = await self.agent.run(prompt)
-            result_data = result.output
-            confidence = max(0.0, min(1.0, float(result_data.get("confidence", 0.0))))
+            result_data_raw = result.output
+            if not isinstance(result_data_raw, dict):
+                return 0.0, "llm_invalid_output"
+
+            result_data = cast(dict[str, object], result_data_raw)
+            confidence = max(
+                0.0,
+                min(1.0, self._coerce_float(result_data.get("confidence", 0.0))),
+            )
             task_type = (
                 result_data.get("task_type", "llm_analyzed")
                 if result_data.get("eligible", False)
                 else "llm_rejected"
             )
 
-            return confidence, task_type
+            return confidence, str(task_type)
         except Exception as e:
             logger.warning(
                 f"LLM eligibility check failed: {str(e)}, falling back to sequential execution"

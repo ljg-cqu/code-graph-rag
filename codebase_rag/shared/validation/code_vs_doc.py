@@ -12,7 +12,7 @@ from ..query_router import ValidationReport, ValidationResult
 from .validator import BaseValidator
 
 if TYPE_CHECKING:
-    from ...services.graph_service import MemgraphIngestor
+    from ...services import QueryProtocol
 
 
 class CodeVsDocValidator(BaseValidator):
@@ -29,8 +29,8 @@ class CodeVsDocValidator(BaseValidator):
 
     def __init__(
         self,
-        code_graph: MemgraphIngestor,
-        doc_graph: MemgraphIngestor,
+        code_graph: QueryProtocol,
+        doc_graph: QueryProtocol,
     ) -> None:
         super().__init__(code_graph, doc_graph)
 

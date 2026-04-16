@@ -18,6 +18,7 @@ from .. import logs as ls
 from ..config import load_cgrignore_patterns, settings
 from ..embeddings import get_embedding_provider
 from ..services.graph_service import MemgraphIngestor
+from ..types_defs import ResultRow
 from ..utils.path_utils import should_skip_path
 from .chunking import DocumentChunk, SemanticDocumentChunker
 from .error_handling import (
@@ -36,9 +37,9 @@ WORKSPACE_PATTERN = re.compile(r"^[\w\-]+$")
 
 
 def _find_vector_index(
-    rows: list[dict[str, str | int | None]],
+    rows: list[ResultRow],
     index_name: str,
-) -> dict[str, str | int | None] | None:
+) -> ResultRow | None:
     for row in rows:
         if str(row.get("index_name") or "") == index_name:
             return row
@@ -46,13 +47,19 @@ def _find_vector_index(
 
 
 def _read_vector_index_dimension(
-    index_info: dict[str, str | int | None] | None,
+    index_info: ResultRow | None,
 ) -> int | None:
     if index_info is None:
         return None
 
     raw_dimension = index_info.get("dimension")
     if raw_dimension is None:
+        return None
+
+    if isinstance(raw_dimension, int):
+        return raw_dimension
+
+    if not isinstance(raw_dimension, str):
         return None
 
     try:

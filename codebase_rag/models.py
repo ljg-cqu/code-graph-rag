@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -9,6 +11,7 @@ from .constants import SupportedLanguage
 from .types_defs import MCPHandlerType, MCPInputSchema, PropertyValue
 
 if TYPE_CHECKING:
+    from pydantic_ai.messages import ModelMessage
     from tree_sitter import Node
 
 
@@ -18,6 +21,7 @@ class SessionState:
     yolo_mode: bool = False  # Explicit yolo mode flag (auto-approve all tool calls)
     log_file: Path | None = None
     cancelled: bool = False
+    history: list[ModelMessage] = field(default_factory=list)
     # Document GraphRAG state (cached, not queried every input)
     doc_graph_available: bool = False
     doc_count: int = 0
@@ -55,7 +59,7 @@ class GraphRelationship:
 class FQNSpec(NamedTuple):
     scope_node_types: frozenset[str]
     function_node_types: frozenset[str]
-    get_name: Callable[["Node"], str | None]
+    get_name: Callable[[Node], str | None]
     file_to_module_parts: Callable[[Path, Path], list[str]]
 
 

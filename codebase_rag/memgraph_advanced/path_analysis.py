@@ -127,7 +127,7 @@ class PathAnalyzer:
 
         WHERE node:Function AND betweenness > $threshold
         {% if function_qn %}
-        AND (node)-[:CALLS*]->(:Function {qualified_name: $function_qn}) 
+        AND (node)-[:CALLS*]->(:Function {qualified_name: $function_qn})
         OR (:Function {qualified_name: $function_qn})-[:CALLS*]->(node)
         {% endif %}
 

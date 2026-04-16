@@ -11,7 +11,7 @@ import signal
 import sys
 import uuid
 from collections import deque
-from collections.abc import Coroutine, Generator
+from collections.abc import Coroutine, Generator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -105,6 +105,77 @@ def dim(text: str) -> str:
     # Escape Rich markup patterns to prevent MarkupError
     escaped_text = text.replace("[", "\\[")
     return f"[{cs.StyleModifier.DIM}]{escaped_text}[/{cs.StyleModifier.DIM}]"
+
+
+def _stringify_message_content(content: object) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, Sequence) and not isinstance(content, (str, bytes, bytearray)):
+        parts = [_stringify_message_content(item) for item in content]
+        return "\n".join(part for part in parts if part)
+    try:
+        return json.dumps(content, ensure_ascii=False, default=str)
+    except TypeError:
+        return str(content)
+
+
+def _message_history_to_context(message_history: list[ModelMessage]) -> list[dict[str, str]]:
+    from pydantic_ai.messages import (
+        ModelRequest,
+        ModelResponse,
+        SystemPromptPart,
+        TextPart,
+        UserPromptPart,
+    )
+
+    context: list[dict[str, str]] = []
+    for message in message_history:
+        if isinstance(message, ModelRequest):
+            for part in message.parts:
+                if isinstance(part, SystemPromptPart):
+                    context.append({"role": "system", "content": part.content})
+                elif isinstance(part, UserPromptPart):
+                    context.append(
+                        {
+                            "role": "user",
+                            "content": _stringify_message_content(part.content),
+                        }
+                    )
+        elif isinstance(message, ModelResponse):
+            response_parts = [
+                part.content
+                for part in message.parts
+                if isinstance(part, TextPart) and part.content
+            ]
+            if response_parts:
+                context.append(
+                    {"role": "assistant", "content": "\n".join(response_parts)}
+                )
+    return context
+
+
+def _context_to_message_history(context: list[dict[str, Any]]) -> list[ModelMessage]:
+    from pydantic_ai.messages import (
+        ModelRequest,
+        ModelResponse,
+        SystemPromptPart,
+        TextPart,
+        UserPromptPart,
+    )
+
+    message_history: list[ModelMessage] = []
+    for entry in context:
+        role = str(entry.get("role") or "user")
+        content = _stringify_message_content(entry.get("content", ""))
+        if not content:
+            continue
+        if role == "assistant":
+            message_history.append(ModelResponse(parts=[TextPart(content)]))
+        elif role == "system":
+            message_history.append(ModelRequest(parts=[SystemPromptPart(content)]))
+        else:
+            message_history.append(ModelRequest(parts=[UserPromptPart(content)]))
+    return message_history
 
 
 # Yolo mode warning banner
@@ -560,11 +631,7 @@ async def _run_agent_response_loop(
                 )
 
                 # Convert history to compressor format
-                context = [
-                    {"role": msg.role.value, "content": msg.content}
-                    for msg in message_history
-                    if hasattr(msg, "content")
-                ]
+                context = _message_history_to_context(message_history)
 
                 compressor = ContextCompressor(
                     context=context,
@@ -575,14 +642,24 @@ async def _run_agent_response_loop(
                 result = compressor.compress_sync()
 
                 if not result.was_rolled_back and result.compressed_context:
-                    # Replace message history with compressed version only if it's not empty
-                    message_history = result.compressed_context
-                    app_context.console.print(
-                        style(
-                            f"✅ Compressed to {result.compressed_tokens:,} tokens ({result.reduction_pct:.1%} reduction, {result.retention_score:.1%} retention)",
-                            cs.Color.GREEN,
-                        )
+                    compressed_history = _context_to_message_history(
+                        result.compressed_context
                     )
+                    if compressed_history:
+                        message_history[:] = compressed_history
+                        app_context.console.print(
+                            style(
+                                f"✅ Compressed to {result.compressed_tokens:,} tokens ({result.reduction_pct:.1%} reduction, {result.retention_score:.1%} retention)",
+                                cs.Color.GREEN,
+                            )
+                        )
+                    else:
+                        app_context.console.print(
+                            style(
+                                "⚠️ Compression returned no usable message history, proceeding with original",
+                                cs.Color.YELLOW,
+                            )
+                        )
                 elif not result.was_rolled_back and not result.compressed_context:
                     # Skip compression if result is empty
                     app_context.console.print(
@@ -977,6 +1054,7 @@ async def _run_interactive_loop(
 
     try:
         init_session_log(project_root)
+        app_context.session.history = message_history
         question = initial_question or ""
         model_override: Model | None = None
         model_override_string: str | None = None
@@ -1059,11 +1137,7 @@ async def _run_interactive_loop(
                     )
 
                     # Convert session history to format expected by compressor
-                    context = [
-                        {"role": msg.role.value, "content": msg.content}
-                        for msg in app_context.session.history
-                        if hasattr(msg, "content")
-                    ]
+                    context = _message_history_to_context(app_context.session.history)
 
                     # Get max context window for current model
                     max_context = settings.DEFAULT_CONTEXT_WINDOW
@@ -1131,14 +1205,24 @@ async def _run_interactive_loop(
                             )
                         )
                     else:
-                        # Update session history with compressed version
-                        app_context.session.history = result.compressed_context
-                        app_context.console.print(
-                            style(
-                                "✅ Context compressed successfully! Session continues with reduced token usage",
-                                cs.Color.GREEN,
-                            )
+                        compressed_history = _context_to_message_history(
+                            result.compressed_context
                         )
+                        if compressed_history:
+                            app_context.session.history[:] = compressed_history
+                            app_context.console.print(
+                                style(
+                                    "✅ Context compressed successfully! Session continues with reduced token usage",
+                                    cs.Color.GREEN,
+                                )
+                            )
+                        else:
+                            app_context.console.print(
+                                style(
+                                    "⚠️ Compression returned no usable message history, keeping original context",
+                                    cs.Color.YELLOW,
+                                )
+                            )
 
                     initial_question = None
                     continue

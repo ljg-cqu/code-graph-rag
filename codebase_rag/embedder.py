@@ -23,11 +23,8 @@ import tempfile
 import time
 from collections import OrderedDict
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, Protocol, cast
 from urllib.parse import quote
-
-if TYPE_CHECKING:
-    from .models import EmbeddingResult
 
 from loguru import logger
 
@@ -35,6 +32,28 @@ from . import constants as cs
 from . import exceptions as ex
 from . import logs as ls
 from .config import settings
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    import torch
+
+    from .models import EmbeddingResult
+
+
+class LegacyEmbeddingModel(Protocol):
+    def parameters(self) -> Iterable[torch.nn.Parameter]: ...
+
+    def tokenize(
+        self,
+        inputs: list[str],
+        max_length: int = 512,
+        padding: bool = False,
+    ) -> list[list[int]]: ...
+
+    def __call__(
+        self, tokens_tensor: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]: ...
 
 # Backward compatibility imports for test mocking
 # These are imported at module level so tests can patch them
@@ -448,7 +467,7 @@ def _check_semantic_dependencies() -> bool:
 
 
 def _embed_with_local_model(
-    code: str, model: object, max_length: int = 512
+    code: str, model: LegacyEmbeddingModel, max_length: int = 512
 ) -> list[float]:
     """Generate embedding using local UniXcoder model.
 
@@ -483,7 +502,10 @@ def _embed_with_local_model(
 
 
 def _embed_batch_with_local_model(
-    snippets: list[str], model: object, max_length: int = 512, batch_size: int = 32
+    snippets: list[str],
+    model: LegacyEmbeddingModel,
+    max_length: int = 512,
+    batch_size: int = 32,
 ) -> list[list[float]]:
     """Generate embeddings batch using local UniXcoder model.
 
@@ -563,7 +585,7 @@ def embed_code(code: str, max_length: int | None = None) -> list[float]:
             return cached
 
         # Use backward-compatible get_model() path
-        model = get_model()
+        model = cast(LegacyEmbeddingModel, get_model())
         embedding = _embed_with_local_model(code, model, effective_max_length)
 
         # Cache the result
@@ -595,6 +617,9 @@ def embed_code(code: str, max_length: int | None = None) -> list[float]:
                 f"Embedding generation failed (attempt {attempt + 1}/{max_retries}), retrying in {backoff}s: {str(e)[:100]}..."
             )
             time.sleep(backoff)
+
+    if embedding is None:
+        raise RuntimeError("Embedding provider returned no embedding")
 
     # Cache the result
     cache.put(code, embedding, provider.model_id)
@@ -655,7 +680,7 @@ def embed_code_batch(
         uncached_snippets = [snippets[i] for i in uncached_indices]
 
         # Use backward-compatible get_model() path
-        model = get_model()
+        model = cast(LegacyEmbeddingModel, get_model())
         new_embeddings = _embed_batch_with_local_model(
             uncached_snippets, model, effective_max_length, batch_size
         )
@@ -706,6 +731,9 @@ def embed_code_batch(
                 f"Batch embedding generation failed (attempt {attempt + 1}/{max_retries}), retrying in {backoff}s: {str(e)[:100]}..."
             )
             time.sleep(backoff)
+
+    if new_embeddings is None:
+        raise RuntimeError("Embedding provider returned no batch embeddings")
 
     # Cache new embeddings
     cache.put_many(uncached_snippets, new_embeddings, provider.model_id)

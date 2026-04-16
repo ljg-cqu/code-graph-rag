@@ -8,6 +8,7 @@ from collections import OrderedDict, defaultdict
 from collections.abc import Callable, ItemsView, KeysView
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
+from typing import TypeGuard, cast
 
 from loguru import logger
 from rich.progress import Progress, SpinnerColumn, TextColumn
@@ -349,7 +350,7 @@ class GraphUpdater:
         if settings.RUN_INGESTION_QUALITY_CHECKS:
             health_checker = HealthChecker()
             validation_results = health_checker.validate_ingestion_quality(
-                embedded_node_label="Function|Method|Class"
+                embedded_node_label="|".join(cs.EMBEDDABLE_CODE_NODE_LABELS)
             )
             passed = sum(1 for res in validation_results if res.passed)
             total = len(validation_results)
@@ -720,7 +721,8 @@ class GraphUpdater:
         # Initialize queries inside worker (avoids pickle issues with tree_sitter.Query objects)
         queries: dict[SupportedLanguage, LanguageQueries] = {}
         for lang in get_supported_languages():
-            queries[lang] = load_queries_for_language(lang)
+            if (lang_queries := load_queries_for_language(lang)) is not None:
+                queries[lang] = lang_queries
         from .parser_loader import LANGUAGE_LIBRARIES
         from .parsers.factory import ProcessorFactory
         from .services.memory_ingestor import MemoryIngestor
@@ -803,20 +805,22 @@ class GraphUpdater:
             ):
                 worker_factory.definition_processor.process_dependencies(filepath)
 
-            elif filepath.suffix.lower() == ".json" and filepath.name.lower() not in cs.DEPENDENCY_FILES:
-                # Arbitrary JSON file — process for content structure
-                # Skip canonical ingestion payloads (they go to separate JSON graph)
+            elif (
+                filepath.suffix.lower() == ".json"
+                and filepath.name.lower() not in cs.DEPENDENCY_FILES
+            ):
                 try:
                     with open(filepath, encoding="utf-8") as f:
                         data = json.load(f)
-                    if "entities" not in data and "relationships" not in data:
+                    if not GraphUpdater._is_canonical_json_ingestion_payload(data):
                         from .parsers.json_content_processor import JsonContentProcessor
+
                         json_processor = JsonContentProcessor(
                             worker_ingestor, repo_path, project_name
                         )
                         json_processor.process_json_file(filepath)
                 except (json.JSONDecodeError, OSError):
-                    pass  # Not valid JSON or unreadable, skip
+                    pass
 
             for label, props in worker_ingestor.nodes[nodes_offset:]:
                 all_nodes.append(
@@ -853,6 +857,21 @@ class GraphUpdater:
                     )
 
         return all_nodes, all_relationships
+
+    @staticmethod
+    def _is_canonical_json_ingestion_payload(data: object) -> bool:
+        if not isinstance(data, dict):
+            return False
+
+        payload = cast(dict[str, object], data)
+        entities = payload.get("entities")
+        metadata = payload.get("metadata")
+        if not isinstance(entities, list) or not isinstance(metadata, dict):
+            return False
+
+        metadata_dict = cast(dict[str, object], metadata)
+        dataset_id = metadata_dict.get("dataset_id")
+        return isinstance(dataset_id, str) and bool(dataset_id.strip())
 
     def _process_single_file(self, filepath: Path) -> None:
         lang_config = get_language_spec(filepath.suffix)
@@ -1077,7 +1096,7 @@ class GraphUpdater:
             logger.warning(ls.EMBEDDING_GENERATION_FAILED, error=str(e))
 
     @staticmethod
-    def _is_fatal_embedding_error(error: Exception) -> bool:
+    def _is_fatal_embedding_error(error: Exception) -> TypeGuard[ex.EmbeddingError]:
         return isinstance(error, ex.EmbeddingError) and error.error_code not in {
             ex.EmbeddingErrorCode.INPUT_VALIDATION,
             ex.EmbeddingErrorCode.LENGTH_EXCEEDED,

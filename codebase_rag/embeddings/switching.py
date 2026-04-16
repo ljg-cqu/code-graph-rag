@@ -163,7 +163,7 @@ def reembed_all_vectors() -> int:
         EmbeddingError: If embedding or database operations fail.
     """
     from ..embedder import embed_code_batch, get_embedding_cache
-    from ..vector_store import get_vector_backend
+    from ..vector_backend import get_vector_backend
 
     backend = get_vector_backend()
     cache = get_embedding_cache()
@@ -171,11 +171,11 @@ def reembed_all_vectors() -> int:
     # Get all embedded nodes
     # This depends on the vector backend implementation
     # For Memgraph, we query nodes with embeddings
-    try:
-        embedded_nodes = backend.get_all_embedded_nodes()
-    except AttributeError:
+    get_all_embedded_nodes = getattr(backend, "get_all_embedded_nodes", None)
+    if not callable(get_all_embedded_nodes):
         logger.warning("Vector backend does not support get_all_embedded_nodes")
         return 0
+    embedded_nodes = get_all_embedded_nodes()
 
     if not embedded_nodes:
         logger.info("No embedded nodes found to re-embed")
@@ -204,10 +204,15 @@ def reembed_all_vectors() -> int:
     )
 
     # Update vectors in backend
+    update_embedding = getattr(backend, "update_embedding", None)
+    if not callable(update_embedding):
+        logger.warning("Vector backend does not support update_embedding")
+        return 0
+
     updated = 0
     for node_id, embedding in zip(node_ids, embeddings):
         try:
-            backend.update_embedding(node_id, embedding)
+            update_embedding(node_id, embedding)
             updated += 1
         except Exception as e:
             logger.warning(f"Failed to update embedding for node {node_id}: {e}")

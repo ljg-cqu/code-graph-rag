@@ -6,6 +6,10 @@ from ..config import settings
 from ..services.graph_service import MemgraphIngestor
 
 
+def _coerce_int(value: object, default: int = 0) -> int:
+    return value if isinstance(value, int) else default
+
+
 class DynamicGraphAlgorithms:
     """Wrapper for dynamic MAGE algorithms."""
 
@@ -160,7 +164,9 @@ class DynamicGraphAlgorithms:
                 results = ingestor.fetch_all(cypher, params)
                 return {
                     "updated_communities": len(results),
-                    "total_nodes_updated": sum(r["size"] for r in results),
+                    "total_nodes_updated": sum(
+                        _coerce_int(r.get("size"), 0) for r in results
+                    ),
                     "method": "dynamic",
                 }
 
@@ -191,7 +197,9 @@ class DynamicGraphAlgorithms:
                 results = ingestor.fetch_all(cypher)
                 return {
                     "updated_communities": len(results),
-                    "total_nodes_updated": sum(r["size"] for r in results),
+                    "total_nodes_updated": sum(
+                        _coerce_int(r.get("size"), 0) for r in results
+                    ),
                     "method": "full",
                 }
             except Exception as exc:

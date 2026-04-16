@@ -6,6 +6,8 @@ and documentation against code.
 
 from __future__ import annotations
 
+from typing import Literal, cast
+
 from loguru import logger
 from pydantic_ai import Tool
 
@@ -13,6 +15,15 @@ from ..config import settings
 from ..shared.query_router import QueryMode, QueryRequest, QueryRouter
 from ..shared.validation.api import ValidationRequest, ValidationTriggerAPI
 from . import tool_descriptions as td
+
+type ValidationScope = Literal["all", "sections", "claims"]
+
+
+def _normalize_scope(scope: str) -> ValidationScope:
+    if scope in {"all", "sections", "claims"}:
+        return cast(ValidationScope, scope)
+    logger.warning("Unknown validation scope '%s', defaulting to 'all'", scope)
+    return "all"
 
 
 def create_validate_code_against_spec_tool(
@@ -49,10 +60,11 @@ def create_validate_code_against_spec_tool(
         )
 
         # Request validation with cost estimation
+        normalized_scope = _normalize_scope(scope)
         validation_request = ValidationRequest(
             document_path=spec_document_path,
             mode="CODE_VS_DOC",
-            scope=scope,
+            scope=normalized_scope,
             max_cost_usd=max_cost_usd,
             dry_run=dry_run,
         )
@@ -76,7 +88,7 @@ def create_validate_code_against_spec_tool(
             request = QueryRequest(
                 question=f"Validate {spec_document_path} against code",
                 mode=QueryMode.CODE_VS_DOC,
-                scope=scope,
+                scope=normalized_scope,
             )
             response = router.query(request)
 
@@ -138,10 +150,11 @@ def create_validate_doc_against_code_tool(
         )
 
         # Request validation with cost estimation
+        normalized_scope = _normalize_scope(scope)
         validation_request = ValidationRequest(
             document_path=document_path,
             mode="DOC_VS_CODE",
-            scope=scope,
+            scope=normalized_scope,
             max_cost_usd=max_cost_usd,
             dry_run=dry_run,
         )
@@ -165,7 +178,7 @@ def create_validate_doc_against_code_tool(
             request = QueryRequest(
                 question=f"Validate {document_path} against code",
                 mode=QueryMode.DOC_VS_CODE,
-                scope=scope,
+                scope=normalized_scope,
             )
             response = router.query(request)
 

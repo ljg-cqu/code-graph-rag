@@ -12,7 +12,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .base import BaseDocumentExtractor, ExtractedDocument
+    from .base import (
+        BaseDocumentExtractor,
+        ExtractedDocument,
+        ExtractedSection,
+        ExtractionError,
+    )
 
 # Registry pattern following codebase_rag/embeddings/__init__.py
 _EXTRACTOR_REGISTRY: dict[str, type[BaseDocumentExtractor]] = {}
@@ -45,31 +50,50 @@ def get_supported_extensions() -> list[str]:
     return list(_EXTRACTOR_REGISTRY.keys())
 
 
-# Import and register extractors
-from .base import (
-    BaseDocumentExtractor,
-    ExtractedDocument,
-    ExtractedSection,
-    ExtractionError,
-)  # noqa: E402
-from .markdown_extractor import MarkdownExtractor  # noqa: E402
+def _bootstrap_extractors() -> None:
+    from .base import (
+        BaseDocumentExtractor as _BaseDocumentExtractor,
+    )
+    from .base import (
+        ExtractedDocument as _ExtractedDocument,
+    )
+    from .base import (
+        ExtractedSection as _ExtractedSection,
+    )
+    from .base import (
+        ExtractionError as _ExtractionError,
+    )
+    from .markdown_extractor import MarkdownExtractor as _MarkdownExtractor
 
-_register_extractor(MarkdownExtractor)
+    globals().update(
+        {
+            "BaseDocumentExtractor": _BaseDocumentExtractor,
+            "ExtractedDocument": _ExtractedDocument,
+            "ExtractedSection": _ExtractedSection,
+            "ExtractionError": _ExtractionError,
+            "MarkdownExtractor": _MarkdownExtractor,
+        }
+    )
+    _register_extractor(_MarkdownExtractor)
 
-# Optional extractors (import if dependencies available)
-try:
-    from .pdf_extractor import PDFExtractor
+    try:
+        from .pdf_extractor import PDFExtractor
+    except ImportError:
+        pass
+    else:
+        globals()["PDFExtractor"] = PDFExtractor
+        _register_extractor(PDFExtractor)
 
-    _register_extractor(PDFExtractor)
-except ImportError:
-    pass
+    try:
+        from .docx_extractor import DocxExtractor
+    except ImportError:
+        pass
+    else:
+        globals()["DocxExtractor"] = DocxExtractor
+        _register_extractor(DocxExtractor)
 
-try:
-    from .docx_extractor import DocxExtractor
 
-    _register_extractor(DocxExtractor)
-except ImportError:
-    pass
+_bootstrap_extractors()
 
 
 __all__ = [

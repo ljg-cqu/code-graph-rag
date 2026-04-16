@@ -83,6 +83,9 @@ class ProtobufFileIngestor:
 
         self._nodes[node_id] = node
 
+    def ensure_node(self, label: str, properties: PropertyDict) -> None:
+        self.ensure_node_batch(label, properties)
+
     def ensure_edge(
         self,
         rel_type: str,

@@ -6,7 +6,7 @@ import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from re import Pattern
 from typing import Any
 
@@ -52,7 +52,7 @@ class ContextArchive:
     def store(cls, context: list[dict[str, Any]]) -> str:
         with cls._lock:
             archive_id = f"ctx_arc_{int(time.time())}_{hash(json.dumps(context, sort_keys=True))}"
-            cls._archive[archive_id] = (context, datetime.utcnow())
+            cls._archive[archive_id] = (context, datetime.now(UTC))
             cls._evict_expired()
             logger.debug(f"Stored context in archive with ID: {archive_id}")
             return archive_id
@@ -63,7 +63,7 @@ class ContextArchive:
             if archive_id not in cls._archive:
                 return None
             context, stored_at = cls._archive[archive_id]
-            if datetime.utcnow() - stored_at > cls._ttl:
+            if datetime.now(UTC) - stored_at > cls._ttl:
                 del cls._archive[archive_id]
                 return None
             cls._archive.move_to_end(archive_id)
@@ -71,7 +71,7 @@ class ContextArchive:
 
     @classmethod
     def _evict_expired(cls) -> None:
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         expired_ids = [
             arc_id
             for arc_id, (_, stored_at) in cls._archive.items()
@@ -402,7 +402,7 @@ class ContextCompressor:
                 unique_final.append(msg)
         return unique_final
 
-    def _evaluate_strategy(self, worker, params: dict) -> StrategyEvaluationResult:
+    def _evaluate_strategy(self, worker: object, params: dict[str, Any]) -> StrategyEvaluationResult:
         strategy_id = params["strategy_id"]
         strategy_func = params["strategy_func"]
         context = params["context"]
@@ -517,7 +517,12 @@ class ContextCompressor:
                 "No valid compression strategy results, falling back to default hybrid strategy"
             )
             best_result = self._evaluate_strategy(
-                "S5", self._hybrid_summarization_pruning, compressible_content
+                None,
+                {
+                    "strategy_id": "S5",
+                    "strategy_func": self._hybrid_summarization_pruning,
+                    "context": compressible_content,
+                },
             )
         else:
             valid_results.sort(reverse=True, key=lambda x: x.total_score)

@@ -25,7 +25,6 @@ from ..services.llm import CypherGenerator
 from ..utils.token_utils import truncate_results_by_tokens
 from . import tool_descriptions as td
 
-
 _CYPHER_REPAIRABLE_ERROR_FRAGMENTS = (
     "expected",
     "invalid type",

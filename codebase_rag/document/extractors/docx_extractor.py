@@ -31,7 +31,8 @@ class DocxExtractor(BaseDocumentExtractor):
     def _extract(self, file_path: Path) -> ExtractedDocument:
         """Extract content from DOCX file."""
         # Check file size
-        max_size_mb = self.get_config("max_file_size_mb", 50)
+        max_size_mb_value = self.get_config("max_file_size_mb", 50)
+        max_size_mb = max_size_mb_value if isinstance(max_size_mb_value, int) else 50
         file_size_mb = file_path.stat().st_size / (1024 * 1024)
         if file_size_mb > max_size_mb:
             raise ExtractionException(

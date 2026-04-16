@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, overload, runtime_checkable
 
 from loguru import logger
 
 from .config import settings
+from .types_defs import ResultRow
 
 
 @runtime_checkable
@@ -38,21 +39,45 @@ class VectorBackend(Protocol):
         """
         ...
 
+    @overload
     def search(
         self,
         query_embedding: list[float],
         top_k: int = 5,
         filters: dict | None = None,
-    ) -> list[tuple[int, float]]:
+        include_context: Literal[False] = False,
+        max_context_depth: int = 2,
+    ) -> list[tuple[int, float]]: ...
+
+    @overload
+    def search(
+        self,
+        query_embedding: list[float],
+        top_k: int = 5,
+        filters: dict | None = None,
+        include_context: Literal[True] = True,
+        max_context_depth: int = 2,
+    ) -> list[ResultRow]: ...
+
+    def search(
+        self,
+        query_embedding: list[float],
+        top_k: int = 5,
+        filters: dict | None = None,
+        include_context: bool = False,
+        max_context_depth: int = 2,
+    ) -> list[tuple[int, float]] | list[ResultRow]:
         """Search for similar embeddings.
 
         Args:
             query_embedding: Query vector (768-dim)
             top_k: Number of results to return
             filters: Optional filters (e.g., {"project_prefix": "myproject."})
+            include_context: Whether to include expanded graph context rows.
+            max_context_depth: BFS depth limit when include_context is enabled.
 
         Returns:
-            List of (node_id, similarity) tuples sorted by relevance
+            Vector match tuples by default, or full result rows when context is requested.
         """
         ...
 

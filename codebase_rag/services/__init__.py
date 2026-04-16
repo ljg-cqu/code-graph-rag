@@ -5,6 +5,8 @@ from ..types_defs import PropertyDict, PropertyValue, ResultRow
 
 @runtime_checkable
 class IngestorProtocol(Protocol):
+    def ensure_node(self, label: str, properties: PropertyDict) -> None: ...
+
     def ensure_node_batch(self, label: str, properties: PropertyDict) -> None: ...
 
     def ensure_relationship_batch(

@@ -4,8 +4,9 @@ import os
 import subprocess
 from pathlib import Path
 
-import mgclient  # ty: ignore[unresolved-import]
 from loguru import logger
+
+import mgclient
 
 from .. import constants as cs
 from ..config import settings
@@ -24,6 +25,18 @@ class HealthChecker:
             label.strip() for label in label_expression.split("|") if label.strip()
         ]
         return labels or [label_expression]
+
+    @staticmethod
+    def _fetch_single_int(
+        cursor: mgclient.Cursor,
+        query: str,
+        params: dict[str, object] | None = None,
+    ) -> int:
+        cursor.execute(query, params)
+        row = cursor.fetchone()
+        if row is None:
+            return 0
+        return int(row[0])
 
     def check_docker(self) -> HealthCheckResult:
         try:
@@ -473,7 +486,7 @@ class HealthChecker:
     def check_json_ingestion_schema(self, json_path: str) -> HealthCheckResult:
         import json
 
-        import jsonschema  # ty: ignore[unresolved-import]
+        import jsonschema
 
         try:
             with open(cs.HEALTH_CHECK_JSON_SCHEMA_FILE) as f:
@@ -549,8 +562,9 @@ class HealthChecker:
             cursor = conn.cursor()
 
             # 1. Check node count
-            cursor.execute(f"MATCH (n:{node_label}) RETURN count(n) AS count")
-            actual_node_count = cursor.fetchone()[0]
+            actual_node_count = self._fetch_single_int(
+                cursor, f"MATCH (n:{node_label}) RETURN count(n) AS count"
+            )
             if expected_node_count is not None:
                 node_count_passed = actual_node_count == expected_node_count
                 results.append(
@@ -584,8 +598,9 @@ class HealthChecker:
                 )
 
             # 2. Check edge count
-            cursor.execute("MATCH ()-->() RETURN count(*) AS count")
-            actual_edge_count = cursor.fetchone()[0]
+            actual_edge_count = self._fetch_single_int(
+                cursor, "MATCH ()-->() RETURN count(*) AS count"
+            )
             if expected_edge_count is not None:
                 edge_count_passed = actual_edge_count == expected_edge_count
                 results.append(
@@ -619,7 +634,8 @@ class HealthChecker:
                 )
 
             # 3. Check missing embeddings
-            cursor.execute(
+            missing_embeddings_count = self._fetch_single_int(
+                cursor,
                 f"""
                 MATCH (n)
                 WHERE ANY(label IN labels(n) WHERE label IN $embedded_labels)
@@ -628,8 +644,8 @@ class HealthChecker:
             """,
                 {"embedded_labels": embedded_labels},
             )
-            missing_embeddings_count = cursor.fetchone()[0]
-            cursor.execute(
+            embedded_node_count = self._fetch_single_int(
+                cursor,
                 """
                 MATCH (n)
                 WHERE ANY(label IN labels(n) WHERE label IN $embedded_labels)
@@ -637,7 +653,6 @@ class HealthChecker:
             """,
                 {"embedded_labels": embedded_labels},
             )
-            embedded_node_count = cursor.fetchone()[0]
 
             # Calculate allowed missing embeddings based on threshold
             if embedded_node_count == 0:
@@ -700,13 +715,12 @@ class HealthChecker:
                     )
 
             # 5. Check duplicate nodes (by path)
-            cursor.execute(f"""
+            duplicate_count = self._fetch_single_int(cursor, f"""
                 MATCH (n:{node_label})
                 WITH n.path AS path, count(n) AS cnt
                 WHERE cnt > 1
                 RETURN count(path) AS duplicate_count
             """)
-            duplicate_count = cursor.fetchone()[0]
             duplicates_passed = duplicate_count == 0
             results.append(
                 HealthCheckResult(

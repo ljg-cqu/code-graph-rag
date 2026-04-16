@@ -20,8 +20,23 @@ from typing import TYPE_CHECKING, Literal
 from loguru import logger
 
 if TYPE_CHECKING:
-    from ..services.graph_service import MemgraphIngestor
+    from ..services import QueryProtocol
     from ..vector_backend import VectorBackend
+
+
+def _coerce_str(value: object, default: str = "") -> str:
+    return value if isinstance(value, str) else default
+
+
+def _coerce_int(value: object, default: int = 0) -> int:
+    return value if isinstance(value, int) else default
+
+
+def _coerce_str_list(value: object, default: list[str] | None = None) -> list[str]:
+    fallback = default or []
+    if not isinstance(value, list):
+        return fallback
+    return [item for item in value if isinstance(item, str)]
 
 
 class QueryMode(StrEnum):
@@ -192,8 +207,8 @@ class QueryRouter:
 
     def __init__(
         self,
-        code_graph: MemgraphIngestor | None = None,
-        doc_graph: MemgraphIngestor | None = None,
+        code_graph: QueryProtocol | None = None,
+        doc_graph: QueryProtocol | None = None,
         code_vector: VectorBackend | None = None,
         doc_vector: VectorBackend | None = None,
     ):
@@ -344,17 +359,12 @@ class QueryRouter:
         sources: list[Source] = []
 
         for row in rows:
-            qualified_name = row.get("qualified_name", "unknown")
-            file_path = row.get("file_path", "unknown")
-            labels = row.get("labels", ["Unknown"])
-            node_type = labels[0] if isinstance(labels, list) and labels else "Unknown"
-            start_line = row.get("start_line", 0)
-            end_line = row.get("end_line", 0)
-
-            if not isinstance(start_line, int):
-                start_line = 0
-            if not isinstance(end_line, int):
-                end_line = start_line
+            qualified_name = _coerce_str(row.get("qualified_name"), "unknown")
+            file_path = _coerce_str(row.get("file_path"), "unknown")
+            labels = _coerce_str_list(row.get("labels"), ["Unknown"])
+            node_type = labels[0] if labels else "Unknown"
+            start_line = _coerce_int(row.get("start_line"), 0)
+            end_line = _coerce_int(row.get("end_line"), start_line)
 
             lines.append(f"- **{qualified_name}** ({node_type}) in {file_path}")
             sources.append(
@@ -462,7 +472,7 @@ class QueryRouter:
             # Extract keyword from question (simple approach)
             keyword = request.question.split()[0] if request.question else ""
             try:
-                results = self.code_graph.fetch_all(
+                keyword_results = self.code_graph.fetch_all(
                     keyword_query,
                     {
                         "keyword": keyword,
@@ -470,29 +480,30 @@ class QueryRouter:
                     },
                 )
 
-                # Ensure results is iterable
-                if results is None:
-                    results = []
-                elif not hasattr(results, "__iter__"):
-                    results = []
-
-                for result in results:
-                    node_type = result.get("labels", ["Unknown"])[0]
+                for result in keyword_results:
+                    labels = _coerce_str_list(result.get("labels"), ["Unknown"])
+                    node_type = labels[0] if labels else "Unknown"
+                    file_path = _coerce_str(result.get("file_path"), "unknown")
+                    qualified_name = _coerce_str(result.get("qualified_name")) or None
+                    start_line = _coerce_int(result.get("start_line"), 0)
+                    end_line = _coerce_int(result.get("end_line"), 0)
+                    display_name = qualified_name or _coerce_str(
+                        result.get("name"), "unknown"
+                    )
                     sources.append(
                         Source(
                             type="code",
-                            path=result.get("file_path", "unknown"),
+                            path=file_path,
                             node_type=node_type,
-                            qualified_name=result.get("qualified_name"),
+                            qualified_name=qualified_name,
                             line_range=(
-                                result.get("start_line", 0),
-                                result.get("end_line", 0),
+                                start_line,
+                                end_line,
                             ),
                         )
                     )
                     answer_parts.append(
-                        f"- **{result.get('qualified_name', result.get('name', 'unknown'))}** "
-                        f"({node_type}) in {result.get('file_path', 'unknown')}"
+                        f"- **{display_name}** ({node_type}) in {file_path}"
                     )
             except Exception as e:
                 logger.warning(f"Code graph query failed: {e}")

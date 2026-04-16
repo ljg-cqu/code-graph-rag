@@ -24,6 +24,7 @@ from ..config import ModelConfig, settings
 
 class ModelProvider(ABC):
     __slots__ = ("config",)
+    MODEL_CONTEXT_WINDOWS: dict[str, int] = {}
 
     def __init__(self, **config: str | int | None) -> None:
         self.config = config
@@ -69,17 +70,13 @@ class ModelProvider(ABC):
                 )
 
         # Check provider-specific model map
-        if hasattr(self, "MODEL_CONTEXT_WINDOWS"):
-            # Check exact match first
-            if model_id in self.MODEL_CONTEXT_WINDOWS:
-                return self.MODEL_CONTEXT_WINDOWS[model_id]
-            # Check normalized match
-            if normalized_model in self.MODEL_CONTEXT_WINDOWS:
-                return self.MODEL_CONTEXT_WINDOWS[normalized_model]
-            # Check prefix matches for model families
-            for model_prefix, window_size in self.MODEL_CONTEXT_WINDOWS.items():
-                if normalized_model.startswith(model_prefix.rstrip("*").upper()):
-                    return window_size
+        if model_id in self.MODEL_CONTEXT_WINDOWS:
+            return self.MODEL_CONTEXT_WINDOWS[model_id]
+        if normalized_model in self.MODEL_CONTEXT_WINDOWS:
+            return self.MODEL_CONTEXT_WINDOWS[normalized_model]
+        for model_prefix, window_size in self.MODEL_CONTEXT_WINDOWS.items():
+            if normalized_model.startswith(model_prefix.rstrip("*").upper()):
+                return window_size
 
         # Fall back to global default
         return settings.DEFAULT_CONTEXT_WINDOW
@@ -201,7 +198,7 @@ class OpenAIProvider(ModelProvider):
 
     def create_model(
         self, model_id: str, **kwargs: str | int | None
-    ) -> OpenAIResponsesModel:
+    ) -> OpenAIChatModel:
         self.validate_config()
 
         provider = PydanticOpenAIProvider(api_key=self.api_key, base_url=self.endpoint)

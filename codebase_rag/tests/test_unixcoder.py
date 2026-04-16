@@ -5,10 +5,10 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from codebase_rag.unixcoder import UniXcoder
-
 
 def test_forward_uses_2d_attention_mask() -> None:
+    from codebase_rag.unixcoder import UniXcoder
+
     model = UniXcoder.__new__(UniXcoder)
     torch.nn.Module.__init__(model)
     model.config = SimpleNamespace(pad_token_id=1)

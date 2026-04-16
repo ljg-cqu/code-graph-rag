@@ -5,6 +5,8 @@ Provides Pydantic AI Tool factory for indexing documents into the document graph
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from loguru import logger
 from pydantic_ai import Tool
 
@@ -38,12 +40,18 @@ def create_index_documents_tool() -> Tool:
             from ..document.document_updater import DocumentGraphUpdater
 
             updater = DocumentGraphUpdater(
-                repo_path=settings.TARGET_REPO_PATH,
+                repo_path=Path(settings.TARGET_REPO_PATH),
                 host=settings.DOC_MEMGRAPH_HOST,
                 port=settings.DOC_MEMGRAPH_PORT,
             )
 
-            stats = updater.run(clean=clean, force=force)
+            if clean:
+                logger.warning(
+                    "DocumentGraphUpdater.run() does not support clean=True; continuing with force=%s",
+                    force,
+                )
+
+            stats = updater.run(force=force)
 
             return (
                 f"**Document Indexing Complete**\n\n"

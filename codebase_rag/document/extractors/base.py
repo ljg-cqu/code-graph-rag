@@ -134,9 +134,12 @@ class BaseDocumentExtractor(ABC):
         Raises:
             ExtractionException: If extraction fails
         """
-        repo_root = self.get_config("repo_root")
+        repo_root_value = self.get_config("repo_root")
         validated_path = self._validate_path(
-            file_path, Path(repo_root) if repo_root else None
+            file_path,
+            Path(repo_root_value)
+            if isinstance(repo_root_value, str) and repo_root_value
+            else None,
         )
         return self._extract(validated_path)
 
@@ -153,9 +156,12 @@ class BaseDocumentExtractor(ABC):
         Returns:
             ExtractedDocument with all extracted content
         """
-        repo_root = self.get_config("repo_root")
+        repo_root_value = self.get_config("repo_root")
         validated_path = self._validate_path(
-            file_path, Path(repo_root) if repo_root else None
+            file_path,
+            Path(repo_root_value)
+            if isinstance(repo_root_value, str) and repo_root_value
+            else None,
         )
         return await self._extract_async(validated_path)
 

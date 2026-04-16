@@ -274,7 +274,7 @@ class ClassIngestMixin:
             ingest_method(
                 method_node,
                 class_qn,
-                class_type,
+                cs.NodeLabel(class_type),
                 self.ingestor,
                 self.function_registry,
                 self.simple_name_lookup,

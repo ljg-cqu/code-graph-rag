@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, cast
 
 from loguru import logger
 
@@ -13,6 +13,35 @@ from .base import EmbeddingProvider
 
 if TYPE_CHECKING:
     import torch
+
+
+class TokenizerOutput(Protocol):
+    def to(self, device: str) -> dict[str, torch.Tensor]: ...
+
+
+class BatchTokenizer(Protocol):
+    def __call__(
+        self,
+        texts: list[str],
+        *,
+        padding: bool,
+        truncation: bool,
+        max_length: int,
+        return_tensors: str,
+    ) -> TokenizerOutput: ...
+
+
+class UniXcoderLikeModel(Protocol):
+    def tokenize(
+        self,
+        inputs: list[str],
+        max_length: int = 512,
+        padding: bool = False,
+    ) -> list[list[int]]: ...
+
+    def __call__(
+        self, tokens_tensor: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]: ...
 
 # Known model dimensions for local providers
 KNOWN_MODEL_DIMENSIONS: dict[str, int] = {
@@ -57,7 +86,6 @@ class LocalEmbeddingProvider(EmbeddingProvider):
         self._device = device
         self._model: object | None = None
         self._tokenizer: object | None = None
-        self._torch: type[torch] | None = None
 
     @property
     def provider_name(self) -> cs.EmbeddingProvider:
@@ -83,10 +111,8 @@ class LocalEmbeddingProvider(EmbeddingProvider):
             return
 
         try:
-            import torch
             from transformers import AutoModel, AutoTokenizer
 
-            self._torch = torch
             device = self._get_device()
 
             logger.info(f"Loading embedding model {self.model_id} on {device}...")
@@ -149,11 +175,10 @@ class LocalEmbeddingProvider(EmbeddingProvider):
         self._ensure_model_loaded()
 
         assert self._model is not None, "Local embedding model failed to load"
-        assert self._torch is not None, "PyTorch is not available for local embedding"
+        import torch
 
         device = self._get_device()
         model = self._model
-        torch = self._torch
 
         # Truncate long texts to avoid tokenization issues (consistent with OpenAI provider)
         max_chars = settings.EMBEDDING_MAX_LENGTH * 4
@@ -161,7 +186,14 @@ class LocalEmbeddingProvider(EmbeddingProvider):
 
         if "bge-" in self.model_id.lower():
             # BGE model processing
-            inputs = self._tokenizer(
+            tokenizer = self._tokenizer
+            if tokenizer is None or not callable(tokenizer):
+                raise EmbeddingGenerationError(
+                    f"Tokenizer for {self.model_id} is not callable",
+                    provider="local",
+                    model=self.model_id,
+                )
+            inputs = cast(BatchTokenizer, tokenizer)(
                 [truncated_text],
                 padding=True,
                 truncation=True,
@@ -188,13 +220,15 @@ class LocalEmbeddingProvider(EmbeddingProvider):
             return embedding[0].tolist()
         else:
             # UniXcoder model processing
-            tokens = model.tokenize(
+            tokens = cast(UniXcoderLikeModel, model).tokenize(
                 [truncated_text], max_length=settings.EMBEDDING_MAX_LENGTH
             )
             tokens_tensor = torch.tensor(tokens).to(device)
 
             with torch.no_grad():
-                _, sentence_embeddings = model(tokens_tensor)
+                _, sentence_embeddings = cast(UniXcoderLikeModel, model)(
+                    tokens_tensor
+                )
                 embedding = sentence_embeddings.cpu().numpy()
 
             return embedding[0].tolist()
@@ -215,11 +249,10 @@ class LocalEmbeddingProvider(EmbeddingProvider):
         self._ensure_model_loaded()
 
         assert self._model is not None, "Local embedding model failed to load"
-        assert self._torch is not None, "PyTorch is not available for local embedding"
+        import torch
 
         device = self._get_device()
         model = self._model
-        torch = self._torch
 
         all_embeddings: list[list[float]] = []
 
@@ -229,9 +262,16 @@ class LocalEmbeddingProvider(EmbeddingProvider):
 
         if "bge-" in self.model_id.lower():
             # BGE model batch processing
+            tokenizer = self._tokenizer
+            if tokenizer is None or not callable(tokenizer):
+                raise EmbeddingGenerationError(
+                    f"Tokenizer for {self.model_id} is not callable",
+                    provider="local",
+                    model=self.model_id,
+                )
             for start in range(0, len(truncated_texts), batch_size):
                 batch = truncated_texts[start : start + batch_size]
-                inputs = self._tokenizer(
+                inputs = cast(BatchTokenizer, tokenizer)(
                     batch,
                     padding=True,
                     truncation=True,
@@ -264,13 +304,15 @@ class LocalEmbeddingProvider(EmbeddingProvider):
             # UniXcoder model batch processing
             for start in range(0, len(truncated_texts), batch_size):
                 batch = truncated_texts[start : start + batch_size]
-                tokens_list = model.tokenize(
+                tokens_list = cast(UniXcoderLikeModel, model).tokenize(
                     batch, max_length=settings.EMBEDDING_MAX_LENGTH, padding=True
                 )
                 tokens_tensor = torch.tensor(tokens_list).to(device)
 
                 with torch.no_grad():
-                    _, sentence_embeddings = model(tokens_tensor)
+                    _, sentence_embeddings = cast(UniXcoderLikeModel, model)(
+                        tokens_tensor
+                    )
                     batch_np = sentence_embeddings.cpu().numpy()
 
                 for row in batch_np:

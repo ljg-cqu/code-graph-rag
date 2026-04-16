@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from ..query_router import ValidationReport
 
 if TYPE_CHECKING:
-    from ...services.graph_service import MemgraphIngestor
+    from ...services import QueryProtocol
 
 
 class BaseValidator(ABC):
@@ -20,8 +20,8 @@ class BaseValidator(ABC):
 
     def __init__(
         self,
-        code_graph: MemgraphIngestor,
-        doc_graph: MemgraphIngestor,
+        code_graph: QueryProtocol,
+        doc_graph: QueryProtocol,
     ) -> None:
         self.code_graph = code_graph
         self.doc_graph = doc_graph

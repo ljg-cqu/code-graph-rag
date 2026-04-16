@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from importlib import import_module
 from typing import TYPE_CHECKING
 
 from .. import constants as cs
+from ..config import settings
 from ..exceptions import EmbeddingProviderNotFoundError
 
 if TYPE_CHECKING:
@@ -62,39 +64,34 @@ def get_embedding_provider(
         EmbeddingProviderNotFoundError: If provider is not registered.
     """
     cls = get_embedding_provider_class(provider)
-    return cls(model_id=model_id, dimension=dimension, **config)
+    effective_dimension = (
+        dimension if dimension is not None else settings.get_effective_vector_dim()
+    )
+    return cls(model_id=model_id, dimension=effective_dimension, **config)
 
 
-# Import and register providers after registry is defined
-# Local provider is always available (if torch/transformers are installed)
-from .local import LocalEmbeddingProvider
+def _bootstrap_providers() -> None:
+    from .local import LocalEmbeddingProvider as _LocalEmbeddingProvider
 
-_register_provider(cs.EmbeddingProvider.LOCAL, LocalEmbeddingProvider)
+    globals()["LocalEmbeddingProvider"] = _LocalEmbeddingProvider
+    _register_provider(cs.EmbeddingProvider.LOCAL, _LocalEmbeddingProvider)
 
-# External providers - imported only when needed
-# OpenAI
-try:
-    from .openai import OpenAIEmbeddingProvider
+    optional_providers = (
+        (".openai", "OpenAIEmbeddingProvider", cs.EmbeddingProvider.OPENAI),
+        (".google", "GoogleEmbeddingProvider", cs.EmbeddingProvider.GOOGLE),
+        (".ollama", "OllamaEmbeddingProvider", cs.EmbeddingProvider.OLLAMA),
+    )
+    for module_name, class_name, provider_name in optional_providers:
+        try:
+            module = import_module(module_name, __name__)
+        except ImportError:
+            continue
+        provider_cls = getattr(module, class_name)
+        globals()[class_name] = provider_cls
+        _register_provider(provider_name, provider_cls)
 
-    _register_provider(cs.EmbeddingProvider.OPENAI, OpenAIEmbeddingProvider)
-except ImportError:
-    pass
 
-# Google
-try:
-    from .google import GoogleEmbeddingProvider
-
-    _register_provider(cs.EmbeddingProvider.GOOGLE, GoogleEmbeddingProvider)
-except ImportError:
-    pass
-
-# Ollama
-try:
-    from .ollama import OllamaEmbeddingProvider
-
-    _register_provider(cs.EmbeddingProvider.OLLAMA, OllamaEmbeddingProvider)
-except ImportError:
-    pass
+_bootstrap_providers()
 
 
 def get_local_embedding_provider(
@@ -121,10 +118,6 @@ __all__ = [
     "get_local_embedding_provider",
     "_EMBEDDING_PROVIDER_REGISTRY",
     "_register_provider",
-    "LocalEmbeddingProvider",
-    "OpenAIEmbeddingProvider",
-    "GoogleEmbeddingProvider",
-    "OllamaEmbeddingProvider",
     # Switching utilities
     "SwitchResult",
     "switch_embedding_provider",
@@ -140,6 +133,15 @@ __all__ = [
     "get_auth_solutions",
 ]
 
+for provider_name in (
+    "LocalEmbeddingProvider",
+    "OpenAIEmbeddingProvider",
+    "GoogleEmbeddingProvider",
+    "OllamaEmbeddingProvider",
+):
+    if provider_name in globals():
+        __all__.append(provider_name)
+
 
 # Lazy import for switching utilities to avoid circular imports
 def __getattr__(name: str):
@@ -149,30 +151,20 @@ def __getattr__(name: str):
         "reembed_all_vectors",
         "get_embedding_status",
     ):
-        from .switching import (
-            SwitchResult,
-            get_embedding_status,
-            reembed_all_vectors,
-            switch_embedding_provider,
-        )
+        from . import switching
 
-        return locals()[name]
+        return getattr(switching, name)
     if name in ("TokenBucket", "AdaptiveRateLimiter"):
-        from .rate_limiter import AdaptiveRateLimiter, TokenBucket
+        from . import rate_limiter
 
-        return locals()[name]
+        return getattr(rate_limiter, name)
     if name in (
         "USER_FACING_MESSAGES",
         "AUTH_SOLUTIONS",
         "get_user_facing_message",
         "get_auth_solutions",
     ):
-        from .errors import (
-            AUTH_SOLUTIONS,
-            USER_FACING_MESSAGES,
-            get_auth_solutions,
-            get_user_facing_message,
-        )
+        from . import errors
 
-        return locals()[name]
+        return getattr(errors, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -246,8 +246,8 @@ class TestCypherGeneratorGenerate:
         assert "Invalid type vertex for 'NOT'." in repair_prompt
 
 
-class TestCleanCypherResponse:
-    def test_remove_line_comments(self):
+class TestCleanCypherResponseAdvanced:
+    def test_remove_line_comments(self) -> None:
         input_query = """-- Count all users
         MATCH (u:User)
         -- Return only active users
@@ -259,7 +259,7 @@ class TestCleanCypherResponse:
         assert "WHERE u.active = true" in cleaned
         assert "RETURN count(u) as total" in cleaned
 
-    def test_remove_block_comments(self):
+    def test_remove_block_comments(self) -> None:
         input_query = """/* This is a multi
         line block comment */
         MATCH (n) /* inline comment */
@@ -270,7 +270,7 @@ class TestCleanCypherResponse:
         assert "MATCH (n)" in cleaned
         assert "RETURN n" in cleaned
 
-    def test_remove_multiple_queries(self):
+    def test_remove_multiple_queries(self) -> None:
         input_query = """MATCH (n) RETURN count(n);
         MATCH (u:User) RETURN u.name;"""
         cleaned = _clean_cypher_response(input_query)
@@ -278,7 +278,7 @@ class TestCleanCypherResponse:
         assert "MATCH (n) RETURN count(n)" in cleaned
         assert "User" not in cleaned
 
-    def test_convert_node_label_pipe_syntax(self):
+    def test_convert_node_label_pipe_syntax(self) -> None:
         input_query = (
             "MATCH (n:Class|Function|Method) WHERE n.name = 'test' RETURN n.path"
         )
@@ -287,7 +287,7 @@ class TestCleanCypherResponse:
         assert "labels(n)[0] IN ['Class', 'Function', 'Method']" in cleaned
         assert "MATCH (n) WHERE" in cleaned
 
-    def test_convert_relationship_pipe_syntax_all_directions(self):
+    def test_convert_relationship_pipe_syntax_all_directions(self) -> None:
         # Undirected
         input1 = "MATCH (a)-[r:CALLS|USES|IMPORTS]-(b) RETURN count(r)"
         cleaned1 = _clean_cypher_response(input1)
@@ -314,7 +314,7 @@ class TestCleanCypherResponse:
         assert "[:CALLS|USES]" not in cleaned4
         assert "type(r) IN ['CALLS', 'USES']" in cleaned4
 
-    def test_combine_multiple_pipe_syntax_in_same_query(self):
+    def test_combine_multiple_pipe_syntax_in_same_query(self) -> None:
         input_query = """MATCH (a:Class|Interface)-[r:CALLS|IMPORTS]->(b:Function|Method)
         WHERE a.name = 'Test'
         RETURN b.path"""
