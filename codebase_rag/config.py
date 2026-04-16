@@ -19,17 +19,6 @@ from .types_defs import CgrignorePatterns, EmbeddingConfigKwargs, ModelConfigKwa
 load_dotenv()
 
 
-def get_default_log_path() -> str:
-    """Get OS-specific default log file path"""
-    if sys.platform == "win32":
-        appdata = os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
-        return str(Path(appdata) / "cgr" / "cgr.log")
-    elif sys.platform == "darwin":
-        return str(Path.home() / "Library" / "Caches" / "cgr" / "cgr.log")
-    else:  # Linux/Unix
-        return str(Path.home() / ".cache" / "cgr" / "cgr.log")
-
-
 class ApiKeyInfoEntry(TypedDict):
     env_var: str
     url: str
@@ -569,15 +558,7 @@ class AppConfig(BaseSettings):
     QUIET: bool = Field(False, validation_alias="CGR_QUIET")
 
     # Logging configuration
-    LOG_TO_FILE: bool = Field(True, validation_alias="CGR_LOG_TO_FILE")
-    LOG_FILE_PATH: str = Field(
-        default_factory=get_default_log_path, validation_alias="CGR_LOG_FILE"
-    )
     LOG_LEVEL: str = Field("INFO", validation_alias="CGR_LOG_LEVEL")
-    LOG_ROTATION: str = Field("10 MB", validation_alias="CGR_LOG_ROTATION")
-    LOG_RETENTION: str = Field("30 days", validation_alias="CGR_LOG_RETENTION")
-    LOG_COMPRESSION: str = Field("zip", validation_alias="CGR_LOG_COMPRESSION")
-    LOG_TO_CONSOLE: bool = Field(False, validation_alias="CGR_LOG_TO_CONSOLE")
 
     @field_validator("LOG_LEVEL")
     @classmethod

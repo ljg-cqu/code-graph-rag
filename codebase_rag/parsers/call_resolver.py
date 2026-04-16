@@ -248,12 +248,10 @@ class CallResolver:
     def _try_resolve_via_trie(
         self, call_name: str, module_qn: str
     ) -> tuple[str, str] | None:
-        search_name = _SEPARATOR_PATTERN.split(call_name)[-1]
-        possible_matches = self.function_registry.find_ending_with(search_name)
-        if not possible_matches:
-            logger.debug(ls.CALL_UNRESOLVED, call_name=call_name)
+        if self._should_skip_trie_fallback(call_name):
             return None
 
+        search_name = _SEPARATOR_PATTERN.split(call_name)[-1]
         possible_matches = self.function_registry.find_ending_with(search_name)
         if not possible_matches:
             logger.debug(ls.CALL_UNRESOLVED, call_name=call_name)
@@ -265,6 +263,26 @@ class CallResolver:
         best_candidate_qn = possible_matches[0]
         logger.debug(ls.CALL_TRIE_FALLBACK, call_name=call_name, qn=best_candidate_qn)
         return self.function_registry[best_candidate_qn], best_candidate_qn
+
+    def _should_skip_trie_fallback(self, call_name: str) -> bool:
+        if not self._has_separator(call_name):
+            return False
+
+        if self.resolve_builtin_call(call_name) is not None:
+            return True
+
+        return (
+            _SEPARATOR_PATTERN.split(call_name)[-1]
+            in cs.PYTHON_GENERIC_METHOD_PATTERNS
+        )
+
+    def should_prioritize_builtin_resolution(self, call_name: str) -> bool:
+        if self.resolve_builtin_call(call_name) is None:
+            return False
+
+        return self._has_separator(call_name) or (
+            call_name not in cs.PYTHON_GENERIC_METHOD_PATTERNS
+        )
 
     def _resolve_two_part_call(
         self,
@@ -544,8 +562,11 @@ class CallResolver:
             return (cs.NodeLabel.FUNCTION, f"{cs.BUILTIN_PREFIX}.{call_name}")
 
         # Check for Python builtins and common standard library method calls
-        if call_name in cs.PYTHON_BUILTIN_PATTERNS:
-            return (cs.NodeLabel.FUNCTION, f"{cs.BUILTIN_PREFIX}.python.{call_name}")
+        if python_builtin_name := self._resolve_python_builtin_name(call_name):
+            return (
+                cs.NodeLabel.FUNCTION,
+                f"{cs.BUILTIN_PREFIX}.python.{python_builtin_name}",
+            )
 
         for suffix, method in cs.JS_FUNCTION_PROTOTYPE_SUFFIXES.items():
             if call_name.endswith(suffix):
@@ -560,6 +581,19 @@ class CallResolver:
         ):
             base_call = call_name.rsplit(cs.SEPARATOR_DOT, 1)[0]
             return (cs.NodeLabel.FUNCTION, base_call)
+
+        return None
+
+    def _resolve_python_builtin_name(self, call_name: str) -> str | None:
+        if call_name in cs.PYTHON_BUILTIN_PATTERNS:
+            return call_name
+
+        if not self._has_separator(call_name):
+            return None
+
+        method_name = _SEPARATOR_PATTERN.split(call_name)[-1]
+        if method_name in cs.PYTHON_GENERIC_METHOD_PATTERNS:
+            return method_name
 
         return None
 

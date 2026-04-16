@@ -360,6 +360,26 @@ DOC_FAILED = "Failed to analyze document '{path}': {error}"
 DOC_RESULT = "[analyze_document] Result type: {type}, content: {preview}..."
 DOC_EXCEPTION = "[analyze_document] Exception during analysis: {error}"
 
+# (H) Document indexing logs
+DOC_EMBEDDING_NO_CONTENT = "Document {path} has no content, skipping embedding"
+DOC_EMBEDDING_NO_VALID_CHUNKS = (
+    "All chunks in {path} are empty or too small (<{min_tokens} tokens), "
+    "skipping embedding. Possible causes: missing pdfplumber/PyPDF2 for PDF text extraction, "
+    "or scanned/image-based PDF that requires OCR to extract text. Install PDF dependencies with: uv add pdfplumber"
+)
+DOC_EMBEDDING_LARGE_DOCUMENT = (
+    "Large document {path} generated {count} embedding chunks ({tokens} tokens)"
+)
+DOC_EMBEDDING_BATCH_START = (
+    "Generating embeddings for {path}: {count} chunks across {batches} batches"
+)
+DOC_EMBEDDING_BATCH_PROGRESS = (
+    "Embedding progress for {path}: batch {batch}/{total_batches} ({processed}/{count} chunks)"
+)
+DOC_EMBEDDING_ZERO_VECTOR = (
+    "Embedding for chunk {index} is all zeros, may indicate embedding failure"
+)
+
 # (H) Code retrieval logs
 CODE_RETRIEVER_INIT = "CodeRetriever initialized with root: {root}"
 CODE_RETRIEVER_SEARCH = "[CodeRetriever] Searching for: {name}"
@@ -712,7 +732,7 @@ HASH_CACHE_LOADED = "Loaded hash cache with {count} entries from {path}"
 HASH_CACHE_LOAD_FAILED = "Failed to load hash cache from {path}: {error}"
 HASH_CACHE_SAVED = "Saved hash cache with {count} entries to {path}"
 HASH_CACHE_SAVE_FAILED = "Failed to save hash cache to {path}: {error}"
-PERIODIC_FLUSH = "Periodic flush after {count} files processed"
+PERIODIC_FLUSH = "Periodic flush after {count} buffered nodes"
 WORKER_PROCESSING_FAILED = "Worker processing failed: {error}\n{traceback}"
 INCREMENTAL_SKIPPED = "Skipped {count} unchanged files"
 INCREMENTAL_CHANGED = "Re-indexing {count} changed files"
@@ -740,7 +760,7 @@ MODEL_CURRENT = "Current model: {model}"
 
 # (H) Progress bar logs
 PROGRESS_INDEXING_LABEL = "[bold blue]Indexing files..."
-PROGRESS_FILES_PROCESSED = "{count} processed"
+PROGRESS_FILES_PROCESSED = "{count} files processed"
 
 # (H) Vector backend logs
 MG_VECTOR_INIT = "Initializing Memgraph vector indexes for: {index}"

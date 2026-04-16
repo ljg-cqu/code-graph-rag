@@ -139,6 +139,24 @@ def _update_and_validate_models(orchestrator: str | None, cypher: str | None) ->
     validate_models_early()
 
 
+def _resolve_exclude_settings(
+    repo_path: Path,
+    exclude: list[str] | None,
+    interactive_setup: bool,
+    should_prompt: bool,
+) -> tuple[frozenset[str] | None, frozenset[str] | None]:
+    cgrignore = load_cgrignore_patterns(repo_path)
+    cli_excludes = frozenset(exclude) if exclude else frozenset()
+    exclude_paths = cli_excludes | cgrignore.exclude or None
+
+    if interactive_setup and should_prompt:
+        unignore_paths = prompt_for_unignored_directories(repo_path, exclude)
+    else:
+        unignore_paths = cgrignore.unignore or None
+
+    return exclude_paths, unignore_paths
+
+
 def _handle_indexing(
     repo_path: Path,
     index_code: bool,
@@ -152,7 +170,7 @@ def _handle_indexing(
     interactive_setup: bool,
     doc_workspace: str = "default",
     output: str | None = None,
-    index_timeout: int = 300,
+    index_timeout: int = 3600,
     # New JSON ingestion parameters (backward compatible defaults)
     ingest_json: bool = False,
     json_path: str | None = None,
@@ -201,20 +219,19 @@ def _handle_indexing(
     if effective_index_docs:
         effective_with_docs = True
 
+    exclude_paths, unignore_paths = _resolve_exclude_settings(
+        repo_path,
+        exclude,
+        interactive_setup,
+        should_prompt=effective_index_code or effective_index_docs,
+    )
+
     # === Code Indexing ===
     if effective_index_code:
         _info(style(cs.CLI_MSG_UPDATING_GRAPH.format(path=repo_path), cs.Color.GREEN))
 
-        cgrignore = load_cgrignore_patterns(repo_path)
-        cli_excludes = frozenset(exclude) if exclude else frozenset()
-        exclude_paths = cli_excludes | cgrignore.exclude or None
-        unignore_paths: frozenset[str] | None = None
-
-        if interactive_setup:
-            unignore_paths = prompt_for_unignored_directories(repo_path, exclude)
-        else:
+        if not interactive_setup:
             _info(style(cs.CLI_MSG_AUTO_EXCLUDE, cs.Color.YELLOW))
-            unignore_paths = cgrignore.unignore or None
 
         with connect_memgraph(batch_size) as ingestor:
             if clean:
@@ -269,6 +286,8 @@ def _handle_indexing(
                 repo_path=repo_path,
                 batch_size=batch_size,
                 workspace=doc_workspace,
+                exclude_paths=exclude_paths,
+                unignore_paths=unignore_paths,
             )
             # DocumentGraphUpdater.run() returns dict with keys:
             # documents_indexed, sections_created, chunks_created, errors
@@ -409,73 +428,30 @@ def _global_options(
         help="Suppress non-essential output (progress messages, banners, informational logs).",
         is_eager=True,
     ),
-    log_file: str | None = typer.Option(
-        None,
-        "--log-file",
-        help="Override default log file path.",
-        is_eager=True,
-    ),
     log_level: str | None = typer.Option(
         None,
         "--log-level",
         help="Set log level (DEBUG, INFO, WARNING, ERROR, CRITICAL).",
         is_eager=True,
     ),
-    no_log_file: bool = typer.Option(
-        False,
-        "--no-log-file",
-        help="Disable file logging entirely.",
-        is_eager=True,
-    ),
-    debug_logs: bool = typer.Option(
-        False,
-        "--debug-logs",
-        help="Shortcut to enable DEBUG log level and console logging.",
-        is_eager=True,
-    ),
 ) -> None:
     settings.QUIET = quiet
 
     # Apply logging CLI flag overrides
-    if no_log_file:
-        settings.LOG_TO_FILE = False
-    if log_file:
-        settings.LOG_FILE_PATH = log_file
     if log_level:
         # Validate and set log level
         settings.LOG_LEVEL = log_level
-    if debug_logs:
-        settings.LOG_LEVEL = "DEBUG"
-        settings.LOG_TO_CONSOLE = True
 
     # Remove all existing logger handlers to reconfigure from scratch
     logger.remove()
 
-    # Add console handler if enabled
-    if settings.LOG_TO_CONSOLE:
-        # In quiet mode, only show ERROR level logs on console
-        console_log_level = "ERROR" if quiet else settings.LOG_LEVEL
-        logger.add(
-            lambda msg: app_context.console.print(msg, end=""),
-            level=console_log_level
-        )
-
-    # Add file handler if enabled
-    if settings.LOG_TO_FILE:
-        log_path = Path(settings.LOG_FILE_PATH)
-        # Create parent directory if it doesn't exist
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        logger.add(
-            str(log_path),
-            level=settings.LOG_LEVEL,
-            rotation=settings.LOG_ROTATION,
-            retention=settings.LOG_RETENTION,
-            compression=settings.LOG_COMPRESSION,
-            enqueue=True,  # Async-safe logging
-        )
-    # If no logging handlers are configured, add a null handler to avoid loguru warnings
-    elif not settings.LOG_TO_CONSOLE:
-        logger.add(lambda _: None)
+    # Add console handler
+    # In quiet mode, only show ERROR level logs on console
+    console_log_level = "ERROR" if quiet else settings.LOG_LEVEL
+    logger.add(
+        lambda msg: app_context.console.print(msg, end=""),
+        level=console_log_level
+    )
 
 
 def _info(msg: str) -> None:
@@ -824,6 +800,12 @@ def start(
             should_index_code, should_index_docs = _prompt_for_reindex(
                 code_fresh, docs_fresh, warnings
             )
+            exclude_paths, unignore_paths = _resolve_exclude_settings(
+                repo_to_check,
+                exclude,
+                interactive_setup,
+                should_prompt=should_index_code or should_index_docs,
+            )
 
             # Handle re-indexing if user confirmed
             if should_index_code:
@@ -862,6 +844,8 @@ def start(
                         port=settings.DOC_MEMGRAPH_PORT,
                         repo_path=repo_to_check,
                         workspace=doc_workspace,
+                        exclude_paths=exclude_paths,
+                        unignore_paths=unignore_paths,
                     )
                     stats = updater.run(force=False)
                     _info(style(f"Documents indexed: {stats}", cs.Color.GREEN))
@@ -951,15 +935,14 @@ def index(
 
     _info(style(cs.CLI_MSG_OUTPUT_TO.format(path=output_proto_dir), cs.Color.CYAN))
 
-    cgrignore = load_cgrignore_patterns(repo_to_index)
-    cli_excludes = frozenset(exclude) if exclude else frozenset()
-    exclude_paths = cli_excludes | cgrignore.exclude or None
-    unignore_paths: frozenset[str] | None = None
-    if interactive_setup:
-        unignore_paths = prompt_for_unignored_directories(repo_to_index, exclude)
-    else:
+    exclude_paths, unignore_paths = _resolve_exclude_settings(
+        repo_to_index,
+        exclude,
+        interactive_setup,
+        should_prompt=interactive_setup,
+    )
+    if not interactive_setup:
         _info(style(cs.CLI_MSG_AUTO_EXCLUDE, cs.Color.YELLOW))
-        unignore_paths = cgrignore.unignore or None
 
     try:
         ingestor = ProtobufFileIngestor(

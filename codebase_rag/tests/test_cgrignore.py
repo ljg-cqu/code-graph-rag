@@ -402,3 +402,49 @@ class TestCgrignoreLoadedWithoutInteractiveSetup:
         assert result.exit_code == 0, result.output
         mock_prompt.assert_not_called()
         mock_load_cgrignore.assert_called_once()
+
+    @patch("codebase_rag.cli.main_single_query")
+    @patch("codebase_rag.document.document_updater.DocumentGraphUpdater")
+    @patch("codebase_rag.cli._prompt_for_reindex", return_value=(False, True))
+    @patch(
+        "codebase_rag.cli._check_graph_freshness",
+        return_value=(True, False, ["document graph is stale"]),
+    )
+    @patch("codebase_rag.cli.load_cgrignore_patterns")
+    def test_start_freshness_doc_reindex_uses_merged_excludes(
+        self,
+        mock_load_cgrignore: MagicMock,
+        mock_check_graph_freshness: MagicMock,
+        mock_prompt_for_reindex: MagicMock,
+        mock_document_updater: MagicMock,
+        mock_main_single_query: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_load_cgrignore.return_value = CgrignorePatterns(
+            exclude=frozenset({"from_cgrignore"}),
+            unignore=frozenset({"keep/me"}),
+        )
+        mock_document_updater.return_value.run.return_value = {"indexed": 1}
+
+        result = self.runner.invoke(
+            app,
+            [
+                "start",
+                "--repo-path",
+                str(tmp_path),
+                "--with-docs",
+                "--ask-agent",
+                "status",
+                "--exclude",
+                "from_cli",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        mock_check_graph_freshness.assert_called_once_with(tmp_path, True, "default")
+        mock_prompt_for_reindex.assert_called_once()
+        updater_kwargs = mock_document_updater.call_args.kwargs
+        assert updater_kwargs["exclude_paths"] == frozenset(
+            {"from_cgrignore", "from_cli"}
+        )
+        assert updater_kwargs["unignore_paths"] == frozenset({"keep/me"})

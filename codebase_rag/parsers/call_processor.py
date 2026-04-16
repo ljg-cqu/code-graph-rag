@@ -317,45 +317,46 @@ class CallProcessor:
                 if self._resolver.should_skip_ahk_call(call_name):
                     continue
 
-            if (
-                language == cs.SupportedLanguage.JAVA
-                and call_node.type == cs.TS_METHOD_INVOCATION
-            ):
-                callee_info = self._resolver.resolve_java_method_call(
-                    call_node, module_qn, local_var_types
-                )
-            else:
-                callee_info = self._resolver.resolve_function_call(
-                    call_name, module_qn, local_var_types, class_context
-                )
-            if callee_info:
-                callee_type, callee_qn = callee_info
-            elif builtin_info := self._resolver.resolve_builtin_call(call_name):
-                callee_type, callee_qn = builtin_info
-                # Ensure builtin node exists in graph
-                self.ingestor.ensure_node(
-                    callee_type,
-                    {
-                        cs.KEY_QUALIFIED_NAME: callee_qn,
-                        cs.KEY_NAME: callee_qn.split(cs.SEPARATOR_DOT)[-1],
-                        cs.KEY_IS_BUILTIN: True,
-                    },
-                )
-            elif operator_info := self._resolver.resolve_cpp_operator_call(
+            builtin_info = None
+            if self._resolver.should_prioritize_builtin_resolution(call_name):
+                builtin_info = self._resolver.resolve_builtin_call(call_name)
+
+            operator_info = self._resolver.resolve_cpp_operator_call(
                 call_name, module_qn
-            ):
+            )
+
+            if builtin_info:
+                callee_type, callee_qn = builtin_info
+                self._ensure_builtin_node(callee_type, callee_qn)
+            elif operator_info:
                 callee_type, callee_qn = operator_info
-                # Ensure operator node exists in graph
-                self.ingestor.ensure_node(
-                    callee_type,
-                    {
-                        cs.KEY_QUALIFIED_NAME: callee_qn,
-                        cs.KEY_NAME: callee_qn.split(cs.SEPARATOR_DOT)[-1],
-                        cs.KEY_IS_BUILTIN: True,
-                    },
-                )
+                self._ensure_builtin_node(callee_type, callee_qn)
             else:
-                continue
+                if (
+                    language == cs.SupportedLanguage.JAVA
+                    and call_node.type == cs.TS_METHOD_INVOCATION
+                ):
+                    callee_info = self._resolver.resolve_java_method_call(
+                        call_node, module_qn, local_var_types
+                    )
+                else:
+                    callee_info = self._resolver.resolve_function_call(
+                        call_name, module_qn, local_var_types, class_context
+                    )
+
+                if callee_info:
+                    callee_type, callee_qn = callee_info
+                elif builtin_info := self._resolver.resolve_builtin_call(call_name):
+                    callee_type, callee_qn = builtin_info
+                    self._ensure_builtin_node(callee_type, callee_qn)
+                elif operator_info := self._resolver.resolve_cpp_operator_call(
+                    call_name, module_qn
+                ):
+                    callee_type, callee_qn = operator_info
+                    self._ensure_builtin_node(callee_type, callee_qn)
+                else:
+                    continue
+
             logger.debug(
                 ls.CALL_FOUND,
                 caller=caller_qn,
@@ -369,6 +370,16 @@ class CallProcessor:
                 cs.RelationshipType.CALLS,
                 (callee_type, cs.KEY_QUALIFIED_NAME, callee_qn),
             )
+
+    def _ensure_builtin_node(self, callee_type: str, callee_qn: str) -> None:
+        self.ingestor.ensure_node(
+            callee_type,
+            {
+                cs.KEY_QUALIFIED_NAME: callee_qn,
+                cs.KEY_NAME: callee_qn.split(cs.SEPARATOR_DOT)[-1],
+                cs.KEY_IS_BUILTIN: True,
+            },
+        )
 
     def _build_nested_qualified_name(
         self,

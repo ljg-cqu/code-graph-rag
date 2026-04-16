@@ -82,10 +82,7 @@ HELP_REPO_PATH_WATCH = "Path to the repository to watch."
 HELP_VERSION = "Show the version and exit."
 
 # Logging flags help text
-HELP_LOG_FILE = "Override default log file path"
 HELP_LOG_LEVEL = "Set log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)"
-HELP_NO_LOG_FILE = "Disable file logging entirely"
-HELP_DEBUG_LOGS = "Shortcut to enable DEBUG log level and console logging for troubleshooting"
 
 HELP_DEBOUNCE = "Debounce delay in seconds. Set to 0 to disable debouncing."
 HELP_MAX_WAIT = (
@@ -181,7 +178,7 @@ HELP_CHECK_FRESHNESS = (
     "Check if indexed graphs are up-to-date with repository. "
     "If stale, prompts to re-index. Disable with --no-check-freshness for faster startup."
 )
-HELP_INDEX_TIMEOUT = "Maximum seconds for indexing operations (default: 300s)"
+HELP_INDEX_TIMEOUT = "Maximum seconds for indexing operations (default: 3600s)"
 HELP_PARALLEL_WORKERS = "Maximum number of parallel sub-agents to use when the read-only parallel path is selected"
 HELP_AUTO_SPLIT = "Enable or disable automatic safe subtask preview and generation for parallel execution"
 HELP_NO_PARALLEL = "Force sequential execution for this session"

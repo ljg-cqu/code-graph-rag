@@ -264,6 +264,44 @@ class TestTryResolveViaTrie:
         assert result is not None
         assert result[1] == "proj.module.Class.method"
 
+    def test_skips_builtin_like_dotted_method_fallback(
+        self, call_resolver: CallResolver
+    ) -> None:
+        call_resolver.function_registry["proj.cache.EmbeddingCache.get"] = (
+            NodeType.METHOD
+        )
+
+        result = call_resolver._try_resolve_via_trie(
+            "import_processor.import_mapping.get",
+            "proj.parsers",
+        )
+        assert result is None
+
+    def test_skips_string_format_dotted_method_fallback(
+        self, call_resolver: CallResolver
+    ) -> None:
+        call_resolver.function_registry["proj.logging.Logger.format"] = NodeType.METHOD
+
+        result = call_resolver._try_resolve_via_trie(
+            "logs.MESSAGE.format",
+            "proj.logging",
+        )
+        assert result is None
+
+    def test_keeps_non_generic_dotted_method_fallback(
+        self, call_resolver: CallResolver
+    ) -> None:
+        call_resolver.function_registry[
+            "proj.tools.file_editor.FileEditor.replace_code_block"
+        ] = NodeType.METHOD
+
+        result = call_resolver._try_resolve_via_trie(
+            "file_editor.replace_code_block",
+            "proj.tools",
+        )
+        assert result is not None
+        assert result[1] == "proj.tools.file_editor.FileEditor.replace_code_block"
+
 
 class TestTryResolveWildcardImports:
     def test_resolves_wildcard_import(self, call_resolver: CallResolver) -> None:

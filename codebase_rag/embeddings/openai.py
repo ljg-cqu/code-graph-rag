@@ -156,6 +156,13 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
                 model=self.model_id,
             )
 
+    def close(self) -> None:
+        if self._client is not None:
+            self._client.close()
+            self._client = None
+        if self._fallback_provider is not None:
+            self._fallback_provider.close()
+
     def _make_request(self, texts: list[str], batch_size: int) -> list[list[float]]:
         """Make embedding request to OpenAI API.
 

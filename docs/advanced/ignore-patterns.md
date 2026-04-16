@@ -1,10 +1,10 @@
 ---
-description: "Configure .cgrignore to exclude directories from Code-Graph-RAG analysis."
+description: "Configure .cgrignore to exclude files or directories from Code-Graph-RAG analysis."
 ---
 
 # Ignore Patterns
 
-You can specify additional directories to exclude from analysis by creating a `.cgrignore` file in your repository root.
+You can specify additional files or directories to exclude from analysis by creating a `.cgrignore` file in your repository root.
 
 ## Format
 
@@ -13,15 +13,21 @@ You can specify additional directories to exclude from analysis by creating a `.
 vendor
 .custom_cache
 my_build_output
+docs/tree-sitter.txt
+*.txt
+*.pdf
+*.egg-info/
 ```
 
 ## Rules
 
-- One directory name per line
+- One pattern per line
 - Lines starting with `#` are comments
 - Blank lines are ignored
-- Patterns are exact directory name matches (not globs)
+- Patterns support exact paths, directory prefixes, and glob-style matches such as `*.txt` and `*.egg-info/`
+- Prefixing a pattern with `!` unignores matching paths
 - Patterns from `.cgrignore` are merged with `--exclude` flags and auto-detected directories
+- The same ignore rules are applied consistently to code indexing and document indexing
 
 ## Default Exclusions
 

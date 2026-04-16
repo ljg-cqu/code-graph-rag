@@ -14,9 +14,11 @@ from pathlib import Path
 from loguru import logger
 
 from .. import constants as cs
-from ..config import settings
+from .. import logs as ls
+from ..config import load_cgrignore_patterns, settings
 from ..embeddings import get_embedding_provider
 from ..services.graph_service import MemgraphIngestor
+from ..utils.path_utils import should_skip_path
 from .chunking import DocumentChunk, SemanticDocumentChunker
 from .error_handling import (
     DeadLetterQueue,
@@ -169,6 +171,8 @@ class DocumentGraphUpdater:
         repo_path: Path,
         batch_size: int = 1000,
         workspace: str = "default",
+        exclude_paths: frozenset[str] | None = None,
+        unignore_paths: frozenset[str] | None = None,
     ) -> None:
         self.host = host
         self.port = port
@@ -206,6 +210,21 @@ class DocumentGraphUpdater:
         self.version_cache = VersionCache(cgr_dir / "doc_versions.json")
         self.dead_letter_queue = DeadLetterQueue(cgr_dir / "doc_errors")
         self.chunker = SemanticDocumentChunker()
+
+        cgrignore = load_cgrignore_patterns(self.base_path)
+        combined_excludes = set(cgrignore.exclude)
+        if exclude_paths:
+            combined_excludes.update(exclude_paths)
+        self.exclude_paths = (
+            frozenset(combined_excludes) if combined_excludes else None
+        )
+
+        combined_unignores = set(cgrignore.unignore)
+        if unignore_paths:
+            combined_unignores.update(unignore_paths)
+        self.unignore_paths = (
+            frozenset(combined_unignores) if combined_unignores else None
+        )
 
         # Cache embedding provider to avoid recreation per document
         config = settings.active_embedding_config
@@ -296,100 +315,105 @@ class DocumentGraphUpdater:
             "chunks_created": 0,
         }
 
-        with MemgraphIngestor(
-            host=self.host,
-            port=self.port,
-            batch_size=self.batch_size,
-            connection_timeout=settings.DOC_MEMGRAPH_CONNECTION_TIMEOUT,
-        ) as ingestor:
-            ingestor.ensure_constraints()
-            self._ensure_vector_index(ingestor)
-            self._ensure_document_indexes(ingestor)
-            self._refresh_code_reference_index()
-            documents = self._collect_documents()
-            stats["total_documents"] = len(documents)
+        try:
+            with MemgraphIngestor(
+                host=self.host,
+                port=self.port,
+                batch_size=self.batch_size,
+                connection_timeout=settings.DOC_MEMGRAPH_CONNECTION_TIMEOUT,
+            ) as ingestor:
+                ingestor.ensure_constraints()
+                self._ensure_vector_index(ingestor)
+                self._ensure_document_indexes(ingestor)
+                self._refresh_code_reference_index()
+                documents = self._collect_documents()
+                self._delete_stale_documents(documents, ingestor)
+                stats["total_documents"] = len(documents)
 
-            logger.info(f"Found {len(documents)} documents to index")
+                total_documents = len(documents)
+                logger.info(f"Found {total_documents} documents to index")
 
-            for doc_path in documents:
-                try:
-                    result = self._process_document(doc_path, ingestor, force=force)
-                    if result == "indexed":
-                        stats["indexed"] += 1
-                    elif result == "skipped":
-                        stats["skipped"] += 1
-                except ExtractionException as e:
-                    logger.error(
-                        f"Failed to process {doc_path}: {type(e).__name__}: {e}"
+                for index, doc_path in enumerate(documents, start=1):
+                    logger.info(
+                        f"Indexing document {index}/{total_documents}: {doc_path}"
                     )
-                    stats["failed"] += 1
-                    # Remove stale version cache entry so retry will re-process
-                    self.version_cache.remove(str(doc_path))
                     try:
-                        self.dead_letter_queue.enqueue(e.to_extraction_error())
-                    except Exception as dlq_error:
-                        logger.warning(
-                            f"Could not enqueue error for {doc_path}: {dlq_error}"
+                        result = self._process_document(doc_path, ingestor, force=force)
+                        if result == "indexed":
+                            stats["indexed"] += 1
+                        elif result == "skipped":
+                            stats["skipped"] += 1
+                    except ExtractionException as e:
+                        logger.error(
+                            f"Failed to process {doc_path}: {type(e).__name__}: {e}"
                         )
+                        stats["failed"] += 1
+                        self.version_cache.remove(str(doc_path))
+                        try:
+                            self.dead_letter_queue.enqueue(e.to_extraction_error())
+                        except Exception as dlq_error:
+                            logger.warning(
+                                f"Could not enqueue error for {doc_path}: {dlq_error}"
+                            )
+                    except Exception as e:
+                        logger.error(
+                            f"Failed to process {doc_path}: {type(e).__name__}: {e}"
+                        )
+                        stats["failed"] += 1
+                        self.version_cache.remove(str(doc_path))
+                        try:
+                            self.dead_letter_queue.enqueue(
+                                ExtractionError(
+                                    path=str(doc_path),
+                                    error_type=self._map_error_type(e),
+                                    message=str(e),
+                                )
+                            )
+                        except Exception as dlq_error:
+                            logger.warning(
+                                f"Could not enqueue error for {doc_path}: {dlq_error}"
+                            )
+
+                try:
+                    ingestor.flush_all()
                 except Exception as e:
                     logger.error(
-                        f"Failed to process {doc_path}: {type(e).__name__}: {e}"
+                        f"Failed to flush batch to graph: {type(e).__name__}: {e}"
                     )
-                    stats["failed"] += 1
-                    # Remove stale version cache entry so retry will re-process
-                    self.version_cache.remove(str(doc_path))
-                    try:
-                        self.dead_letter_queue.enqueue(
-                            ExtractionError(
-                                path=str(doc_path),
-                                error_type=self._map_error_type(e),
-                                message=str(e),
-                            )
-                        )
-                    except Exception as dlq_error:
-                        logger.warning(
-                            f"Could not enqueue error for {doc_path}: {dlq_error}"
-                        )
+                    stats["failed"] += stats["indexed"]
+                    stats["indexed"] = 0
+                    self.version_cache.clear()
+                    raise
 
-            # Flush all pending nodes and relationships
+                try:
+                    section_result = ingestor.fetch_all(
+                        "MATCH (s:Section {workspace: $ws}) RETURN count(s) as count",
+                        {"ws": self.workspace},
+                    )
+                    chunk_result = ingestor.fetch_all(
+                        "MATCH (c:Chunk {workspace: $ws}) RETURN count(c) as count",
+                        {"ws": self.workspace},
+                    )
+                    if section_result and len(section_result) > 0:
+                        stats["sections_created"] = section_result[0].get("count", 0)
+                    if chunk_result and len(chunk_result) > 0:
+                        stats["chunks_created"] = chunk_result[0].get("count", 0)
+                except Exception as e:
+                    logger.warning(f"Could not query stats from graph: {e}")
+
+                try:
+                    logger.debug("Saving version cache to disk")
+                    self.version_cache.save()
+                except Exception as e:
+                    logger.warning(f"Could not save version cache: {e}")
+
+            logger.info(f"Document indexing complete: {stats}")
+            return stats
+        finally:
             try:
-                ingestor.flush_all()
+                self._embedding_provider.close()
             except Exception as e:
-                logger.error(f"Failed to flush batch to graph: {type(e).__name__}: {e}")
-                # Mark all indexed documents as failed since data wasn't persisted
-                stats["failed"] += stats["indexed"]
-                stats["indexed"] = 0
-                # Clear in-memory version cache to prevent stale skips on retry
-                self.version_cache.clear()
-                raise  # Re-raise to trigger context manager cleanup
-
-            # Query counts from graph for workspace-filtered stats
-            # Note: These are total counts for this workspace, not deltas from this run
-            try:
-                section_result = ingestor.fetch_all(
-                    "MATCH (s:Section {workspace: $ws}) RETURN count(s) as count",
-                    {"ws": self.workspace},
-                )
-                chunk_result = ingestor.fetch_all(
-                    "MATCH (c:Chunk {workspace: $ws}) RETURN count(c) as count",
-                    {"ws": self.workspace},
-                )
-                if section_result and len(section_result) > 0:
-                    stats["sections_created"] = section_result[0].get("count", 0)
-                if chunk_result and len(chunk_result) > 0:
-                    stats["chunks_created"] = chunk_result[0].get("count", 0)
-            except Exception as e:
-                logger.warning(f"Could not query stats from graph: {e}")
-
-            # Persist version cache to disk
-            try:
-                logger.debug("Saving version cache to disk")
-                self.version_cache.save()
-            except Exception as e:
-                logger.warning(f"Could not save version cache: {e}")
-
-        logger.info(f"Document indexing complete: {stats}")
-        return stats
+                logger.warning(f"Could not close embedding provider cleanly: {e}")
 
     async def run_async(self, force: bool = False) -> dict:
         """Async version of run() for concurrent processing."""
@@ -412,104 +436,115 @@ class DocumentGraphUpdater:
             await asyncio.to_thread(self._ensure_vector_index, ingestor)
             await asyncio.to_thread(self._ensure_document_indexes, ingestor)
             await asyncio.to_thread(self._refresh_code_reference_index)
-            documents = await asyncio.to_thread(self._collect_documents)
-            stats["total_documents"] = len(documents)
 
-            logger.info(f"Found {len(documents)} documents to index")
+            try:
+                async with MemgraphIngestor(
+                    host=self.host,
+                    port=self.port,
+                    batch_size=self.batch_size,
+                    connection_timeout=settings.DOC_MEMGRAPH_CONNECTION_TIMEOUT,
+                ) as ingestor:
+                    await asyncio.to_thread(ingestor.ensure_constraints)
+                    await asyncio.to_thread(self._ensure_vector_index, ingestor)
+                    await asyncio.to_thread(self._ensure_document_indexes, ingestor)
+                    await asyncio.to_thread(self._refresh_code_reference_index)
+                    documents = await asyncio.to_thread(self._collect_documents)
+                    await asyncio.to_thread(
+                        self._delete_stale_documents, documents, ingestor
+                    )
+                    stats["total_documents"] = len(documents)
 
-            # Process documents with async extraction but sequential graph writes
-            for doc_path in documents:
+                    total_documents = len(documents)
+                    logger.info(f"Found {total_documents} documents to index")
+
+                    for index, doc_path in enumerate(documents, start=1):
+                        logger.info(
+                            f"Indexing document {index}/{total_documents}: {doc_path}"
+                        )
+                        try:
+                            result = await self._process_document_async(
+                                doc_path, ingestor, force=force
+                            )
+                            if result == "indexed":
+                                stats["indexed"] += 1
+                            elif result == "skipped":
+                                stats["skipped"] += 1
+                        except ExtractionException as e:
+                            logger.error(
+                                f"Failed to process {doc_path}: {type(e).__name__}: {e}"
+                            )
+                            stats["failed"] += 1
+                            self.version_cache.remove(str(doc_path))
+                            try:
+                                self.dead_letter_queue.enqueue(e.to_extraction_error())
+                            except Exception as dlq_error:
+                                logger.warning(
+                                    f"Could not enqueue error for {doc_path}: {dlq_error}"
+                                )
+                        except Exception as e:
+                            logger.error(
+                                f"Failed to process {doc_path}: {type(e).__name__}: {e}"
+                            )
+                            stats["failed"] += 1
+                            self.version_cache.remove(str(doc_path))
+                            try:
+                                self.dead_letter_queue.enqueue(
+                                    ExtractionError(
+                                        path=str(doc_path),
+                                        error_type=self._map_error_type(e),
+                                        message=str(e),
+                                    )
+                                )
+                            except Exception as dlq_error:
+                                logger.warning(
+                                    f"Could not enqueue error for {doc_path}: {dlq_error}"
+                                )
+
+                    try:
+                        await asyncio.to_thread(ingestor.flush_all)
+                    except Exception as e:
+                        logger.error(
+                            f"Failed to flush batch to graph: {type(e).__name__}: {e}"
+                        )
+                        stats["failed"] += stats["indexed"]
+                        stats["indexed"] = 0
+                        self.version_cache.clear()
+                        raise
+
+                    try:
+                        section_result = await asyncio.to_thread(
+                            ingestor.fetch_all,
+                            "MATCH (s:Section {workspace: $ws}) RETURN count(s) as count",
+                            {"ws": self.workspace},
+                        )
+                        chunk_result = await asyncio.to_thread(
+                            ingestor.fetch_all,
+                            "MATCH (c:Chunk {workspace: $ws}) RETURN count(c) as count",
+                            {"ws": self.workspace},
+                        )
+                        if section_result and len(section_result) > 0:
+                            stats["sections_created"] = section_result[0].get("count", 0)
+                        if chunk_result and len(chunk_result) > 0:
+                            stats["chunks_created"] = chunk_result[0].get("count", 0)
+                    except Exception as e:
+                        logger.warning(f"Could not query stats from graph: {e}")
+
+                    try:
+                        logger.debug("Saving version cache to disk")
+                        await asyncio.to_thread(self.version_cache.save)
+                    except Exception as e:
+                        logger.warning(f"Could not save version cache: {e}")
+
+                logger.info(f"Document indexing complete: {stats}")
+                return stats
+            finally:
                 try:
-                    result = await self._process_document_async(
-                        doc_path, ingestor, force=force
-                    )
-                    if result == "indexed":
-                        stats["indexed"] += 1
-                    elif result == "skipped":
-                        stats["skipped"] += 1
-                except ExtractionException as e:
-                    logger.error(
-                        f"Failed to process {doc_path}: {type(e).__name__}: {e}"
-                    )
-                    stats["failed"] += 1
-                    # Remove stale version cache entry so retry will re-process
-                    self.version_cache.remove(str(doc_path))
-                    try:
-                        await asyncio.to_thread(
-                            self.dead_letter_queue.enqueue, e.to_extraction_error()
-                        )
-                    except Exception as dlq_error:
-                        logger.warning(
-                            f"Could not enqueue error for {doc_path}: {dlq_error}"
-                        )
+                    self._embedding_provider.close()
                 except Exception as e:
-                    logger.error(
-                        f"Failed to process {doc_path}: {type(e).__name__}: {e}"
-                    )
-                    stats["failed"] += 1
-                    # Remove stale version cache entry so retry will re-process
-                    self.version_cache.remove(str(doc_path))
-                    try:
-                        await asyncio.to_thread(
-                            self.dead_letter_queue.enqueue,
-                            ExtractionError(
-                                path=str(doc_path),
-                                error_type=self._map_error_type(e),
-                                message=str(e),
-                            ),
-                        )
-                    except Exception as dlq_error:
-                        logger.warning(
-                            f"Could not enqueue error for {doc_path}: {dlq_error}"
-                        )
-
-            # Flush all pending nodes and relationships
-            try:
-                await asyncio.to_thread(ingestor.flush_all)
-            except Exception as e:
-                logger.error(f"Failed to flush batch to graph: {type(e).__name__}: {e}")
-                # Mark all indexed documents as failed since data wasn't persisted
-                stats["failed"] += stats["indexed"]
-                stats["indexed"] = 0
-                # Clear in-memory version cache to prevent stale skips on retry
-                self.version_cache.clear()
-                raise  # Re-raise to trigger context manager cleanup
-
-            # Query counts from graph for workspace-filtered stats
-            # Note: These are total counts for this workspace, not deltas from this run
-            try:
-                section_result = await asyncio.to_thread(
-                    ingestor.fetch_all,
-                    "MATCH (s:Section {workspace: $ws}) RETURN count(s) as count",
-                    {"ws": self.workspace},
-                )
-                chunk_result = await asyncio.to_thread(
-                    ingestor.fetch_all,
-                    "MATCH (c:Chunk {workspace: $ws}) RETURN count(c) as count",
-                    {"ws": self.workspace},
-                )
-                if section_result and len(section_result) > 0:
-                    stats["sections_created"] = section_result[0].get("count", 0)
-                if chunk_result and len(chunk_result) > 0:
-                    stats["chunks_created"] = chunk_result[0].get("count", 0)
-            except Exception as e:
-                logger.warning(f"Could not query stats from graph: {e}")
-
-            # Persist version cache to disk
-            try:
-                logger.debug("Saving version cache to disk")
-                await asyncio.to_thread(self.version_cache.save)
-            except Exception as e:
-                logger.warning(f"Could not save version cache: {e}")
-
-        logger.info(f"Document indexing complete: {stats}")
-        return stats
+                    logger.warning(f"Could not close embedding provider cleanly: {e}")
 
     def _ensure_vector_index(self, ingestor: MemgraphIngestor) -> None:
         """Create vector index for Chunk embeddings.
-
-        Vector indexes enable efficient similarity search on embeddings.
-        Uses Memgraph's CREATE VECTOR INDEX syntax with capacity from config.
 
         Raises:
             ExtractionException: If embedding dimension is invalid (0 or negative).
@@ -590,6 +625,15 @@ class DocumentGraphUpdater:
                 logger.debug(f"Skipping file in excluded directory: {self.repo_path}")
                 return documents
 
+            if should_skip_path(
+                self.repo_path,
+                self.base_path,
+                exclude_paths=self.exclude_paths,
+                unignore_paths=self.unignore_paths,
+            ):
+                logger.debug(f"Skipping excluded document path: {self.repo_path}")
+                return documents
+
             # Security: Check extension
             if self.repo_path.suffix.lower() not in supported_extensions:
                 logger.debug(f"Skipping unsupported file type: {self.repo_path}")
@@ -603,7 +647,6 @@ class DocumentGraphUpdater:
                         f"Skipping symlink pointing outside repo: {self.repo_path}"
                     )
                     return documents
-
             documents.append(self.repo_path)
             return documents
 
@@ -612,6 +655,14 @@ class DocumentGraphUpdater:
             for doc_path in self.repo_path.rglob(f"*{ext}"):
                 # Check if any path component is in excluded directories
                 if self._is_excluded_path(doc_path):
+                    continue
+
+                if should_skip_path(
+                    doc_path,
+                    self.base_path,
+                    exclude_paths=self.exclude_paths,
+                    unignore_paths=self.unignore_paths,
+                ):
                     continue
 
                 # Check if path is a file
@@ -630,6 +681,52 @@ class DocumentGraphUpdater:
                 documents.append(doc_path)
 
         return documents
+
+    def _delete_stale_documents(
+        self, documents: list[Path], ingestor: MemgraphIngestor
+    ) -> int:
+        if not self.repo_path.is_dir():
+            return 0
+
+        current_paths = {str(doc_path) for doc_path in documents}
+        stored_documents = ingestor.fetch_all(
+            "MATCH (d:Document {workspace: $workspace}) RETURN d.path AS path",
+            {"workspace": self.workspace},
+        )
+
+        stale_paths: list[str] = []
+        for row in stored_documents:
+            stored_path = row.get("path")
+            if not isinstance(stored_path, str) or not stored_path:
+                continue
+            if not self._is_document_in_scope(stored_path):
+                continue
+            if stored_path in current_paths:
+                continue
+            stale_paths.append(stored_path)
+
+        for stale_path in stale_paths:
+            self._delete_document_nodes(stale_path, ingestor)
+            self.version_cache.remove(stale_path)
+
+        if stale_paths:
+            logger.info(
+                f"Removed {len(stale_paths)} stale documents from graph for workspace {self.workspace}"
+            )
+
+        return len(stale_paths)
+
+    def _is_document_in_scope(self, doc_path: str) -> bool:
+        stored_path = Path(doc_path)
+        if not stored_path.is_absolute():
+            return True
+
+        try:
+            stored_path.relative_to(self.base_path)
+        except ValueError:
+            return False
+
+        return True
 
     def _refresh_code_reference_index(self) -> None:
         self._code_reference_qns = set()
@@ -1176,9 +1273,7 @@ class DocumentGraphUpdater:
         if not chunks:
             # Fallback for empty documents
             if not doc.content or not doc.content.strip():
-                logger.warning(
-                    f"Document {doc.path} has no content, skipping embedding"
-                )
+                logger.warning(ls.DOC_EMBEDDING_NO_CONTENT.format(path=doc.path))
                 return ([], [])
             try:
                 doc_embedding = provider.embed(doc.content[:1000])
@@ -1210,30 +1305,80 @@ class DocumentGraphUpdater:
         ]
         if not non_empty_chunks:
             logger.warning(
-                f"All chunks in {doc.path} are empty or too small (<{MIN_CHUNK_TOKENS} tokens), "
-                "skipping embedding. Possible causes: missing pdfplumber/PyPDF2 for PDF text extraction, "
-                "or scanned/image-based PDF that requires OCR to extract text. Install PDF dependencies with: uv add pdfplumber"
+                ls.DOC_EMBEDDING_NO_VALID_CHUNKS.format(
+                    path=doc.path,
+                    min_tokens=MIN_CHUNK_TOKENS,
+                )
             )
             return ([], [])
 
         chunk_contents = [c.content for i, c in non_empty_chunks]
-        batch_size = settings.VECTOR_EMBEDDING_BATCH_SIZE
-        try:
-            embeddings = provider.embed_batch(chunk_contents, batch_size=batch_size)
-        except Exception as e:
-            raise ExtractionException(
-                path=doc.path,
-                error_type=ErrorType.EMBEDDING_ERROR,
-                message=f"Embedding batch generation failed: {type(e).__name__}: {e}",
-            ) from e
+        batch_size = max(1, settings.VECTOR_EMBEDDING_BATCH_SIZE)
+        chunk_count = len(non_empty_chunks)
+        total_tokens = sum(c.token_count for i, c in non_empty_chunks)
+        total_batches = math.ceil(chunk_count / batch_size)
 
-        # Validate embedding count matches non-empty chunk count
-        if len(embeddings) != len(non_empty_chunks):
-            raise ExtractionException(
-                path=doc.path,
-                error_type=ErrorType.EMBEDDING_ERROR,
-                message=f"Embedding provider returned {len(embeddings)} embeddings for {len(non_empty_chunks)} non-empty chunks",
+        if chunk_count >= 100:
+            logger.info(
+                ls.DOC_EMBEDDING_LARGE_DOCUMENT.format(
+                    path=doc.path,
+                    count=chunk_count,
+                    tokens=total_tokens,
+                )
             )
+        if total_batches > 1:
+            logger.info(
+                ls.DOC_EMBEDDING_BATCH_START.format(
+                    path=doc.path,
+                    count=chunk_count,
+                    batches=total_batches,
+                )
+            )
+
+        embeddings: list[list[float]] = []
+        log_interval = 1 if total_batches <= 20 else max(1, total_batches // 20)
+        for batch_index, start in enumerate(range(0, chunk_count, batch_size), start=1):
+            batch_contents = chunk_contents[start : start + batch_size]
+            try:
+                batch_embeddings = provider.embed_batch(
+                    batch_contents, batch_size=len(batch_contents)
+                )
+            except Exception as e:
+                raise ExtractionException(
+                    path=doc.path,
+                    error_type=ErrorType.EMBEDDING_ERROR,
+                    message=f"Embedding batch generation failed: {type(e).__name__}: {e}",
+                ) from e
+
+            if len(batch_embeddings) != len(batch_contents):
+                raise ExtractionException(
+                    path=doc.path,
+                    error_type=ErrorType.EMBEDDING_ERROR,
+                    message=(
+                        f"Embedding provider returned {len(batch_embeddings)} embeddings "
+                        f"for batch {batch_index} with {len(batch_contents)} chunks"
+                    ),
+                )
+
+            embeddings.extend(batch_embeddings)
+
+            should_log_progress = (
+                batch_index in {1, total_batches}
+                or batch_index % log_interval == 0
+            )
+            if total_batches > 1 and (
+                should_log_progress
+            ):
+                processed_chunks = start + len(batch_contents)
+                logger.info(
+                    ls.DOC_EMBEDDING_BATCH_PROGRESS.format(
+                        path=doc.path,
+                        batch=batch_index,
+                        total_batches=total_batches,
+                        processed=processed_chunks,
+                        count=chunk_count,
+                    )
+                )
 
         # Validate embedding quality (check for NaN, None, zero vectors, and dimension mismatch)
         expected_dimension = self._embedding_provider.dimension
@@ -1267,7 +1412,7 @@ class DocumentGraphUpdater:
             # Check for all-zero embedding (indicates failure)
             if all(v == 0.0 for v in embedding):
                 logger.warning(
-                    f"Embedding for chunk {i} is all zeros, may indicate embedding failure"
+                    ls.DOC_EMBEDDING_ZERO_VECTOR.format(index=i)
                 )
             validated_embeddings.append(embedding)
 

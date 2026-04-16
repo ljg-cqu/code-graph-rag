@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from codebase_rag import constants as cs
+from codebase_rag import logs as ls
 from codebase_rag.graph_updater import (
     BoundedASTCache,
     FunctionRegistryTrie,
@@ -92,6 +93,195 @@ class TestHashCacheIO:
 
 
 class TestIncrementalUpdates:
+    def test_process_files_uses_spawn_context_and_file_progress(
+        self, temp_repo: Path, mock_ingestor: MagicMock
+    ) -> None:
+        (temp_repo / "module_a.py").write_text("def func_a():\n    pass\n")
+        (temp_repo / "module_b.py").write_text("def func_b():\n    pass\n")
+
+        parsers, queries = load_parsers()
+        updater = GraphUpdater(
+            ingestor=mock_ingestor,
+            repo_path=temp_repo,
+            parsers=parsers,
+            queries=queries,
+        )
+
+        captured: dict[str, object] = {
+            "advances": [],
+            "descriptions": [],
+            "mp_context": None,
+            "total": None,
+        }
+
+        class FakeFuture:
+            def __init__(
+                self, result: tuple[list[dict[str, object]], list[dict[str, object]]]
+            ) -> None:
+                self._result = result
+
+            def result(self) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+                return self._result
+
+        class FakeExecutor:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                captured["mp_context"] = kwargs.get("mp_context")
+
+            def __enter__(self) -> "FakeExecutor":
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def submit(self, *args: object, **kwargs: object) -> FakeFuture:
+                chunk = args[1]
+                assert isinstance(chunk, list)
+                path = chunk[0]
+                assert isinstance(path, Path)
+                node_count = 3 if path.stem == "module_a" else 2
+                nodes = [
+                    {
+                        "label": cs.NodeLabel.FUNCTION,
+                        "props": {cs.KEY_QUALIFIED_NAME: f"pkg.{path.stem}.{idx}"},
+                        "file_path": str(path),
+                    }
+                    for idx in range(node_count)
+                ]
+                return FakeFuture((nodes, []))
+
+        class FakeProgress:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                return None
+
+            def __enter__(self) -> "FakeProgress":
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def add_task(self, description: str, total: int) -> str:
+                captured["total"] = total
+                return "task"
+
+            def advance(self, task: str, amount: int) -> None:
+                assert task == "task"
+                advances = captured["advances"]
+                assert isinstance(advances, list)
+                advances.append(amount)
+
+            def update(self, task: str, description: str) -> None:
+                assert task == "task"
+                descriptions = captured["descriptions"]
+                assert isinstance(descriptions, list)
+                descriptions.append(description)
+
+        with (
+            patch("codebase_rag.graph_updater.Progress", FakeProgress),
+            patch("codebase_rag.graph_updater.ProcessPoolExecutor", FakeExecutor),
+            patch(
+                "codebase_rag.graph_updater.as_completed",
+                side_effect=lambda futures: list(futures),
+            ),
+        ):
+            updater._process_files(force=True, num_workers=2)
+
+        mp_context = captured["mp_context"]
+        assert mp_context is not None
+        assert mp_context.get_start_method() == "spawn"
+        assert captured["total"] == 2
+        assert captured["advances"] == [0, 1, 1]
+        assert captured["descriptions"][-1] == ls.PROGRESS_FILES_PROCESSED.format(
+            count=2
+        )
+        assert mock_ingestor.ensure_node.call_count == 5
+
+    def test_process_files_splits_work_into_smaller_tasks(
+        self, temp_repo: Path, mock_ingestor: MagicMock
+    ) -> None:
+        for idx in range(9):
+            (temp_repo / f"module_{idx}.py").write_text("def func():\n    pass\n")
+
+        parsers, queries = load_parsers()
+        updater = GraphUpdater(
+            ingestor=mock_ingestor,
+            repo_path=temp_repo,
+            parsers=parsers,
+            queries=queries,
+        )
+
+        captured: dict[str, object] = {"chunk_sizes": []}
+
+        class FakeFuture:
+            def __init__(
+                self, result: tuple[list[dict[str, object]], list[dict[str, object]]]
+            ) -> None:
+                self._result = result
+
+            def result(self) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+                return self._result
+
+        class FakeExecutor:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                return None
+
+            def __enter__(self) -> "FakeExecutor":
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def submit(self, *args: object, **kwargs: object) -> FakeFuture:
+                chunk = args[1]
+                assert isinstance(chunk, list)
+                chunk_sizes = captured["chunk_sizes"]
+                assert isinstance(chunk_sizes, list)
+                chunk_sizes.append(len(chunk))
+                nodes = [
+                    {
+                        "label": cs.NodeLabel.FUNCTION,
+                        "props": {cs.KEY_QUALIFIED_NAME: f"pkg.{path.stem}"},
+                        "file_path": str(path),
+                    }
+                    for path in chunk
+                    if isinstance(path, Path)
+                ]
+                return FakeFuture((nodes, []))
+
+        class FakeProgress:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                return None
+
+            def __enter__(self) -> "FakeProgress":
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def add_task(self, description: str, total: int) -> str:
+                return "task"
+
+            def advance(self, task: str, amount: int) -> None:
+                return None
+
+            def update(self, task: str, description: str) -> None:
+                return None
+
+        with (
+            patch("codebase_rag.graph_updater.Progress", FakeProgress),
+            patch("codebase_rag.graph_updater.ProcessPoolExecutor", FakeExecutor),
+            patch(
+                "codebase_rag.graph_updater.as_completed",
+                side_effect=lambda futures: list(futures),
+            ),
+        ):
+            updater._process_files(force=True, num_workers=2)
+
+        chunk_sizes = captured["chunk_sizes"]
+        assert isinstance(chunk_sizes, list)
+        assert sum(chunk_sizes) == 9
+        assert len(chunk_sizes) > 2
+        assert max(chunk_sizes) < 5
+
     def test_unchanged_file_is_skipped(
         self, py_project: Path, mock_ingestor: MagicMock
     ) -> None:

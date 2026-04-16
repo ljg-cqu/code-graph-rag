@@ -1,5 +1,6 @@
 import hashlib
 import json
+import multiprocessing as mp
 import os
 import sys
 import traceback
@@ -498,7 +499,7 @@ class GraphUpdater:
         eligible_files = self._collect_eligible_files()
         new_hashes: FileHashCache = {}
         skipped_count = 0
-        changed_count = 0
+        changed_file_count = 0
 
         current_file_keys: set[str] = set()
         changed_files: list[Path] = []
@@ -550,14 +551,14 @@ class GraphUpdater:
                 f"Adjusted worker count from requested {num_workers} to {actual_workers} (available cores: {available_cores}, changed files: {len(changed_files)})"
             )
 
-        # Round-robin split of changed files into actual_workers chunks for balanced load
-        worker_chunks: list[list[Path]] = [[] for _ in range(actual_workers)]
+        worker_task_count = (
+            min(len(changed_files), actual_workers * 4) if changed_files else 1
+        )
+        task_chunks: list[list[Path]] = [[] for _ in range(worker_task_count)]
         for idx, file in enumerate(changed_files):
-            worker_chunks[idx % actual_workers].append(
-                file
-            )  # Perfect round-robin assignment
+            task_chunks[idx % worker_task_count].append(file)
 
-        processed_since_flush = 0
+        buffered_node_count_since_flush = 0
 
         with Progress(
             SpinnerColumn(),
@@ -570,19 +571,22 @@ class GraphUpdater:
             progress.advance(task, skipped_count)
 
             # Parallel processing with ProcessPoolExecutor (safe for CPU-bound tasks)
-            with ProcessPoolExecutor(max_workers=actual_workers) as executor:
+            with ProcessPoolExecutor(
+                max_workers=actual_workers,
+                mp_context=mp.get_context("spawn"),
+            ) as executor:
                 # Submit all worker chunks
-                futures = [
+                futures = {
                     executor.submit(
                         self._process_worker_chunk,
                         chunk,
                         self.repo_path,
                         self.factory.structure_processor.structural_elements,
                         self.project_name,
-                    )
-                    for chunk in worker_chunks
+                    ): len(chunk)
+                    for chunk in task_chunks
                     if chunk
-                ]
+                }
 
                 from .types_defs import NodeType
 
@@ -590,7 +594,8 @@ class GraphUpdater:
                 for future in as_completed(futures):
                     try:
                         node_results, rel_results = future.result()
-                        processed_count = 0
+                        processed_node_count = 0
+                        processed_file_count = futures[future]
 
                         for node_result in node_results:
                             label = node_result["label"]
@@ -598,7 +603,7 @@ class GraphUpdater:
                                 self.factory.definition_processor.process_dependencies(
                                     Path(node_result["file_path"])
                                 )
-                                processed_count += 1
+                                processed_node_count += 1
                                 continue
 
                             props = node_result["props"]
@@ -612,7 +617,7 @@ class GraphUpdater:
                                     self.simple_name_lookup[simple_name].add(qn)
                                 except ValueError:
                                     pass
-                            processed_count += 1
+                            processed_node_count += 1
 
                         for rel in rel_results:
                             self.ingestor.ensure_relationship_batch(
@@ -631,22 +636,27 @@ class GraphUpdater:
                             )
 
                         # Update progress and flush state periodically
-                        changed_count += processed_count
-                        progress.advance(task, processed_count)
+                        changed_file_count += processed_file_count
+                        progress.advance(task, processed_file_count)
                         progress.update(
                             task,
                             description=ls.PROGRESS_FILES_PROCESSED.format(
-                                count=changed_count
+                                count=changed_file_count
                             ),
                         )
 
-                        processed_since_flush += processed_count
-                        if processed_since_flush >= settings.FILE_FLUSH_INTERVAL:
+                        buffered_node_count_since_flush += processed_node_count
+                        if (
+                            buffered_node_count_since_flush
+                            >= settings.FILE_FLUSH_INTERVAL
+                        ):
                             logger.info(
-                                ls.PERIODIC_FLUSH.format(count=processed_since_flush)
+                                ls.PERIODIC_FLUSH.format(
+                                    count=buffered_node_count_since_flush
+                                )
                             )
                             self.ingestor.flush_all()
-                            processed_since_flush = 0
+                            buffered_node_count_since_flush = 0
 
                     except Exception as e:
                         logger.error(
@@ -676,8 +686,8 @@ class GraphUpdater:
 
         if skipped_count > 0:
             logger.info(ls.INCREMENTAL_SKIPPED, count=skipped_count)
-        if changed_count > 0:
-            logger.info(ls.INCREMENTAL_CHANGED, count=changed_count)
+        if changed_file_count > 0:
+            logger.info(ls.INCREMENTAL_CHANGED, count=changed_file_count)
 
         _save_hash_cache(cache_path, new_hashes)
 

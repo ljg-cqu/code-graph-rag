@@ -1,7 +1,65 @@
-from pathlib import Path
+from fnmatch import fnmatchcase
+from pathlib import Path, PurePosixPath
 
 from .. import constants as cs
 from ..config import settings
+
+
+def _directory_candidates(rel_path: PurePosixPath, *, is_dir: bool) -> tuple[str, ...]:
+    directory_path = rel_path if is_dir else rel_path.parent
+    if not directory_path.parts:
+        return ()
+
+    return tuple(
+        PurePosixPath(*directory_path.parts[: index + 1]).as_posix()
+        for index in range(len(directory_path.parts))
+    )
+
+
+def _matches_ignore_pattern(
+    rel_path: PurePosixPath,
+    pattern: str,
+    *,
+    is_dir: bool,
+) -> bool:
+    normalized = pattern.strip().replace("\\", "/")
+    if not normalized:
+        return False
+
+    is_anchored = normalized.startswith("/")
+    if is_anchored:
+        normalized = normalized.lstrip("/")
+
+    is_directory_pattern = normalized.endswith("/")
+    if is_directory_pattern:
+        normalized = normalized.rstrip("/")
+
+    if not normalized:
+        return False
+
+    rel_path_str = rel_path.as_posix()
+    directory_candidates = _directory_candidates(rel_path, is_dir=is_dir)
+
+    if is_directory_pattern:
+        if is_anchored:
+            return any(
+                fnmatchcase(candidate, normalized)
+                for candidate in directory_candidates
+            )
+
+        return any(
+            fnmatchcase(candidate, normalized)
+            or fnmatchcase(PurePosixPath(candidate).name, normalized)
+            for candidate in directory_candidates
+        )
+
+    candidates = {rel_path_str}
+    if not is_anchored:
+        candidates.add(rel_path.name)
+        candidates.update(rel_path.parts)
+        candidates.update(directory_candidates)
+
+    return any(fnmatchcase(candidate, normalized) for candidate in candidates)
 
 
 def should_skip_path(
@@ -13,18 +71,18 @@ def should_skip_path(
     if path.is_file() and path.suffix in cs.IGNORE_SUFFIXES:
         return True
     rel_path = path.relative_to(repo_path)
-    rel_path_str = rel_path.as_posix()
-    dir_parts = rel_path.parent.parts if path.is_file() else rel_path.parts
-    if exclude_paths and (
-        not exclude_paths.isdisjoint(dir_parts)
-        or rel_path_str in exclude_paths
-        or any(rel_path_str.startswith(f"{p}/") for p in exclude_paths)
+    pure_rel_path = PurePosixPath(rel_path.as_posix())
+    if exclude_paths and any(
+        _matches_ignore_pattern(pure_rel_path, pattern, is_dir=path.is_dir())
+        for pattern in exclude_paths
     ):
         return True
     if unignore_paths and any(
-        rel_path_str == p or rel_path_str.startswith(f"{p}/") for p in unignore_paths
+        _matches_ignore_pattern(pure_rel_path, pattern, is_dir=path.is_dir())
+        for pattern in unignore_paths
     ):
         return False
+    dir_parts = rel_path.parent.parts if path.is_file() else rel_path.parts
     return not cs.IGNORE_PATTERNS.isdisjoint(dir_parts)
 
 

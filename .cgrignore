@@ -12,8 +12,13 @@ __pycache__/
 /docs/tree-sitter.txt
 
 # Exclude other non-source files
+*.txt
+*.log
 *.pdf
 *.zip
 *.tar.gz
 *.rar
 *.7z
+optimize/EXPERT_PYTHON_PROGRAMMING_FOURTH_EDITION.pdf
+docs/tree-sitter.txt
+optimize/tree-sitter.txt

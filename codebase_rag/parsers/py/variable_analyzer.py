@@ -101,6 +101,9 @@ class PythonVariableAnalyzerMixin(_VarBase):
     def _infer_type_from_parameter_name(
         self, param_name: str, module_qn: str
     ) -> str | None:
+        if param_name in {cs.PY_KEYWORD_SELF, cs.PY_KEYWORD_CLS}:
+            return None
+
         logger.debug(lg.PY_TYPE_INFER_ATTEMPT, param=param_name, module=module_qn)
         available_class_names = self._collect_available_classes(module_qn)
         logger.debug(lg.PY_AVAILABLE_CLASSES, classes=available_class_names)

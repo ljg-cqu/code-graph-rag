@@ -505,60 +505,11 @@ class HealthChecker:
 
     def check_log_directory(self) -> HealthCheckResult:
         """Check if log directory exists and is writable"""
-        try:
-            log_path = Path(settings.LOG_FILE_PATH)
-            log_dir = log_path.parent
-
-            # Skip check if file logging is disabled
-            if not settings.LOG_TO_FILE:
-                return HealthCheckResult(
-                    name="Log directory check skipped",
-                    passed=True,
-                    message="File logging is disabled, skipping log directory check"
-                )
-
-            # Create directory if it doesn't exist
-            if not log_dir.exists():
-                try:
-                    log_dir.mkdir(parents=True, exist_ok=True)
-                    return HealthCheckResult(
-                        name="Log directory created",
-                        passed=True,
-                        message=f"Successfully created log directory at {log_dir}"
-                    )
-                except Exception as e:
-                    return HealthCheckResult(
-                        name="Log directory creation failed",
-                        passed=False,
-                        message=f"Failed to create log directory at {log_dir}",
-                        error=str(e)
-                    )
-
-            # Check if directory is writable
-            test_file = log_dir / ".cgr_write_test"
-            try:
-                test_file.touch()
-                test_file.unlink()
-                return HealthCheckResult(
-                    name="Log directory writable",
-                    passed=True,
-                    message=f"Log directory at {log_dir} is writable, log file path: {log_path}"
-                )
-            except Exception as e:
-                return HealthCheckResult(
-                    name="Log directory not writable",
-                    passed=False,
-                    message=f"Log directory at {log_dir} is not writable, file logging will fail",
-                    error=str(e)
-                )
-
-        except Exception as e:
-            return HealthCheckResult(
-                name="Log directory check failed",
-                passed=False,
-                message="Failed to check log directory configuration",
-                error=str(e)
-            )
+        return HealthCheckResult(
+            name="Log directory check skipped",
+            passed=True,
+            message="File logging is disabled, all logs go to terminal"
+        )
 
     def validate_ingestion_quality(
         self,

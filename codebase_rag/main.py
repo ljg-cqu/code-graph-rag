@@ -1881,22 +1881,9 @@ def _initialize_services_and_agent(
 def main_single_query(repo_path: str, batch_size: int, question: str) -> None:
     _setup_common_initialization(repo_path)
     # (H) Override logger to stderr so stdout is clean for scripted output
-    if settings.LOG_TO_CONSOLE:
-        logger.remove()
-        # Add console handler to stderr only, error level
-        logger.add(sys.stderr, level=cs.LOG_LEVEL_ERROR, format=cs.LOG_FORMAT)
-        # Re-add file handler if enabled
-        if settings.LOG_TO_FILE:
-            log_path = Path(settings.LOG_FILE_PATH)
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-            logger.add(
-                str(log_path),
-                level=settings.LOG_LEVEL,
-                rotation=settings.LOG_ROTATION,
-                retention=settings.LOG_RETENTION,
-                compression=settings.LOG_COMPRESSION,
-                enqueue=True,
-            )
+    logger.remove()
+    # Add console handler to stderr only, error level
+    logger.add(sys.stderr, level=cs.LOG_LEVEL_ERROR, format=cs.LOG_FORMAT)
 
     with connect_memgraph(batch_size) as ingestor:
         rag_agent, _, _ = _initialize_services_and_agent(repo_path, ingestor)

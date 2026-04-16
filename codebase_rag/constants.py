@@ -1781,6 +1781,22 @@ PYTHON_BUILTIN_PATTERNS: frozenset[str] = frozenset(
         "int",
         "float",
         "bool",
+        "len",
+        "isinstance",
+        "all",
+        "any",
+        "min",
+        "max",
+        "next",
+        "open",
+        "repr",
+        "format",
+        "Exception",
+    }
+)
+
+PYTHON_GENERIC_METHOD_PATTERNS: frozenset[str] = frozenset(
+    {
         "append",
         "extend",
         "pop",
@@ -1794,7 +1810,23 @@ PYTHON_BUILTIN_PATTERNS: frozenset[str] = frozenset(
         "items",
         "join",
         "split",
+        "splitlines",
         "strip",
+        "format",
+        "lower",
+        "count",
+        "replace",
+        "decode",
+        "read",
+        "write",
+        "read_text",
+        "write_text",
+        "read_bytes",
+        "mkdir",
+        "resolve",
+        "relative_to",
+        "exists",
+        "is_file",
     }
 )
 

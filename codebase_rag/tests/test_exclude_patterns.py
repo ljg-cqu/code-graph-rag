@@ -520,6 +520,15 @@ class TestUnignorePathsEdgeCases:
 
 
 class TestExcludePathsEdgeCases:
+    def test_exclude_glob_pattern_matches_txt_files(self, tmp_path: Path) -> None:
+        file_path = tmp_path / "benchmarks" / "results" / "bench_ast_cache.txt"
+        file_path.parent.mkdir(parents=True)
+        file_path.touch()
+
+        exclude_paths = frozenset({"*.txt"})
+
+        assert should_skip_path(file_path, tmp_path, exclude_paths=exclude_paths)
+
     def test_exclude_nested_path_pattern(self, tmp_path: Path) -> None:
         file_path = tmp_path / "lib" / "vendor" / "pkg" / "file.py"
         file_path.parent.mkdir(parents=True)
@@ -646,3 +655,16 @@ class TestDirectoryVsFileBehavior:
         file_path.touch()
 
         assert not should_skip_path(file_path, tmp_path)
+
+
+class TestGlobPatternsForDirectories:
+    def test_exclude_glob_directory_pattern_matches_nested_dirs(
+        self, tmp_path: Path
+    ) -> None:
+        file_path = tmp_path / "dist-info" / "pkg.egg-info" / "PKG-INFO"
+        file_path.parent.mkdir(parents=True)
+        file_path.touch()
+
+        exclude_paths = frozenset({"*.egg-info/"})
+
+        assert should_skip_path(file_path, tmp_path, exclude_paths=exclude_paths)

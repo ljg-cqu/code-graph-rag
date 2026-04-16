@@ -181,6 +181,18 @@ class TestOpenAIEmbeddingProvider:
 
         fallback_provider.embed_batch.assert_not_called()
 
+    def test_close_releases_http_client(self) -> None:
+        provider = get_embedding_provider(
+            "openai", "text-embedding-3-small", api_key="test-key"
+        )
+        mock_client = MagicMock()
+        provider._client = mock_client
+
+        provider.close()
+
+        mock_client.close.assert_called_once_with()
+        assert provider._client is None
+
 
 class TestOllamaEmbeddingProvider:
     """Tests for the Ollama embedding provider."""

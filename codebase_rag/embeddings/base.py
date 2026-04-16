@@ -94,6 +94,10 @@ class EmbeddingProvider(ABC):
         """Get a configuration value."""
         return self._config.get(key, default)
 
+    def close(self) -> None:
+        """Release any provider resources."""
+        return None
+
     def embed_batch_with_token_limit(
         self,
         texts: list[str],

@@ -37,6 +37,72 @@ def test_collect_documents_skips_internal_artifacts(tmp_path: Path) -> None:
     assert cgr_dir / "state.md" not in documents
 
 
+def test_collect_documents_respects_cgrignore_patterns(tmp_path: Path) -> None:
+    included = tmp_path / "guide.md"
+    included.write_text("# Guide\n", encoding="utf-8")
+
+    excluded_by_glob = tmp_path / "notes.txt"
+    excluded_by_glob.write_text("notes\n", encoding="utf-8")
+
+    excluded_by_exact = tmp_path / "docs" / "tree-sitter.pdf"
+    excluded_by_exact.parent.mkdir(parents=True)
+    excluded_by_exact.write_text("pdf placeholder\n", encoding="utf-8")
+
+    (tmp_path / ".cgrignore").write_text(
+        "*.txt\n/docs/tree-sitter.pdf\n",
+        encoding="utf-8",
+    )
+
+    provider = MagicMock()
+
+    with patch(
+        "codebase_rag.document.document_updater.get_embedding_provider",
+        return_value=provider,
+    ):
+        updater = DocumentGraphUpdater("localhost", 7688, tmp_path)
+
+    documents = updater._collect_documents()
+
+    assert included in documents
+    assert excluded_by_glob not in documents
+    assert excluded_by_exact not in documents
+
+
+def test_delete_stale_documents_removes_ignored_paths(tmp_path: Path) -> None:
+    included = tmp_path / "guide.md"
+    included.write_text("# Guide\n", encoding="utf-8")
+
+    ignored = tmp_path / "notes.txt"
+    ignored.write_text("notes\n", encoding="utf-8")
+
+    (tmp_path / ".cgrignore").write_text("*.txt\n", encoding="utf-8")
+
+    provider = MagicMock()
+
+    with patch(
+        "codebase_rag.document.document_updater.get_embedding_provider",
+        return_value=provider,
+    ):
+        updater = DocumentGraphUpdater("localhost", 7688, tmp_path)
+
+    ingestor = MagicMock()
+    ingestor.fetch_all.return_value = [
+        {"path": str(included)},
+        {"path": str(ignored)},
+        {"path": "/outside/workspace/other.md"},
+    ]
+
+    with (
+        patch.object(updater, "_delete_document_nodes") as delete_document_nodes,
+        patch.object(updater.version_cache, "remove") as remove_version_cache,
+    ):
+        removed = updater._delete_stale_documents([included], ingestor)
+
+    assert removed == 1
+    delete_document_nodes.assert_called_once_with(str(ignored), ingestor)
+    remove_version_cache.assert_called_once_with(str(ignored))
+
+
 def test_refresh_code_reference_index_builds_lookup(tmp_path: Path) -> None:
     provider = MagicMock()
 
@@ -182,6 +248,102 @@ def test_delete_document_nodes_uses_separate_linear_deletes(tmp_path: Path) -> N
     assert "CONTAINS_SECTION" not in queries[1]
     assert "qualified_name STARTS WITH $path_prefix" in queries[2]
     assert "qualified_name STARTS WITH $path_prefix" in queries[3]
+
+
+def test_prepare_embeddings_batches_large_documents(tmp_path: Path) -> None:
+    provider = MagicMock()
+    provider.dimension = 1
+    provider.embed_batch.side_effect = lambda texts, batch_size=32: [
+        [float(len(text))] for text in texts
+    ]
+
+    with patch(
+        "codebase_rag.document.document_updater.get_embedding_provider",
+        return_value=provider,
+    ):
+        updater = DocumentGraphUpdater("localhost", 7688, tmp_path)
+
+    doc = ExtractedDocument(
+        path="docs/guide.md",
+        file_type=".md",
+        content="content",
+        sections=[],
+        code_blocks=[],
+        code_references=[],
+        word_count=5,
+        modified_date="2026-04-15T00:00:00+00:00",
+    )
+    chunks = [
+        DocumentChunk(
+            content=f"chunk {index} content",
+            section_title="Guide",
+            start_line=index,
+            end_line=index,
+            token_count=20,
+            document_path="docs/guide.md",
+            chunk_index=index,
+        )
+        for index in range(5)
+    ]
+
+    with patch.object(settings, "VECTOR_EMBEDDING_BATCH_SIZE", 2):
+        chunks_list, embeddings = updater._prepare_embeddings(doc, chunks)
+
+    assert len(chunks_list) == 5
+    assert len(embeddings) == 5
+    assert provider.embed_batch.call_count == 3
+    assert [len(call.args[0]) for call in provider.embed_batch.call_args_list] == [2, 2, 1]
+    assert [call.kwargs["batch_size"] for call in provider.embed_batch.call_args_list] == [2, 2, 1]
+
+
+def test_prepare_embeddings_logs_large_documents_at_info(tmp_path: Path) -> None:
+    provider = MagicMock()
+    provider.dimension = 1
+    provider.embed_batch.side_effect = lambda texts, batch_size=32: [
+        [float(len(text))] for text in texts
+    ]
+
+    with patch(
+        "codebase_rag.document.document_updater.get_embedding_provider",
+        return_value=provider,
+    ):
+        updater = DocumentGraphUpdater("localhost", 7688, tmp_path)
+
+    doc = ExtractedDocument(
+        path="docs/large-guide.md",
+        file_type=".md",
+        content="content",
+        sections=[],
+        code_blocks=[],
+        code_references=[],
+        word_count=5,
+        modified_date="2026-04-15T00:00:00+00:00",
+    )
+    chunks = [
+        DocumentChunk(
+            content=f"chunk {index} content",
+            section_title="Guide",
+            start_line=index,
+            end_line=index,
+            token_count=20,
+            document_path="docs/large-guide.md",
+            chunk_index=index,
+        )
+        for index in range(100)
+    ]
+
+    with (
+        patch.object(settings, "VECTOR_EMBEDDING_BATCH_SIZE", 50),
+        patch("codebase_rag.document.document_updater.logger") as mock_logger,
+    ):
+        chunks_list, embeddings = updater._prepare_embeddings(doc, chunks)
+
+    assert len(chunks_list) == 100
+    assert len(embeddings) == 100
+    warning_messages = [call.args[0] for call in mock_logger.warning.call_args_list]
+    info_messages = [call.args[0] for call in mock_logger.info.call_args_list]
+    assert not any("generated 100 embedding chunks" in message for message in warning_messages)
+    assert any("generated 100 embedding chunks" in message for message in info_messages)
 
 
 def test_ensure_vector_index_recreates_mismatched_dimension() -> None:

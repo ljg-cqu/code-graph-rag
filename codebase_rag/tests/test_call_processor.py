@@ -328,6 +328,32 @@ class TestGetIifeTargetName:
 
 
 class TestResolveBuiltinCall:
+    def test_python_builtin_len(self, call_processor: CallProcessor) -> None:
+        result = call_processor._resolver.resolve_builtin_call("len")
+        assert result is not None
+        assert result[0] == cs.NodeLabel.FUNCTION
+        assert result[1] == f"{cs.BUILTIN_PREFIX}.python.len"
+
+    def test_python_builtin_isinstance(self, call_processor: CallProcessor) -> None:
+        result = call_processor._resolver.resolve_builtin_call("isinstance")
+        assert result is not None
+        assert result[0] == cs.NodeLabel.FUNCTION
+        assert result[1] == f"{cs.BUILTIN_PREFIX}.python.isinstance"
+
+    def test_python_dotted_builtin_lower(self, call_processor: CallProcessor) -> None:
+        result = call_processor._resolver.resolve_builtin_call("result.lower")
+        assert result is not None
+        assert result[0] == cs.NodeLabel.FUNCTION
+        assert result[1] == f"{cs.BUILTIN_PREFIX}.python.lower"
+
+    def test_python_dotted_builtin_format(self, call_processor: CallProcessor) -> None:
+        result = call_processor._resolver.resolve_builtin_call(
+            "logs.SOL_FOUND_MODIFIER.format"
+        )
+        assert result is not None
+        assert result[0] == cs.NodeLabel.FUNCTION
+        assert result[1] == f"{cs.BUILTIN_PREFIX}.python.format"
+
     def test_js_builtin_pattern_object_keys(
         self, call_processor: CallProcessor
     ) -> None:
@@ -384,6 +410,30 @@ class TestResolveBuiltinCall:
     def test_unknown_method_returns_none(self, call_processor: CallProcessor) -> None:
         result = call_processor._resolver.resolve_builtin_call("obj.unknownMethod")
         assert result is None
+
+
+class TestBuiltinResolutionPriority:
+    def test_prioritizes_exact_python_builtin(
+        self, call_processor: CallProcessor
+    ) -> None:
+        result = call_processor._resolver.should_prioritize_builtin_resolution("len")
+        assert result is True
+
+    def test_prioritizes_dotted_python_builtin(
+        self, call_processor: CallProcessor
+    ) -> None:
+        result = call_processor._resolver.should_prioritize_builtin_resolution(
+            "result.lower"
+        )
+        assert result is True
+
+    def test_does_not_prioritize_exact_generic_method(
+        self, call_processor: CallProcessor
+    ) -> None:
+        result = call_processor._resolver.should_prioritize_builtin_resolution(
+            "append"
+        )
+        assert result is False
 
 
 class TestResolveSuperCall:
