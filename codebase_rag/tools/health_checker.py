@@ -221,7 +221,8 @@ class HealthChecker:
         try:
             query = QueryGenerator().get_disconnected_nodes_query()
             conn = mgclient.connect(
-                host=settings.MEMGRAPH_HOST, port=settings.MEMGRAPH_PORT
+                host=settings.MEMGRAPH_HOST,
+                port=settings.MEMGRAPH_PORT,
             )
             cursor = conn.cursor()
             cursor.execute(query)
@@ -262,7 +263,8 @@ class HealthChecker:
         cursor = None
         try:
             conn = mgclient.connect(
-                host=settings.MEMGRAPH_HOST, port=settings.MEMGRAPH_PORT
+                host=settings.MEMGRAPH_HOST,
+                port=settings.MEMGRAPH_PORT,
             )
             cursor = conn.cursor()
             cursor.execute(cs.QUERY_GEN_REQUIRED_PROPS)
@@ -303,7 +305,8 @@ class HealthChecker:
         cursor = None
         try:
             conn = mgclient.connect(
-                host=settings.MEMGRAPH_HOST, port=settings.MEMGRAPH_PORT
+                host=settings.MEMGRAPH_HOST,
+                port=settings.MEMGRAPH_PORT,
             )
             cursor = conn.cursor()
             cursor.execute(

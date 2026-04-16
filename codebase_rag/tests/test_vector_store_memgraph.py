@@ -88,3 +88,28 @@ def test_store_single_reports_specific_recreate_command() -> None:
     assert stored == 0
     warning_message = mock_warning.call_args.args[0]
     assert "cgr vector recreate-indexes --code" in warning_message
+
+
+def test_get_stats_reports_capabilities_and_unavailable_stats_consistently() -> None:
+    backend = MemgraphBackend()
+    query_generator = MagicMock()
+    query_generator.capabilities.version = "3.8.1"
+    query_generator.capabilities.supports_vector_search = True
+    query_generator.capabilities.supports_vector_search_procedure = True
+    query_generator.capabilities.supports_vector_index = True
+    backend._query_generator = query_generator
+
+    with (
+        patch.object(backend, "_execute_query", side_effect=Exception("connection lost")),
+        patch.object(backend, "health_check", return_value=False),
+    ):
+        stats = backend.get_stats()
+
+    assert stats["backend"] == "memgraph"
+    assert stats["healthy"] is False
+    assert stats["stats_available"] is False
+    assert stats["vector_search_supported"] is True
+    assert stats["vector_search_procedure_supported"] is True
+    assert stats["vector_index_supported"] is True
+    assert stats["total_embeddings"] == 0
+

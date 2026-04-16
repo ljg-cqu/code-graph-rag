@@ -1,11 +1,4 @@
-"""
-Vector store module - backward compatible wrapper for dual backend support.
-
-This module provides backward-compatible functions that work with either
-Qdrant or Memgraph native vector storage, controlled by VECTOR_STORE_BACKEND setting.
-
-For direct backend access, use vector_backend.py module.
-"""
+"""Backward-compatible vector store helpers for Memgraph native vector storage."""
 
 from __future__ import annotations
 
@@ -15,10 +8,7 @@ from loguru import logger
 
 from . import logs as ls
 from .config import settings
-from .utils.dependencies import has_qdrant_client
 from .vector_backend import VectorBackend, close_shared_backend, get_shared_backend
-
-_RETRIEVE_BATCH_SIZE = 1000
 
 # Global backend instance for backward compatibility
 _BACKEND: VectorBackend | None = None
@@ -39,59 +29,10 @@ def close_vector_backend() -> None:
     _BACKEND = None
 
 
-# Backward compatibility: expose Qdrant-specific functions when backend is qdrant
-if has_qdrant_client():
-    from qdrant_client import QdrantClient
-    from qdrant_client.models import Distance, VectorParams
-
-    _CLIENT: QdrantClient | None = None
-
-    def close_qdrant_client() -> None:
-        """Close Qdrant client (backward compatibility)."""
-        global _CLIENT
-        if _CLIENT is not None:
-            _CLIENT.close()
-            _CLIENT = None
-        # Also close backend
-        close_vector_backend()
-
-    def get_qdrant_client() -> QdrantClient:
-        """Get Qdrant client directly (backward compatibility).
-
-        Note: For new code, use vector_backend.get_vector_backend() instead.
-        """
-        global _CLIENT
-        if _CLIENT is None:
-            if settings.QDRANT_URI:
-                _CLIENT = QdrantClient(url=settings.QDRANT_URI)
-            else:
-                _CLIENT = QdrantClient(path=settings.QDRANT_DB_PATH)
-            if not _CLIENT.collection_exists(settings.QDRANT_COLLECTION_NAME):
-                _CLIENT.create_collection(
-                    collection_name=settings.QDRANT_COLLECTION_NAME,
-                    vectors_config=VectorParams(
-                        size=settings.QDRANT_VECTOR_DIM, distance=Distance.COSINE
-                    ),
-                )
-        return _CLIENT
-
-else:
-
-    def close_qdrant_client() -> None:
-        """Close Qdrant client (no-op when qdrant not installed)."""
-        close_vector_backend()
-
-    def get_qdrant_client():
-        """Get Qdrant client (not available)."""
-        raise RuntimeError(
-            "Qdrant client not installed. Install with: pip install qdrant-client"
-        )
-
-
 def store_embedding(node_id: int, embedding: list[float], qualified_name: str) -> None:
     """Store a single embedding (backward compatibility).
 
-    Uses configured backend (Memgraph or Qdrant).
+    Uses the configured Memgraph backend.
     """
     store_embedding_batch([(node_id, embedding, qualified_name)])
 

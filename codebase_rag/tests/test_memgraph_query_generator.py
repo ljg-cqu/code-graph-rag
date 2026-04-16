@@ -48,11 +48,13 @@ def test_detect_capabilities_treats_missing_test_index_as_supported() -> None:
     connection = _FakeConnection(
         {
             "SHOW VERSION": (("version",), [("3.9.0",)]),
+            "SHOW VECTOR INDEX INFO": RuntimeError("syntax error"),
             "CALL vector_search.search": RuntimeError(
-                "Vector index 'test_index' doesn't exist."
+                "vector_search.search: Vector index test_index does not exist."
             ),
-            "SHOW INDEXES": (("name",), []),
-            "CREATE INDEX IF NOT EXISTS": RuntimeError("syntax error"),
+            "CREATE VECTOR INDEX __cgr_probe_vector_index IF NOT EXISTS": RuntimeError(
+                "syntax error"
+            ),
         }
     )
 
@@ -66,6 +68,7 @@ def test_detect_capabilities_marks_missing_procedure_as_unsupported() -> None:
     connection = _FakeConnection(
         {
             "SHOW VERSION": (("version",), [("3.9.0",)]),
+            "SHOW VECTOR INDEX INFO": RuntimeError("syntax error"),
             "CALL vector_search.search": RuntimeError(
                 "Procedure 'vector_search.search' doesn't exist."
             ),
@@ -75,8 +78,9 @@ def test_detect_capabilities_marks_missing_procedure_as_unsupported() -> None:
             "RETURN vector.cosine_similarity": RuntimeError(
                 "Function 'vector.cosine_similarity' doesn't exist."
             ),
-            "SHOW INDEXES": (("name",), []),
-            "CREATE INDEX IF NOT EXISTS": RuntimeError("syntax error"),
+            "CREATE VECTOR INDEX __cgr_probe_vector_index IF NOT EXISTS": RuntimeError(
+                "syntax error"
+            ),
         }
     )
 
@@ -84,3 +88,47 @@ def test_detect_capabilities_marks_missing_procedure_as_unsupported() -> None:
 
     assert capabilities.supports_vector_search_procedure is False
     assert capabilities.supports_vector_search is False
+
+
+def test_detect_capabilities_uses_vector_index_info_for_vector_index_support() -> None:
+    connection = _FakeConnection(
+        {
+            "SHOW VERSION": (("version",), [("3.9.0",)]),
+            "SHOW VECTOR INDEX INFO": (
+                ("index_name", "dimension"),
+                [("function_embedding_index", 768)],
+            ),
+            "CALL vector_search.search": (("similarity",), []),
+            "CREATE VECTOR INDEX __cgr_probe_vector_index IF NOT EXISTS": RuntimeError(
+                "syntax error"
+            ),
+        }
+    )
+
+    capabilities = MemgraphQueryGenerator(connection).capabilities
+
+    assert capabilities.supports_vector_index is True
+    assert capabilities.supports_vector_search_procedure is True
+
+
+def test_detect_capabilities_does_not_infer_vector_indexes_from_show_indexes() -> None:
+    connection = _FakeConnection(
+        {
+            "SHOW VERSION": (("version",), [("3.9.0",)]),
+            "SHOW VECTOR INDEX INFO": RuntimeError("syntax error at VECTOR"),
+            "CALL vector_search.search": RuntimeError(
+                "Procedure 'vector_search.search' doesn't exist."
+            ),
+            "RETURN cosine_similarity": RuntimeError(
+                "Function 'cosine_similarity' doesn't exist."
+            ),
+            "RETURN vector.cosine_similarity": RuntimeError(
+                "Function 'vector.cosine_similarity' doesn't exist."
+            ),
+            "SHOW INDEXES": (("name",), [("plain_index",)]),
+        }
+    )
+
+    capabilities = MemgraphQueryGenerator(connection).capabilities
+
+    assert capabilities.supports_vector_index is False

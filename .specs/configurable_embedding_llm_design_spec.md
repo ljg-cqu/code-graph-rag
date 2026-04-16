@@ -609,10 +609,9 @@ class AppConfig(BaseSettings):
     # NOTE: In-memory mutation of MEMGRAPH_VECTOR_DIM is non-persistent.
     # To make dimension changes permanent, set via environment variable.
     MEMGRAPH_VECTOR_DIM: int | None = None  # None = auto-detect from model
-    QDRANT_VECTOR_DIM: int | None = None  # DEPRECATED: Use VECTOR_DIMENSION instead
 
     # Unified vector dimension (recommended for new configurations)
-    VECTOR_DIMENSION: int | None = None  # Unified across all backends
+    VECTOR_DIMENSION: int | None = None  # Unified for Memgraph native vectors
 
     _active_embedding: EmbeddingConfig | None = None
 
@@ -708,7 +707,7 @@ class AppConfig(BaseSettings):
 
         Precedence order:
         1. VECTOR_DIMENSION (unified, recommended)
-        2. MEMGRAPH_VECTOR_DIM or QDRANT_VECTOR_DIM (backend-specific)
+        2. MEMGRAPH_VECTOR_DIM (backend-specific)
         3. Auto-detect from embedding model (if None sentinel)
 
         NOTE: In-memory mutation of MEMGRAPH_VECTOR_DIM is non-persistent.
@@ -722,12 +721,9 @@ class AppConfig(BaseSettings):
         if self.VECTOR_DIMENSION is not None:
             return self.VECTOR_DIMENSION
 
-        # 2. Backend-specific dimensions
-        backend = os.environ.get("VECTOR_STORE_BACKEND", "memgraph")
-        if backend == "memgraph" and self.MEMGRAPH_VECTOR_DIM is not None:
+        # 2. Backend-specific dimension
+        if self.MEMGRAPH_VECTOR_DIM is not None:
             return self.MEMGRAPH_VECTOR_DIM
-        if backend == "qdrant" and self.QDRANT_VECTOR_DIM is not None:
-            return self.QDRANT_VECTOR_DIM
 
         # 3. Auto-detect from model (None sentinel triggers detection)
         return self._get_model_dimension(
@@ -2233,7 +2229,7 @@ class TestEmbeddingProviderFactory:
 # test_embeddings_integration.py
 
 def test_embedding_with_memgraph_backend()
-def test_embedding_with_qdrant_backend()
+def test_embedding_dimension_override_with_memgraph_backend()
 def test_dimension_synced_with_vector_index()
 def test_embedding_cache_with_different_providers()
 def test_provider_switch_invalidates_cache()
@@ -2565,7 +2561,7 @@ class TestConfigPrecedence:
 | Undefined API key fallback hierarchy | Document `EMBEDDING_API_KEY` → `{PROVIDER}_API_KEY` |
 | `OLLAMA_BASE_URL` ignored for embeddings | Add fallback for Ollama provider |
 | Default detection unreliable | Use `None` as sentinel for auto-detect |
-| `QDRANT_VECTOR_DIM` not addressed | Unify or deprecate |
+| Backend-specific dimension naming not addressed | Standardize on `MEMGRAPH_VECTOR_DIM` and `VECTOR_DIMENSION` |
 | Dimension lookup not provider-aware | Add provider context to lookup |
 | In-memory mutation non-persistent | Document or require env var change |
 

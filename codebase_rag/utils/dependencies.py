@@ -4,7 +4,6 @@ import importlib.util
 from collections.abc import Sequence
 
 from codebase_rag.constants import (
-    MODULE_QDRANT_CLIENT,
     MODULE_TORCH,
     MODULE_TRANSFORMERS,
 )
@@ -26,10 +25,6 @@ def has_torch() -> bool:
 
 def has_transformers() -> bool:
     return _check_dependency(MODULE_TRANSFORMERS)
-
-
-def has_qdrant_client() -> bool:
-    return _check_dependency(MODULE_QDRANT_CLIENT)
 
 
 def has_semantic_dependencies() -> bool:

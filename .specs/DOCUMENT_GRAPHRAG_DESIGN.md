@@ -167,7 +167,7 @@ This specification defines the architecture for extending Code-Graph-RAG to supp
    - Providers: local, openai, google, ollama
 
 2. **Vector Backend Protocol** (`codebase_rag/vector_backend.py`)
-   - Protocol-based abstraction for Memgraph/Qdrant
+    - Protocol-based abstraction around Memgraph native vectors
    - Factory function `get_vector_backend()`
    - Shared backend via `get_shared_backend()`
 
@@ -422,15 +422,6 @@ services:
     volumes:
       - memgraph_doc_data:/var/lib/memgraph
       - ./memgraph/doc/init.cypherl:/docker-entrypoint-initdb.d/init.cypherl
-
-  # Vector Stores (optional, if using Qdrant instead of Memgraph native)
-  qdrant-code:
-    ports:
-      - "6333:6333"
-
-  qdrant-doc:
-    ports:
-      - "6335:6333"    # Host 6335 → Container 6333
 
 volumes:
   memgraph_code_data:
@@ -817,7 +808,7 @@ class QueryRouter:
 │  ┌─────────────────────────────────────────────────────────────────┐    │
 │  │  Step 3: Generate Embeddings (Reuse embeddings/ module)         │    │
 │  │  - Use existing EmbeddingProvider pattern                       │    │
-│  │  - Store in vector backend (Memgraph or Qdrant)                 │    │
+│  │  - Store in Memgraph native vectors                             │    │
 │  └─────────────────────────────────────────────────────────────────┘    │
 │           │                                                              │
 │           ▼                                                              │
@@ -2269,9 +2260,10 @@ class AppConfig(BaseSettings):
     @classmethod
     def validate_doc_vector_backend(cls, v: str) -> str:
         """Validate document vector backend is supported."""
-        allowed = {"memgraph", "qdrant"}
-        if v.lower() not in allowed:
-            raise ValueError(f"DOC_VECTOR_STORE_BACKEND must be one of: {allowed}")
+        if v.lower() != "memgraph":
+            raise ValueError(
+                "DOC_VECTOR_STORE_BACKEND must be 'memgraph'"
+            )
         return v.lower()
 ```
 
@@ -3130,9 +3122,8 @@ def parse_doc_extensions(cls, v: str | list[str]) -> list[str]:
 @classmethod
 def validate_doc_vector_backend(cls, v: str) -> str:
     """Validate document vector backend is supported."""
-    allowed = {"memgraph", "qdrant"}
-    if v.lower() not in allowed:
-        raise ValueError(f"DOC_VECTOR_STORE_BACKEND must be one of: {allowed}")
+    if v.lower() != "memgraph":
+        raise ValueError("DOC_VECTOR_STORE_BACKEND must be 'memgraph'")
     return v.lower()
 ```
 
@@ -3323,7 +3314,6 @@ STORAGES = {
     "NetworkXStorage": ".graph.networkx_impl",
     "Neo4JStorage": ".graph.neo4j_impl",
     "MemgraphStorage": ".graph.memgraph_impl",
-    "QdrantStorage": ".vector.qdrant_impl",
     # ...
 }
 

@@ -72,6 +72,10 @@ class GraphAlgorithms:
             "procedure" in message and "not found" in message
         )
 
+    @staticmethod
+    def _is_no_communities_error(error: Exception) -> bool:
+        return "no communities detected" in str(error).lower()
+
     def run_pagerank(self) -> int:
         """Run PageRank algorithm and store scores as node properties.
 
@@ -156,6 +160,18 @@ class GraphAlgorithms:
                         f"Skipping {name} community detection: procedure not available"
                     )
                     continue
+
+                if self._is_no_communities_error(e):
+                    if index < len(attempts) - 1:
+                        logger.info(
+                            f"{name} community detection produced no communities, trying {attempts[index + 1][0]}"
+                        )
+                        continue
+
+                    logger.info(
+                        f"{name} community detection produced no communities"
+                    )
+                    return 0
 
                 if index < len(attempts) - 1:
                     logger.warning(

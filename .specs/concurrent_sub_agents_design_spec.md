@@ -248,7 +248,7 @@ New environment variables and config options added to `AppConfig`:
 ## 11. Compatibility
 - Fully backward compatible: existing workflows without parallel flags continue to work unchanged
 - Works with all existing LLM providers (OpenAI, Google, Ollama)
-- Works with both Memgraph and Qdrant vector backends
+- Works with the Memgraph native vector backend
 - Compatible with existing MCP server integration (parallel sub-agent support available via MCP API)
 
 ## 12. Implementation Readiness Validation

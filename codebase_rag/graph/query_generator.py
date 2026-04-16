@@ -72,10 +72,10 @@ class MemgraphQueryGenerator:
         )
 
     def _is_missing_vector_index_error(self, error_message: str) -> bool:
-        missing_index_markers = (
-            "vector index",
-            "index",
-        )
+        if self._is_missing_procedure_error(error_message):
+            return False
+
+        missing_index_markers = ("vector index",)
         missing_markers = (
             "doesn't exist",
             "does not exist",
@@ -87,6 +87,18 @@ class MemgraphQueryGenerator:
             marker in error_message for marker in missing_markers
         )
 
+    @staticmethod
+    def _read_probe_dimension(value: object) -> int | None:
+        if not isinstance(value, int | str):
+            return None
+
+        try:
+            dimension = int(value)
+        except ValueError:
+            return None
+
+        return dimension if dimension > 0 else None
+
     def _detect_capabilities(self) -> MemgraphCapabilities:
         """Detect Memgraph version and supported features.
 
@@ -94,6 +106,8 @@ class MemgraphQueryGenerator:
             MemgraphCapabilities object with detected features.
         """
         capabilities = MemgraphCapabilities()
+        probe_index_name = "test_index"
+        probe_dimension = 2
 
         # Get Memgraph version
         try:
@@ -105,13 +119,36 @@ class MemgraphQueryGenerator:
             logger.warning(f"Failed to detect Memgraph version: {e}")
             capabilities.version = "unknown"
 
+        try:
+            vector_indexes = self._run_query("SHOW VECTOR INDEX INFO;")
+            capabilities.supports_vector_index = True
+            for index_info in vector_indexes:
+                index_name = index_info.get("index_name")
+                dimension = self._read_probe_dimension(index_info.get("dimension"))
+                if isinstance(index_name, str) and index_name:
+                    probe_index_name = index_name
+                    if dimension is not None:
+                        probe_dimension = dimension
+                    break
+        except Exception as e:
+            capabilities.supports_vector_index = False
+            logger.debug(f"Unable to confirm vector index support: {e}")
+
         # Check vector search procedure support (vector_search.search())
         try:
             test_query = """
-                CALL vector_search.search("test_index", 1, [1.0, 2.0])
+                CALL vector_search.search($index_name, 1, $probe_vector)
                 YIELD node, similarity
+                RETURN similarity
+                LIMIT 1
             """
-            self._run_query(test_query)
+            self._run_query(
+                test_query,
+                {
+                    "index_name": probe_index_name,
+                    "probe_vector": [0.0] * probe_dimension,
+                },
+            )
             capabilities.supports_vector_search_procedure = True
             capabilities.supports_vector_search = True
             logger.debug("Memgraph supports vector_search.search() procedure")
@@ -120,6 +157,7 @@ class MemgraphQueryGenerator:
             if self._is_missing_vector_index_error(error_str):
                 capabilities.supports_vector_search_procedure = True
                 capabilities.supports_vector_search = True
+                capabilities.supports_vector_index = True
                 logger.debug(
                     "Memgraph supports vector_search.search() procedure (probe hit missing test index)"
                 )
@@ -172,21 +210,20 @@ class MemgraphQueryGenerator:
             except Exception:
                 capabilities.supports_l2_distance = False
 
-        # Check vector index support
-        try:
-            self._run_query("SHOW INDEXES")
-            capabilities.supports_vector_index = True
-        except Exception:
-            capabilities.supports_vector_index = False
-
         # Check IF NOT EXISTS support for index creation
         if capabilities.supports_vector_index:
             try:
-                # Test with a dummy index, clean up after
                 self._run_query(
-                    "CREATE INDEX IF NOT EXISTS test_dummy_index ON :Test(prop)"
+                    """
+                    CREATE VECTOR INDEX __cgr_probe_vector_index IF NOT EXISTS
+                    ON :__CgrProbe(__embedding)
+                    WITH CONFIG {
+                        \"dimension\": 2,
+                        \"similarity_metric\": \"cos\",
+                        \"capacity\": 10
+                    }
+                    """
                 )
-                self._run_query("DROP INDEX test_dummy_index IF EXISTS")
                 capabilities.supports_if_not_exists_index = True
                 logger.debug("Memgraph supports IF NOT EXISTS for index creation")
             except Exception:
@@ -194,6 +231,11 @@ class MemgraphQueryGenerator:
                 logger.debug(
                     "Memgraph does not support IF NOT EXISTS for index creation"
                 )
+            finally:
+                try:
+                    self._run_query("DROP VECTOR INDEX __cgr_probe_vector_index;")
+                except Exception:
+                    pass
 
         return capabilities
 
@@ -360,7 +402,8 @@ class QueryGenerator:
         cursor = None
         try:
             conn = _mgclient.connect(
-                host=settings.MEMGRAPH_HOST, port=settings.MEMGRAPH_PORT
+                host=settings.MEMGRAPH_HOST,
+                port=settings.MEMGRAPH_PORT,
             )
             cursor = conn.cursor()
 

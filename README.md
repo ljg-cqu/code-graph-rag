@@ -60,7 +60,7 @@ An accurate Retrieval-Augmented Generation (RAG) system that analyzes multi-lang
 
 ## 🚀 Features
 
-- **⚡ Memgraph Native Vector Storage**: No external vector database required! All embeddings are stored directly on graph nodes for atomic hybrid vector+graph queries, eliminating cross-service latency and data duplication. 40-70% faster retrieval than separate Qdrant deployments.
+- **⚡ Memgraph Native Vector Storage**: No external vector database required. All embeddings are stored directly on graph nodes for atomic hybrid vector+graph queries, eliminating cross-service latency and data duplication.
 - **🧠 Graph Algorithm Integration**: Automatic post-ingestion algorithm runs improve retrieval relevance:
   - PageRank calculation identifies important code entities (core classes, frequently called functions) for better ranking
   - Leiden/Louvain community detection groups related code entities for global architecture analysis

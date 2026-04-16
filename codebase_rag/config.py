@@ -6,18 +6,6 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal, TypedDict, Unpack
 
-
-def get_default_log_path() -> str:
-    """Get OS-specific default log file path"""
-    if sys.platform == "win32":
-        appdata = os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
-        return str(Path(appdata) / "cgr" / "cgr.log")
-    elif sys.platform == "darwin":
-        return str(Path.home() / "Library" / "Caches" / "cgr" / "cgr.log")
-    else:  # Linux/Unix
-        return str(Path.home() / ".cache" / "cgr" / "cgr.log")
-
-
 from dotenv import load_dotenv
 from loguru import logger
 from pydantic import Field, field_validator
@@ -29,6 +17,17 @@ from . import logs
 from .types_defs import CgrignorePatterns, EmbeddingConfigKwargs, ModelConfigKwargs
 
 load_dotenv()
+
+
+def get_default_log_path() -> str:
+    """Get OS-specific default log file path"""
+    if sys.platform == "win32":
+        appdata = os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
+        return str(Path(appdata) / "cgr" / "cgr.log")
+    elif sys.platform == "darwin":
+        return str(Path.home() / "Library" / "Caches" / "cgr" / "cgr.log")
+    else:  # Linux/Unix
+        return str(Path.home() / ".cache" / "cgr" / "cgr.log")
 
 
 class ApiKeyInfoEntry(TypedDict):
@@ -249,8 +248,9 @@ class AppConfig(BaseSettings):
     MEMGRAPH_PASSWORD: str | None = None
     LAB_PORT: int = 3000
     MEMGRAPH_BATCH_SIZE: int = 1000
-    MEMGRAPH_QUERY_MAX_RETRIES: int = Field(default=2, ge=0)
+    MEMGRAPH_QUERY_MAX_RETRIES: int = Field(default=3, ge=0)
     MEMGRAPH_RETRY_BASE_DELAY: float = Field(default=0.25, gt=0)
+    MEMGRAPH_CONNECTION_TIMEOUT: int = Field(default=600, gt=0)
     MEMGRAPH_USE_DYNAMIC_ALGORITHMS: bool | None = None
     AGENT_RETRIES: int = 3
     ORCHESTRATOR_OUTPUT_RETRIES: int = 100
@@ -387,19 +387,8 @@ class AppConfig(BaseSettings):
     # Embedding cache (backend-agnostic)
     EMBEDDING_CACHE_DIR: str = "./.embedding_cache"
 
-    QDRANT_DB_PATH: str = (
-        "./.qdrant_code_embeddings"  # Legacy: used only when backend=qdrant
-    )
-    QDRANT_COLLECTION_NAME: str = "code_embeddings"
-    QDRANT_VECTOR_DIM: int = 768
-    QDRANT_TOP_K: int = 5
-    QDRANT_UPSERT_RETRIES: int = Field(default=3, gt=0)
-    QDRANT_RETRY_BASE_DELAY: float = Field(default=0.5, gt=0)
-    QDRANT_URI: str | None = None
-    QDRANT_BATCH_SIZE: int = Field(default=50, gt=0)
-
-    # Vector backend selection
-    VECTOR_STORE_BACKEND: str = "memgraph"  # Options: "memgraph" (default), "qdrant"
+    # Vector backend setting retained for compatibility; only Memgraph is supported
+    VECTOR_STORE_BACKEND: str = "memgraph"
 
     # Memgraph native vector settings
     MEMGRAPH_VECTOR_INDEX_NAME: str = "code_embeddings"
@@ -483,6 +472,7 @@ class AppConfig(BaseSettings):
     DOC_MEMGRAPH_VECTOR_DIM: int = 768
     DOC_MEMGRAPH_USE_DYNAMIC_ALGORITHMS: bool | None = None
     DOC_MEMGRAPH_MEMORY_LIMIT: str = "4GB"  # Memory limit for document graph container
+    DOC_MEMGRAPH_CONNECTION_TIMEOUT: int = Field(default=600, gt=0)
     DOC_MAX_CHUNKS_PER_DOCUMENT: int = (
         5000  # Maximum chunks per document to prevent memory exhaustion
     )
@@ -527,6 +517,7 @@ class AppConfig(BaseSettings):
     JSON_MEMGRAPH_VECTOR_DIM: int = 768
     JSON_MEMGRAPH_USE_DYNAMIC_ALGORITHMS: bool | None = None
     JSON_MEMGRAPH_MEMORY_LIMIT: str = "2GB"  # Memory limit for JSON graph container
+    JSON_MEMGRAPH_CONNECTION_TIMEOUT: int = Field(default=600, gt=0)
     JSON_LAB_PORT: int = 3002  # Memgraph Lab for JSON graph
     JSON_VECTOR_STORE_BACKEND: str = "memgraph"
     JSON_ENABLED: bool = True  # Master switch for JSON features
@@ -1088,14 +1079,24 @@ class AppConfig(BaseSettings):
             return [ext.strip().lower() for ext in v.split(",") if ext.strip()]
         return v
 
-    @field_validator("DOC_VECTOR_STORE_BACKEND")
+    @staticmethod
+    def _validate_memgraph_only_backend(value: str, field_name: str) -> str:
+        backend = value.lower()
+        if backend != "memgraph":
+            raise ValueError(
+                f"{field_name}={backend!r} is not supported. Only 'memgraph' is available."
+            )
+        return backend
+
+    @field_validator(
+        "VECTOR_STORE_BACKEND",
+        "DOC_VECTOR_STORE_BACKEND",
+        "JSON_VECTOR_STORE_BACKEND",
+    )
     @classmethod
-    def validate_doc_vector_backend(cls, v: str) -> str:
-        """Validate document vector backend is supported."""
-        allowed = {"memgraph", "qdrant"}
-        if v.lower() not in allowed:
-            raise ValueError(f"DOC_VECTOR_STORE_BACKEND must be one of: {allowed}")
-        return v.lower()
+    def validate_vector_backend(cls, v: str, info) -> str:
+        """Validate vector backend configuration matches the runtime backend."""
+        return cls._validate_memgraph_only_backend(v, info.field_name)
 
     @field_validator("DOC_MAX_FILE_SIZE_MB")
     @classmethod

@@ -210,23 +210,3 @@ def mock_updater(temp_repo: Path, mock_ingestor: MagicMock) -> MagicMock:
     mock.ast_cache = {}
 
     return mock
-
-
-@pytest.fixture(scope="session", autouse=True)
-def cleanup_qdrant_client() -> Generator[None, None, None]:
-    yield
-
-    try:
-        from codebase_rag.utils.dependencies import has_qdrant_client
-
-        if has_qdrant_client():
-            import codebase_rag.vector_store as vs
-
-            if vs._CLIENT is not None:
-                try:
-                    vs._CLIENT.close()
-                except Exception:
-                    pass
-                vs._CLIENT = None
-    except Exception:
-        pass

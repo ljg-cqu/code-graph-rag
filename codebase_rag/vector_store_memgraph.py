@@ -54,7 +54,7 @@ class MemgraphBackend(VectorBackend):
     built-in vector index for similarity search.
 
     Advantages:
-    - Single database (no separate Qdrant container)
+    - Single database for graph structure and vectors
     - Hybrid queries: vector search + graph traversal in one Cypher query
     - Lower latency: no cross-database coordination
     """
@@ -91,11 +91,13 @@ class MemgraphBackend(VectorBackend):
             port = settings.DOC_MEMGRAPH_PORT
             username = settings.DOC_MEMGRAPH_USERNAME
             password = settings.DOC_MEMGRAPH_PASSWORD
+            timeout = settings.DOC_MEMGRAPH_CONNECTION_TIMEOUT
         else:
             host = settings.MEMGRAPH_HOST
             port = settings.MEMGRAPH_PORT
             username = settings.MEMGRAPH_USERNAME
             password = settings.MEMGRAPH_PASSWORD
+            timeout = settings.MEMGRAPH_CONNECTION_TIMEOUT
 
         if username:
             conn = mgclient.connect(
@@ -612,6 +614,21 @@ class MemgraphBackend(VectorBackend):
 
     def get_stats(self) -> dict:
         """Return embedding statistics."""
+        capabilities = self.query_generator.capabilities
+        base_stats = {
+            "backend": "memgraph",
+            "healthy": self.health_check(),
+            "stats_available": False,
+            "is_document_backend": self.is_document,
+            "memgraph_version": capabilities.version,
+            "vector_search_supported": capabilities.supports_vector_search,
+            "vector_search_procedure_supported": capabilities.supports_vector_search_procedure,
+            "vector_index_supported": capabilities.supports_vector_index,
+            "total_embeddings": 0,
+            "node_types": 0,
+            "dimension": 0,
+            "models": [],
+        }
         cypher = """
         MATCH (n)
         WHERE n.embedding IS NOT NULL
@@ -626,15 +643,16 @@ class MemgraphBackend(VectorBackend):
             results = self._execute_query(cypher)
             if results:
                 return {
-                    "backend": "memgraph",
+                    **base_stats,
+                    "stats_available": True,
                     "total_embeddings": results[0].get("total_embeddings", 0),
                     "node_types": results[0].get("node_types", 0),
                     "dimension": results[0].get("max_dimension", 0),
                     "models": results[0].get("models", []),
                 }
-        except Exception:
-            pass
-        return {"backend": "memgraph", "total_embeddings": 0}
+        except Exception as e:
+            return {**base_stats, "stats_error": str(e)}
+        return base_stats
 
     def health_check(self) -> bool:
         """Check if Memgraph connection is healthy."""

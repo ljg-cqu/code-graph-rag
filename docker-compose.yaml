@@ -7,7 +7,10 @@ services:
     ports:
       - "${MEMGRAPH_PORT:-7687}:7687"
       - "${MEMGRAPH_HTTP_PORT:-7444}:7444"
-    command: ["--schema-info-enabled", "--also-log-to-stderr"]
+    command: [
+      "--schema-info-enabled",
+      "--also-log-to-stderr"
+    ]
     environment:
       - MEMGRAPH_MEMORY_LIMIT=${MEMGRAPH_MEMORY_LIMIT:-4GB}
     volumes:
@@ -34,7 +37,10 @@ services:
     image: memgraph/memgraph-mage:latest
     ports:
       - "${DOC_MEMGRAPH_PORT:-7688}:7687"
-    command: ["--schema-info-enabled", "--also-log-to-stderr"]
+    command: [
+      "--schema-info-enabled",
+      "--also-log-to-stderr"
+    ]
     environment:
       - MEMGRAPH_MEMORY_LIMIT=${DOC_MEMGRAPH_MEMORY_LIMIT:-4GB}
     volumes:
@@ -61,7 +67,10 @@ services:
     image: memgraph/memgraph-mage:latest
     ports:
       - "${JSON_MEMGRAPH_PORT:-7689}:7687"
-    command: ["--schema-info-enabled", "--also-log-to-stderr"]
+    command: [
+      "--schema-info-enabled",
+      "--also-log-to-stderr"
+    ]
     environment:
       - MEMGRAPH_MEMORY_LIMIT=${JSON_MEMGRAPH_MEMORY_LIMIT:-2GB}
     volumes:

@@ -157,7 +157,6 @@ class DocumentGraphUpdater:
             ".pytest_cache",
             ".ruff_cache",
             ".cgr",
-            ".qdrant_code_embeddings",
             ".embedding_cache",
             "grammars",  # Tree-sitter grammar submodules (not user code)
         }
@@ -301,6 +300,7 @@ class DocumentGraphUpdater:
             host=self.host,
             port=self.port,
             batch_size=self.batch_size,
+            connection_timeout=settings.DOC_MEMGRAPH_CONNECTION_TIMEOUT,
         ) as ingestor:
             ingestor.ensure_constraints()
             self._ensure_vector_index(ingestor)
@@ -406,6 +406,7 @@ class DocumentGraphUpdater:
             host=self.host,
             port=self.port,
             batch_size=self.batch_size,
+            connection_timeout=settings.DOC_MEMGRAPH_CONNECTION_TIMEOUT,
         ) as ingestor:
             await asyncio.to_thread(ingestor.ensure_constraints)
             await asyncio.to_thread(self._ensure_vector_index, ingestor)
@@ -641,6 +642,7 @@ class DocumentGraphUpdater:
                 batch_size=self.batch_size,
                 username=settings.MEMGRAPH_USERNAME,
                 password=settings.MEMGRAPH_PASSWORD,
+                connection_timeout=settings.MEMGRAPH_CONNECTION_TIMEOUT,
             ) as code_ingestor:
                 rows = code_ingestor.fetch_all(
                     """
@@ -1485,6 +1487,7 @@ class DocumentGraphUpdater:
                 host=self.host,
                 port=self.port,
                 batch_size=self.batch_size,
+                connection_timeout=settings.DOC_MEMGRAPH_CONNECTION_TIMEOUT,
             ) as ingestor:
                 ingestor.ensure_constraints()
                 result = self._process_document(file_path, ingestor, force=True)
@@ -1514,6 +1517,7 @@ def migrate_section_count_property(
     host: str = "localhost",
     port: int = 7688,
     workspace: str = "default",
+    connection_timeout: int | None = None,
 ) -> dict:
     """
     Migrate old 'section_count' property to 'total_section_count' on Document nodes.
@@ -1529,13 +1533,18 @@ def migrate_section_count_property(
         host: Memgraph host
         port: Memgraph port
         workspace: Workspace to migrate (default: all workspaces if None)
+        connection_timeout: Connection timeout in seconds (uses default if None)
 
     Returns:
         Dict with migration statistics
     """
     stats = {"migrated": 0, "cleaned": 0, "errors": 0}
 
-    with MemgraphIngestor(host=host, port=port) as ingestor:
+    # Use configured timeout if not provided
+    if connection_timeout is None:
+        connection_timeout = settings.DOC_MEMGRAPH_CONNECTION_TIMEOUT
+
+    with MemgraphIngestor(host=host, port=port, connection_timeout=connection_timeout) as ingestor:
         # Case 1: Documents with only old property -> rename to new
         if workspace:
             query1 = """

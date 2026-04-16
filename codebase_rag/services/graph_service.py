@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import socket
 import threading
 import time
 import types
@@ -86,6 +87,9 @@ class MemgraphIngestor:
         "_rel_count",
         "_rel_groups",
         "_dynamic_algorithms_supported",
+        "_connection_timeout",
+        "_last_health_check",
+        "_health_check_interval",
         "batch_size",
         "conn",
         "node_buffer",
@@ -99,6 +103,7 @@ class MemgraphIngestor:
         username: str | None = None,
         password: str | None = None,
         use_merge: bool = True,
+        connection_timeout: int | None = None,
     ):
         self._host = host
         self._port = port
@@ -131,6 +136,9 @@ class MemgraphIngestor:
             tuple[str, str, str, str, str], list[RelBatchRow]
         ] = defaultdict(list)
         self._dynamic_algorithms_supported: bool | None = None
+        self._connection_timeout = connection_timeout
+        self._last_health_check = 0.0
+        self._health_check_interval = 30.0  # Check connection health every 30 seconds
 
     @property
     def dynamic_algorithms_enabled(self) -> bool:
@@ -269,6 +277,7 @@ class MemgraphIngestor:
 
     @contextmanager
     def _get_cursor(self) -> Generator[CursorProtocol, None, None]:
+        self._ensure_connection()
         if not self.conn:
             raise ConnectionError(ex.CONN)
         with self._conn_lock:
@@ -287,6 +296,42 @@ class MemgraphIngestor:
         return [
             dict[str, ResultValue](zip(column_names, row)) for row in cursor.fetchall()
         ]
+
+    def _check_connection_health(self) -> bool:
+        """Check if the current connection is still healthy.
+
+        Returns:
+            True if connection is healthy, False otherwise.
+        """
+        if not self.conn:
+            return False
+
+        # Skip health check if we've checked recently (within interval)
+        current_time = time.time()
+        if current_time - self._last_health_check < self._health_check_interval:
+            return True
+
+        try:
+            # Simple health check query
+            with self._get_cursor() as cursor:
+                cursor.execute("RETURN 1")
+                results = cursor.fetchall()
+                self._last_health_check = current_time
+                return bool(results and results[0][0] == 1)
+        except Exception:
+            # Connection is unhealthy
+            self._last_health_check = current_time
+            return False
+
+    def _ensure_connection(self) -> None:
+        """Ensure we have a healthy connection, reconnecting if necessary."""
+        if not self.conn or not self._check_connection_health():
+            if self.conn:
+                try:
+                    self.conn.close()
+                except Exception:
+                    pass
+            self.conn = self._create_connection()
 
     @classmethod
     def _is_retryable_memgraph_error(cls, error: Exception) -> bool:
@@ -385,6 +430,23 @@ class MemgraphIngestor:
         return []
 
     def _create_connection(self) -> mgclient.Connection:
+        """Create a new Memgraph connection with timeout configuration.
+
+        Sets up TCP keepalive and timeout to prevent connection drops during
+        long-running operations like document indexing.
+        """
+        # Get appropriate timeout based on connection type
+        timeout = self._connection_timeout
+        if timeout is None:
+            # Determine based on port
+            if self._port == settings.DOC_MEMGRAPH_PORT:
+                timeout = settings.DOC_MEMGRAPH_CONNECTION_TIMEOUT
+            elif self._port == settings.JSON_MEMGRAPH_PORT:
+                timeout = settings.JSON_MEMGRAPH_CONNECTION_TIMEOUT
+            else:
+                timeout = settings.MEMGRAPH_CONNECTION_TIMEOUT
+
+        # Create connection (timeout is configured server-side via Docker)
         if self._username is not None:
             conn = mgclient.connect(
                 host=self._host,
@@ -393,8 +455,64 @@ class MemgraphIngestor:
                 password=self._password,
             )
         else:
-            conn = mgclient.connect(host=self._host, port=self._port)
+            conn = mgclient.connect(
+                host=self._host, port=self._port
+            )
         conn.autocommit = True
+
+        # Configure TCP keepalive for long-running connections
+        try:
+            # Get the underlying socket from the connection
+            # This depends on mgclient implementation details
+            if hasattr(conn, "socket") or hasattr(conn, "_socket"):
+                sock = getattr(conn, "socket", getattr(conn, "_socket", None))
+                if sock:
+                    # Enable TCP keepalive
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                    # Set keepalive parameters (platform-specific)
+                    try:
+                        # TCP_KEEPIDLE (seconds before first keepalive probe)
+                        # TCP_KEEPINTVL (seconds between probes)
+                        # TCP_KEEPCNT (number of failed probes before dropping)
+                        sock.setsockopt(
+                            socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60
+                        )  # Start keepalive after 60 seconds
+                        sock.setsockopt(
+                            socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10
+                        )  # Probe every 10 seconds
+                        sock.setsockopt(
+                            socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 6
+                        )  # Drop after 6 failed probes (60s total idle timeout)
+                    except (OSError, AttributeError):
+                        # Some platforms may not support these options
+                        # Use platform-appropriate alternatives
+                        if hasattr(socket, "TCP_KEEPIDLE"):
+                            try:
+                                sock.setsockopt(
+                                    socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60
+                                )
+                            except OSError:
+                                pass
+                        if hasattr(socket, "TCP_KEEPINTVL"):
+                            try:
+                                sock.setsockopt(
+                                    socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10
+                                )
+                            except OSError:
+                                pass
+                        if hasattr(socket, "TCP_KEEPCNT"):
+                            try:
+                                sock.setsockopt(
+                                    socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 6
+                                )
+                            except OSError:
+                                pass
+        except (OSError, AttributeError) as e:
+            # Non-fatal: connection will still work, just without keepalive optimization
+            logger.debug(
+                f"Could not configure TCP keepalive for {self._host}:{self._port}: {e}"
+            )
+
         return conn
 
     def _execute_batch_on(

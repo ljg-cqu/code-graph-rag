@@ -1226,7 +1226,6 @@ IGNORE_PATTERNS = frozenset(
         ".nyc_output",
         ".pnpm-store",
         ".pytest_cache",
-        ".qdrant_code_embeddings",  # Legacy Qdrant storage
         ".embedding_cache",  # Backend-agnostic embedding cache
         ".ruff_cache",
         ".svn",
@@ -1387,7 +1386,6 @@ TEXT_UNKNOWN = "unknown"
 
 MODULE_TORCH = "torch"
 MODULE_TRANSFORMERS = "transformers"
-MODULE_QDRANT_CLIENT = "qdrant_client"
 
 SEMANTIC_DEPENDENCIES = (MODULE_TORCH, MODULE_TRANSFORMERS)
 ML_DEPENDENCIES = (MODULE_TORCH, MODULE_TRANSFORMERS)

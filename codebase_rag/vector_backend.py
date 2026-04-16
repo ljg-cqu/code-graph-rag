@@ -1,4 +1,4 @@
-"""Vector backend protocol and factory for dual backend support."""
+"""Vector backend protocol and factory for Memgraph vector storage."""
 
 from __future__ import annotations
 
@@ -7,12 +7,14 @@ from typing import Protocol, runtime_checkable
 
 from loguru import logger
 
+from .config import settings
+
 
 @runtime_checkable
 class VectorBackend(Protocol):
     """Protocol for vector storage backends.
 
-    Supports both Qdrant and Memgraph native vector storage.
+    The production backend is Memgraph native vector storage.
     """
 
     def initialize(self) -> None:
@@ -103,7 +105,7 @@ class VectorBackend(Protocol):
 def get_vector_backend(is_document: bool = False) -> VectorBackend:
     """Factory function to get configured vector backend.
 
-    Only Memgraph native vector storage is supported. Qdrant is deprecated and removed.
+    Memgraph native vector storage is the only supported backend.
 
     Args:
         is_document: If True, use document graph vector backend, else use code graph backend.
@@ -112,6 +114,15 @@ def get_vector_backend(is_document: bool = False) -> VectorBackend:
         VectorBackend instance (MemgraphBackend)
     """
     from .vector_store_memgraph import MemgraphBackend
+
+    configured_backend = (
+        settings.DOC_VECTOR_STORE_BACKEND if is_document else settings.VECTOR_STORE_BACKEND
+    ).strip().lower()
+    if configured_backend != "memgraph":
+        backend_scope = "DOC_VECTOR_STORE_BACKEND" if is_document else "VECTOR_STORE_BACKEND"
+        raise ValueError(
+            f"{backend_scope}={configured_backend!r} is not supported. Only 'memgraph' is available."
+        )
 
     logger.info(
         f"Using Memgraph native vector backend for {'document' if is_document else 'code'}"

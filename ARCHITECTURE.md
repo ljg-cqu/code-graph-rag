@@ -54,11 +54,11 @@
             │                   │                   │
             │                   │                   │
 ┌───────────▼───────┐  ┌────────▼───────┐  ┌───────▼──────────┐
-│  Memgraph DB      │  │ Vector Store   │  │   Parser System  │
+│  Memgraph DB      │  │ Native Vectors │  │   Parser System  │
 │  (Graph Database) │  │ (Embeddings)   │  │  (Tree-sitter)   │
-│  - Nodes/Edges    │  │ - Memgraph     │  │  - Multi-language│
-│  - Indexes        │  │ - Qdrant       │  │  - AST Cache     │
-│  - Vector Search  │  │ - Similarity   │  │  - FQN Registry  │
+│  - Nodes/Edges    │  │ - Vector Index │  │  - Multi-language│
+│  - Indexes        │  │ - Similarity   │  │  - AST Cache     │
+│  - Vector Search  │  │ - Hybrid Query │  │  - FQN Registry  │
 └───────────────────┘  └────────────────┘  └──────────────────┘
 ```
 
@@ -297,25 +297,12 @@
 │                      Vector Store Backend                            │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                      │
-│  Backend Selection (configurable):                                  │
-│  ┌──────────────────────────────────────────────────────────────┐  │
-│  │ VECTOR_STORE_BACKEND = "memgraph" (default) or "qdrant"      │  │
-│  └──────────────────────────────────────────────────────────────┘  │
-│                                                                      │
-│  Option 1: Memgraph Native Vectors                                  │
+│  Memgraph Native Vectors                                             │
 │  ┌──────────────────────────────────────────────────────────────┐  │
 │  │ - Vector index on Function/Method nodes                       │  │
 │  │ - 768-dimensional embeddings                                  │  │
 │  │ - Cosine similarity                                           │  │
 │  │ - Integrated with graph queries                               │  │
-│  └──────────────────────────────────────────────────────────────┘  │
-│                                                                      │
-│  Option 2: Qdrant Vector Database                                   │
-│  ┌──────────────────────────────────────────────────────────────┐  │
-│  │ - Separate Qdrant instance                                    │  │
-│  │ - Collection: code_embeddings                                 │  │
-│  │ - Payload: node_id, qualified_name                            │  │
-│  │ - Cosine distance                                             │  │
 │  └──────────────────────────────────────────────────────────────┘  │
 │                                                                      │
 │  Embedding Pipeline:                                                │
@@ -405,9 +392,7 @@
 │  │ - CYPHER_API_KEY                                             │  │
 │  │ - CYPHER_ENDPOINT                                            │  │
 │  │                                                               │  │
-│  │ Vector Store:                                                 │  │
-│  │ - VECTOR_STORE_BACKEND (memgraph/qdrant)                     │  │
-│  │ - QDRANT_URI, QDRANT_COLLECTION_NAME                         │  │
+│  │ Memgraph Vectors:                                             │  │
 │  │ - MEMGRAPH_VECTOR_* settings                                 │  │
 │  │                                                               │  │
 │  │ Session Behavior:                                             │  │
@@ -516,8 +501,7 @@
 │  - UnixCoder (Code embeddings)                                      │
 │                                                                      │
 │  Vector Storage:                                                    │
-│  - Memgraph native vectors (default)                                │
-│  - Qdrant (alternative)                                             │
+│  - Memgraph native vectors                                          │
 │                                                                      │
 │  Development Tools:                                                 │
 │  - uv (Package manager)                                             │
@@ -542,7 +526,7 @@
 6. **Trie-based Registry**: FunctionRegistryTrie for efficient qualified name lookups
 7. **Bounded Cache**: LRU cache with memory limits for AST nodes
 8. **Tool Approval Workflow**: Interactive confirmation for destructive operations
-9. **Multi-backend Support**: Vector store abstraction for Memgraph/Qdrant
+9. **Native Vector Integration**: Memgraph stores graph structure and embeddings together
 10. **Provider Pattern**: LLM provider abstraction for multiple AI backends
 
 ## Performance Optimizations

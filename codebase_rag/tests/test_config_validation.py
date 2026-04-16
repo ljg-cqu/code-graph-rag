@@ -1,7 +1,11 @@
+import os
+from unittest.mock import patch
+
 import pytest
+from pydantic import ValidationError
 
 from codebase_rag import constants as cs
-from codebase_rag.config import ModelConfig, format_missing_api_key_errors
+from codebase_rag.config import AppConfig, ModelConfig, format_missing_api_key_errors
 
 
 class TestValidateApiKey:
@@ -93,3 +97,20 @@ class TestFormatMissingApiKeyErrors:
         msg = format_missing_api_key_errors("OpenAI")
         assert "OPENAI_API_KEY" in msg
         assert "OpenAI" in msg
+
+
+class TestVectorBackendValidation:
+    @pytest.mark.parametrize(
+        ("field_name", "value"),
+        [
+            ("VECTOR_STORE_BACKEND", "unsupported-backend"),
+            ("DOC_VECTOR_STORE_BACKEND", "unsupported-backend"),
+            ("JSON_VECTOR_STORE_BACKEND", "unsupported-backend"),
+        ],
+    )
+    def test_vector_backends_are_memgraph_only(
+        self, field_name: str, value: str
+    ) -> None:
+        with patch.dict(os.environ, {field_name: value}, clear=False):
+            with pytest.raises(ValidationError, match="Only 'memgraph' is available"):
+                AppConfig(_env_file=None)  # ty: ignore[unknown-argument]
