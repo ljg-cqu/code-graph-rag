@@ -1,7 +1,12 @@
 """Tests for Pydantic schemas, especially QueryGraphData validator."""
 
 from codebase_rag.schemas import QueryGraphData, _normalize_value
-from codebase_rag.types_defs import RELATIONSHIP_SCHEMAS, NodeLabel, RelationshipType
+from codebase_rag.types_defs import (
+    NODE_SCHEMAS,
+    RELATIONSHIP_SCHEMAS,
+    NodeLabel,
+    RelationshipType,
+)
 
 
 class TestNormalizeValue:
@@ -120,6 +125,33 @@ class TestQueryGraphData:
 class TestRelationshipSchemas:
     """Tests for relationship schema consistency."""
 
+    def test_document_schema_matches_split_graph_metadata(self) -> None:
+        document_schema = None
+        for schema in NODE_SCHEMAS:
+            if schema.label == NodeLabel.DOCUMENT:
+                document_schema = schema
+                break
+
+        assert document_schema is not None
+        assert "path: string" in document_schema.properties
+        assert "workspace: string" in document_schema.properties
+        assert "resolved_code_references: list[string]" in document_schema.properties
+        assert "resolved_code_reference_count: int" in document_schema.properties
+        assert "qualified_name" not in document_schema.properties
+
+    def test_chunk_schema_includes_resolved_reference_metadata(self) -> None:
+        chunk_schema = None
+        for schema in NODE_SCHEMAS:
+            if schema.label == NodeLabel.CHUNK:
+                chunk_schema = schema
+                break
+
+        assert chunk_schema is not None
+        assert "token_count: int" in chunk_schema.properties
+        assert "section_title: string" in chunk_schema.properties
+        assert "resolved_code_references: list[string]" in chunk_schema.properties
+        assert "embedding: list[float]" in chunk_schema.properties
+
     def test_defines_includes_all_module_definitions(self) -> None:
         """DEFINES relationship should include all node types a Module can define."""
         defines_schema = None
@@ -144,8 +176,8 @@ class TestRelationshipSchemas:
             f"DEFINES targets mismatch. Expected: {expected_targets}, Got: {actual_targets}"
         )
 
-    def test_defines_method_includes_class_and_contract(self) -> None:
-        """DEFINES_METHOD relationship should include both Class and Contract as sources."""
+    def test_defines_method_includes_all_method_owners(self) -> None:
+        """DEFINES_METHOD should include every node type that can own methods."""
         defines_method_schema = None
         for schema in RELATIONSHIP_SCHEMAS:
             if schema.rel_type == RelationshipType.DEFINES_METHOD:
@@ -153,7 +185,12 @@ class TestRelationshipSchemas:
                 break
 
         assert defines_method_schema is not None
-        expected_sources = {NodeLabel.CLASS, NodeLabel.CONTRACT}
+        expected_sources = {
+            NodeLabel.CLASS,
+            NodeLabel.CONTRACT,
+            NodeLabel.INTERFACE,
+            NodeLabel.LIBRARY,
+        }
         actual_sources = set(defines_method_schema.sources)
         assert actual_sources == expected_sources, (
             f"DEFINES_METHOD sources mismatch. Expected: {expected_sources}, Got: {actual_sources}"
@@ -176,4 +213,21 @@ class TestRelationshipSchemas:
         )
         assert actual_targets == expected, (
             f"INHERITS targets mismatch. Expected: {expected}, Got: {actual_targets}"
+        )
+
+    def test_belongs_to_section_points_from_chunk_to_section(self) -> None:
+        belongs_to_section_schema = None
+        for schema in RELATIONSHIP_SCHEMAS:
+            if schema.rel_type == RelationshipType.BELONGS_TO_SECTION:
+                belongs_to_section_schema = schema
+                break
+
+        assert belongs_to_section_schema is not None
+        assert set(belongs_to_section_schema.sources) == {NodeLabel.CHUNK}
+        assert set(belongs_to_section_schema.targets) == {NodeLabel.SECTION}
+
+    def test_references_code_is_not_declared_in_split_graph_schema(self) -> None:
+        assert all(
+            schema.rel_type != RelationshipType.REFERENCES_CODE
+            for schema in RELATIONSHIP_SCHEMAS
         )

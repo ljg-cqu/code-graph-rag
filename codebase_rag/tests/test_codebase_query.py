@@ -161,6 +161,55 @@ class TestQueryCodebaseKnowledgeGraph:
         assert result.results == []
         assert "error" in result.summary.lower()
 
+    async def test_query_repairs_retryable_cypher_error(
+        self,
+        mock_ingestor: MagicMock,
+        mock_cypher_gen: MagicMock,
+        mock_console: Console,
+    ) -> None:
+        initial_query = "MATCH (f:File) WHERE NOT (f) RETURN f.path AS path LIMIT 50;"
+        repaired_query = (
+            "MATCH (f:File) OPTIONAL MATCH (f)-[r]-() "
+            "WITH f, count(r) AS rel_count "
+            "WHERE rel_count = 0 RETURN f.path AS path LIMIT 50;"
+        )
+        mock_cypher_gen.generate = AsyncMock(return_value=initial_query)
+        mock_cypher_gen.repair = AsyncMock(return_value=repaired_query)
+        mock_ingestor.fetch_all.side_effect = [
+            Exception("Invalid type vertex for 'NOT'."),
+            [{"path": "README.md"}],
+        ]
+
+        tool = create_query_tool(mock_ingestor, mock_cypher_gen, console=mock_console)
+        result = await tool.function(
+            natural_language_query="Find File nodes that have no relationships"
+        )
+
+        assert result.results == [{"path": "README.md"}]
+        assert result.query_used == repaired_query
+        mock_cypher_gen.repair.assert_called_once_with(
+            "Find File nodes that have no relationships",
+            initial_query,
+            "Invalid type vertex for 'NOT'.",
+        )
+        assert mock_ingestor.fetch_all.call_count == 2
+
+    async def test_query_does_not_repair_non_query_database_error(
+        self,
+        mock_ingestor: MagicMock,
+        mock_cypher_gen: MagicMock,
+        mock_console: Console,
+    ) -> None:
+        mock_cypher_gen.repair = AsyncMock()
+        mock_ingestor.fetch_all.side_effect = Exception("Database connection failed")
+
+        tool = create_query_tool(mock_ingestor, mock_cypher_gen, console=mock_console)
+        result = await tool.function(natural_language_query="Find functions")
+
+        assert result.results == []
+        assert "error" in result.summary.lower()
+        mock_cypher_gen.repair.assert_not_called()
+
 
 class TestQueryResultFormatting:
     async def test_result_contains_query_used(

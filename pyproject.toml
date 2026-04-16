@@ -82,8 +82,8 @@ exclude = ["*.tests", "*.tests.*"]
 
 [project.optional-dependencies]
 test = [
+    "anyio>=4.0.0",
     "pytest>=8.4.1",
-    "pytest-asyncio>=1.0.0",
     "pytest-cov>=4.0.0",
     "pytest-xdist>=3.8.0",
     "testcontainers>=4.9.0",
@@ -142,7 +142,6 @@ python-version = "3.12"
 exclude = ["codebase_rag/tests/test_cypher_queries.py", "codebase_rag/tests/test_code_retrieval.py", "codebase_rag/tests/test_call_resolver.py", "benchmarks/", "optimize/"]
 
 [tool.pytest.ini_options]
-asyncio_mode = "auto"
 testpaths = ["codebase_rag/tests"]
 norecursedirs = ["grammars", ".git", "__pycache__", "*.egg-info", ".venv", "venv"]
 python_files = ["test_*.py", "*_test.py"]
@@ -152,6 +151,7 @@ markers = [
     "slow: marks tests as slow (may download models or require external services)",
     "integration: marks tests as integration tests requiring Docker",
     "e2e: marks tests as end-to-end tests",
+    "anyio: marks tests that run with the AnyIO pytest plugin",
 ]
 
 [dependency-groups]

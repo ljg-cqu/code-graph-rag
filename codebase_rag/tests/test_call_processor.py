@@ -436,6 +436,94 @@ class TestBuiltinResolutionPriority:
         assert result is False
 
 
+class TestBuiltinCallRelationshipFiltering:
+    def test_skips_builtin_call_relationships_when_disabled(
+        self,
+        temp_repo: Path,
+        mock_ingestor: MagicMock,
+        call_processor: CallProcessor,
+        parsers_and_queries: tuple,
+    ) -> None:
+        parsers, queries = parsers_and_queries
+        if cs.SupportedLanguage.PYTHON not in parsers:
+            pytest.skip("Python parser not available")
+
+        code = """
+def outer(items):
+    return len(items)
+"""
+        test_file = temp_repo / "builtin_calls.py"
+        test_file.write_text(encoding="utf-8", data=code)
+
+        parser = parsers[cs.SupportedLanguage.PYTHON]
+        tree = parser.parse(code.encode(cs.ENCODING_UTF8))
+
+        with patch(
+            "codebase_rag.parsers.call_processor.settings.INCLUDE_BUILTIN_CALLS",
+            False,
+        ):
+            call_processor.process_calls_in_file(
+                test_file,
+                tree.root_node,
+                cs.SupportedLanguage.PYTHON,
+                queries,
+            )
+
+        builtin_qn = f"{cs.BUILTIN_PREFIX}.python.len"
+        rel_calls = mock_ingestor.ensure_relationship_batch.call_args_list
+        node_calls = mock_ingestor.ensure_node.call_args_list
+
+        assert any(
+            c[0][0] == cs.NodeLabel.FUNCTION
+            and c[0][1][cs.KEY_QUALIFIED_NAME] == builtin_qn
+            for c in node_calls
+        )
+        assert not any(
+            c[0][1] == cs.RelationshipType.CALLS and c[0][2][2] == builtin_qn
+            for c in rel_calls
+        )
+
+    def test_creates_builtin_call_relationships_when_enabled(
+        self,
+        temp_repo: Path,
+        mock_ingestor: MagicMock,
+        call_processor: CallProcessor,
+        parsers_and_queries: tuple,
+    ) -> None:
+        parsers, queries = parsers_and_queries
+        if cs.SupportedLanguage.PYTHON not in parsers:
+            pytest.skip("Python parser not available")
+
+        code = """
+def outer(items):
+    return len(items)
+"""
+        test_file = temp_repo / "builtin_calls.py"
+        test_file.write_text(encoding="utf-8", data=code)
+
+        parser = parsers[cs.SupportedLanguage.PYTHON]
+        tree = parser.parse(code.encode(cs.ENCODING_UTF8))
+
+        with patch(
+            "codebase_rag.parsers.call_processor.settings.INCLUDE_BUILTIN_CALLS",
+            True,
+        ):
+            call_processor.process_calls_in_file(
+                test_file,
+                tree.root_node,
+                cs.SupportedLanguage.PYTHON,
+                queries,
+            )
+
+        builtin_qn = f"{cs.BUILTIN_PREFIX}.python.len"
+        rel_calls = mock_ingestor.ensure_relationship_batch.call_args_list
+
+        assert any(
+            c[0][1] == cs.RelationshipType.CALLS and c[0][2][2] == builtin_qn
+            for c in rel_calls
+        )
+
+
 class TestResolveSuperCall:
     @pytest.fixture
     def processor_with_inheritance(

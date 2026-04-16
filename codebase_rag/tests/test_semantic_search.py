@@ -7,6 +7,11 @@ import pytest
 from codebase_rag.utils.dependencies import has_semantic_dependencies
 
 
+@pytest.fixture(params=["asyncio"])
+def anyio_backend(request: pytest.FixtureRequest) -> str:
+    return str(request.param)
+
+
 @pytest.fixture
 def mock_embed_code() -> MagicMock:
     mock = MagicMock()
@@ -331,7 +336,7 @@ def test_create_get_function_source_tool_returns_tool() -> None:
 @pytest.mark.skipif(
     not has_semantic_dependencies(), reason="semantic dependencies not installed"
 )
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_semantic_search_tool_formats_results(
     mock_embed_code: MagicMock,
     mock_search_embeddings: MagicMock,
@@ -360,7 +365,7 @@ async def test_semantic_search_tool_formats_results(
 @pytest.mark.skipif(
     not has_semantic_dependencies(), reason="semantic dependencies not installed"
 )
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_semantic_search_tool_handles_no_results(
     mock_embed_code: MagicMock,
 ) -> None:
@@ -381,7 +386,7 @@ async def test_semantic_search_tool_handles_no_results(
 @pytest.mark.skipif(
     not has_semantic_dependencies(), reason="semantic dependencies not installed"
 )
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_get_function_source_tool_returns_source(
     mock_ingestor: MagicMock,
 ) -> None:
@@ -423,7 +428,7 @@ async def test_get_function_source_tool_returns_source(
 @pytest.mark.skipif(
     not has_semantic_dependencies(), reason="semantic dependencies not installed"
 )
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_get_function_source_tool_handles_not_found(
     mock_ingestor: MagicMock,
 ) -> None:

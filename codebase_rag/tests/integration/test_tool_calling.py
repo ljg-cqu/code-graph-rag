@@ -9,7 +9,12 @@ from pydantic_ai import Tool
 
 from codebase_rag.services.llm import create_rag_orchestrator
 
-pytestmark = [pytest.mark.asyncio(loop_scope="module"), pytest.mark.integration]
+pytestmark = [pytest.mark.anyio, pytest.mark.integration]
+
+
+@pytest.fixture(params=["asyncio"])
+def anyio_backend(request: pytest.FixtureRequest) -> str:
+    return str(request.param)
 
 if TYPE_CHECKING:
     from pydantic_ai import Agent

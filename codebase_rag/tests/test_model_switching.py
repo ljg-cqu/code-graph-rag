@@ -15,6 +15,11 @@ if TYPE_CHECKING:
     from collections.abc import Generator
 
 
+@pytest.fixture(params=["asyncio"])
+def anyio_backend(request: pytest.FixtureRequest) -> str:
+    return str(request.param)
+
+
 @pytest.fixture
 def mock_console() -> Generator[MagicMock]:
     with patch("codebase_rag.main.app_context") as mock_ctx:
@@ -162,7 +167,7 @@ class TestHandleModelCommand:
 
 
 class TestModelOverrideInAgentLoop:
-    @pytest.mark.asyncio
+    @pytest.mark.anyio
     async def test_model_override_passed_to_agent_run(self) -> None:
         from codebase_rag.main import _run_agent_response_loop
         from codebase_rag.types_defs import CHAT_LOOP_UI, ConfirmationToolNames
@@ -199,7 +204,7 @@ class TestModelOverrideInAgentLoop:
             _, kwargs = mock_agent.run.call_args
             assert kwargs.get("model") is mock_model
 
-    @pytest.mark.asyncio
+    @pytest.mark.anyio
     async def test_model_override_none_by_default(self) -> None:
         from codebase_rag.main import _run_agent_response_loop
         from codebase_rag.types_defs import CHAT_LOOP_UI, ConfirmationToolNames

@@ -12,6 +12,13 @@ from codebase_rag.services.llm import (
     create_rag_orchestrator,
 )
 
+pytestmark = [pytest.mark.anyio]
+
+
+@pytest.fixture(params=["asyncio"])
+def anyio_backend(request: pytest.FixtureRequest) -> str:
+    return str(request.param)
+
 
 class TestCleanCypherResponse:
     def test_removes_leading_whitespace(self) -> None:
@@ -119,7 +126,6 @@ class TestCypherGenerator:
 
 
 class TestCypherGeneratorGenerate:
-    @pytest.mark.asyncio
     @patch("codebase_rag.services.llm.settings")
     @patch("codebase_rag.services.llm.get_provider_from_config")
     @patch("codebase_rag.services.llm.Agent")
@@ -149,7 +155,6 @@ class TestCypherGeneratorGenerate:
 
         assert result == "MATCH (n) RETURN n;"
 
-    @pytest.mark.asyncio
     @patch("codebase_rag.services.llm.settings")
     @patch("codebase_rag.services.llm.get_provider_from_config")
     @patch("codebase_rag.services.llm.Agent")
@@ -178,7 +183,6 @@ class TestCypherGeneratorGenerate:
         with pytest.raises(ex.LLMGenerationError):
             await generator.generate("Find all nodes")
 
-    @pytest.mark.asyncio
     @patch("codebase_rag.services.llm.settings")
     @patch("codebase_rag.services.llm.get_provider_from_config")
     @patch("codebase_rag.services.llm.Agent")
@@ -204,6 +208,42 @@ class TestCypherGeneratorGenerate:
         generator = CypherGenerator()
         with pytest.raises(ex.LLMGenerationError):
             await generator.generate("Find all nodes")
+
+    @patch("codebase_rag.services.llm.settings")
+    @patch("codebase_rag.services.llm.get_provider_from_config")
+    @patch("codebase_rag.services.llm.Agent")
+    async def test_repair_returns_cleaned_query(
+        self,
+        mock_agent_cls: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_settings: MagicMock,
+    ) -> None:
+        mock_config = MagicMock()
+        mock_config.provider = cs.Provider.GOOGLE
+        mock_settings.active_cypher_config = mock_config
+        mock_settings.AGENT_RETRIES = 3
+
+        mock_provider = MagicMock()
+        mock_provider.create_model.return_value = MagicMock()
+        mock_get_provider.return_value = mock_provider
+
+        mock_result = MagicMock()
+        mock_result.output = "MATCH (f:File) RETURN f.path AS path"
+        mock_agent = MagicMock()
+        mock_agent.run = AsyncMock(return_value=mock_result)
+        mock_agent_cls.return_value = mock_agent
+
+        generator = CypherGenerator()
+        result = await generator.repair(
+            "Find orphan files",
+            "MATCH (f:File) WHERE NOT (f) RETURN f.path AS path",
+            "Invalid type vertex for 'NOT'.",
+        )
+
+        assert result == "MATCH (f:File) RETURN f.path AS path;"
+        repair_prompt = mock_agent.run.await_args.args[0]
+        assert "Find orphan files" in repair_prompt
+        assert "Invalid type vertex for 'NOT'." in repair_prompt
 
 
 class TestCleanCypherResponse:

@@ -807,10 +807,14 @@ class TestProcessFile:
         rel_calls = (
             definition_processor.ingestor.ensure_relationship_batch.call_args_list
         )
-        contains_module = [c for c in rel_calls if c[0][1] == "CONTAINS_MODULE"]
+        contains_module = [
+            c
+            for c in rel_calls
+            if c[0][1] == "CONTAINS_MODULE" and c[0][0][0] == "Project"
+        ]
 
         assert len(contains_module) >= 1
-        rel = contains_module[-1]
+        rel = contains_module[0]
         from_tuple = rel[0][0]
         to_tuple = rel[0][2]
         assert from_tuple[0] == "Project"
@@ -838,10 +842,14 @@ class TestProcessFile:
         rel_calls = (
             definition_processor.ingestor.ensure_relationship_batch.call_args_list
         )
-        contains_module = [c for c in rel_calls if c[0][1] == "CONTAINS_MODULE"]
+        contains_module = [
+            c
+            for c in rel_calls
+            if c[0][1] == "CONTAINS_MODULE" and c[0][0][0] == "Package"
+        ]
 
         assert len(contains_module) >= 1
-        rel = contains_module[-1]
+        rel = contains_module[0]
         from_tuple = rel[0][0]
         assert from_tuple[0] == "Package"
         assert from_tuple[2] == "test_project.mypackage"
@@ -866,13 +874,54 @@ class TestProcessFile:
         rel_calls = (
             definition_processor.ingestor.ensure_relationship_batch.call_args_list
         )
-        contains_module = [c for c in rel_calls if c[0][1] == "CONTAINS_MODULE"]
+        contains_module = [
+            c
+            for c in rel_calls
+            if c[0][1] == "CONTAINS_MODULE" and c[0][0][0] == "Folder"
+        ]
 
         assert len(contains_module) >= 1
-        rel = contains_module[-1]
+        rel = contains_module[0]
         from_tuple = rel[0][0]
         assert from_tuple[0] == "Folder"
         assert from_tuple[2] == "scripts"
+
+    def test_process_file_creates_file_module_relationships(
+        self, temp_repo: Path, definition_processor: GraphUpdater
+    ) -> None:
+        py_file = temp_repo / "root_module.py"
+        py_file.write_text(encoding="utf-8", data="x = 1")
+
+        from codebase_rag.constants import SupportedLanguage
+
+        definition_processor.factory.definition_processor.process_file(
+            py_file,
+            SupportedLanguage.PYTHON,
+            definition_processor.queries,
+            {},
+        )
+
+        rel_calls = (
+            definition_processor.ingestor.ensure_relationship_batch.call_args_list
+        )
+        file_contains_module = [
+            c
+            for c in rel_calls
+            if c[0][1] == "CONTAINS_MODULE" and c[0][0][0] == "File"
+        ]
+        belongs_to_file = [c for c in rel_calls if c[0][1] == "BELONGS_TO_FILE"]
+
+        assert len(file_contains_module) == 1
+        contains_rel = file_contains_module[0]
+        assert contains_rel[0][0] == ("File", "path", "root_module.py")
+        assert contains_rel[0][2][0] == "Module"
+        assert contains_rel[0][2][2].endswith(".root_module")
+
+        assert len(belongs_to_file) == 1
+        belongs_rel = belongs_to_file[0]
+        assert belongs_rel[0][0][0] == "Module"
+        assert belongs_rel[0][0][2].endswith(".root_module")
+        assert belongs_rel[0][2] == ("File", "path", "root_module.py")
 
     def test_process_file_registers_module_qn_to_file_path(
         self, temp_repo: Path, definition_processor: GraphUpdater
