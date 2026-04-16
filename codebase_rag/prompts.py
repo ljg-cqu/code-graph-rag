@@ -12,7 +12,7 @@ from .cypher_queries import (
     CYPHER_EXAMPLE_README,
     CYPHER_EXAMPLE_TASKS,
 )
-from .schema_builder import GRAPH_SCHEMA_DEFINITION
+from .schema_builder import CODE_GRAPH_SCHEMA_DEFINITION
 from .types_defs import ToolNames
 
 if TYPE_CHECKING:
@@ -55,6 +55,7 @@ CYPHER_QUERY_RULES = """**2. Critical Cypher Query Rules**
 - **Query hints**: Add index hints to complex queries to improve performance: e.g., `USING INDEX :Function(qualified_name)`
 - **Do NOT use parallel execution**: Never add `USING PARALLEL EXECUTION` to queries, it requires enterprise Memgraph license
 - **Do NOT use window functions**: Never use `OVER()` clause or window functions, they are not supported in community Memgraph
+- **Orphan detection**: Never write `WHERE NOT (n)` or `WHERE NOT (f)`. To find nodes without relationships, use `OPTIONAL MATCH (n)-[r]-()` and filter on `count(r) = 0`
 - **Performance best practices**:
   - Use explicit relationship types in matches to reduce scan scope
   - Limit path traversal depth with range patterns `*1..3` to avoid full graph scans
@@ -68,13 +69,37 @@ def build_graph_schema_and_rules() -> str:
 **1. Graph Schema Definition**
 The database contains information about a codebase, structured with the following nodes and relationships.
 
-{GRAPH_SCHEMA_DEFINITION}
+{CODE_GRAPH_SCHEMA_DEFINITION}
 
 {CYPHER_QUERY_RULES}
 """
 
 
 GRAPH_SCHEMA_AND_RULES = build_graph_schema_and_rules()
+
+
+def build_cypher_repair_prompt(
+    natural_language_query: str,
+    failed_query: str,
+    error_message: str,
+) -> str:
+    return f"""The previous Cypher query failed in Memgraph. Return a corrected read-only Cypher query that answers the same request.
+
+Original request:
+{natural_language_query}
+
+Failed query:
+{failed_query}
+
+Memgraph error:
+{error_message}
+
+Requirements:
+- Return only a single Cypher query.
+- Keep the original intent.
+- Fix syntax and Memgraph-incompatible constructs.
+- Do not use write operations.
+"""
 
 
 def build_rag_orchestrator_prompt(tools: list["Tool"]) -> str:

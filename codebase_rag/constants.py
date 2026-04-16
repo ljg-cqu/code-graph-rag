@@ -434,6 +434,11 @@ class NodeLabel(StrEnum):
     HOTSTRING = "Hotstring"
     LABEL = "Label"
     CLASS_AHK = "AhkClass"
+    # JSON content nodes
+    JSON_OBJECT = "JsonObject"
+    JSON_ARRAY = "JsonArray"
+    JSON_FIELD = "JsonField"
+    JSON_VALUE = "JsonValue"
 
 
 _NODE_LABEL_UNIQUE_KEYS: dict[NodeLabel, UniqueKeyType] = {
@@ -468,6 +473,11 @@ _NODE_LABEL_UNIQUE_KEYS: dict[NodeLabel, UniqueKeyType] = {
     NodeLabel.HOTSTRING: UniqueKeyType.QUALIFIED_NAME,
     NodeLabel.LABEL: UniqueKeyType.QUALIFIED_NAME,
     NodeLabel.CLASS_AHK: UniqueKeyType.QUALIFIED_NAME,
+    # JSON content nodes
+    NodeLabel.JSON_OBJECT: UniqueKeyType.QUALIFIED_NAME,
+    NodeLabel.JSON_ARRAY: UniqueKeyType.QUALIFIED_NAME,
+    NodeLabel.JSON_FIELD: UniqueKeyType.QUALIFIED_NAME,
+    NodeLabel.JSON_VALUE: UniqueKeyType.QUALIFIED_NAME,
 }
 
 _missing_keys = set(NodeLabel) - set(_NODE_LABEL_UNIQUE_KEYS.keys())
@@ -494,6 +504,7 @@ class RelationshipType(StrEnum):
     OVERRIDES = "OVERRIDES"
     CALLS = "CALLS"
     DEPENDS_ON_EXTERNAL = "DEPENDS_ON_EXTERNAL"
+    BELONGS_TO_FILE = "BELONGS_TO_FILE"
     # Solidity-specific relationships
     EMITS = "EMITS"
     MODIFIED_BY = "MODIFIED_BY"
@@ -528,6 +539,11 @@ class RelationshipType(StrEnum):
     CREATES_GUI = "CREATES_GUI"
     CONTROLS_GUI = "CONTROLS_GUI"
     INCLUDES_FILE = "INCLUDES_FILE"
+    # JSON content relationships
+    CONTAINS_JSON = "CONTAINS_JSON"
+    HAS_FIELD = "HAS_FIELD"
+    HAS_VALUE = "HAS_VALUE"
+    HAS_ELEMENT = "HAS_ELEMENT"
 
 
 # Alias for shorter usage
@@ -552,6 +568,12 @@ KEY_IS_IMMUTABLE = "is_immutable"
 KEY_IS_MAPPED = "is_mapped"
 KEY_IS_ANONYMOUS = "is_anonymous"
 KEY_INDEXED_COUNT = "indexed_count"
+# JSON content property keys
+KEY_JSON_KEY = "key"
+KEY_JSON_VALUE = "value"
+KEY_JSON_VALUE_TYPE = "value_type"
+KEY_JSON_DEPTH = "depth"
+KEY_JSON_LENGTH = "length"
 
 # (H) Method signature formatting
 EMPTY_PARENS = "()"
@@ -579,7 +601,7 @@ CYPHER_DEFAULT_LIMIT = 50
 
 # Embedding queries use UNION to return each embeddable node type separately:
 # - Function: standalone functions (Module -> DEFINES -> Function)
-# - Method: methods in classes/contracts (Module -> DEFINES -> Class/Contract -> DEFINES_METHOD -> Method)
+# - Method: methods in classes/contracts/interfaces/libraries (Module -> DEFINES -> owner -> DEFINES_METHOD -> Method)
 # - Class: class definitions (Module -> DEFINES -> Class)
 # - Interface: interface definitions (Module -> DEFINES -> Interface)
 # - Contract: Solidity contracts (Module -> DEFINES -> Contract)

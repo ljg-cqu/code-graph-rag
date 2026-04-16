@@ -13,6 +13,7 @@ from ..config import ModelConfig, settings
 from ..prompts import (
     CYPHER_SYSTEM_PROMPT,
     LOCAL_CYPHER_SYSTEM_PROMPT,
+    build_cypher_repair_prompt,
     build_rag_orchestrator_prompt,
 )
 from ..providers import get_provider_from_config
@@ -222,21 +223,46 @@ class CypherGenerator:
         except Exception as e:
             raise ex.LLMGenerationError(ex.LLM_INIT_CYPHER.format(error=e)) from e
 
+    async def _run_query_prompt(self, prompt: str) -> str:
+        result = await self.agent.run(prompt)
+        if (
+            not isinstance(result.output, str)
+            or cs.CYPHER_MATCH_KEYWORD not in result.output.upper()
+        ):
+            raise ex.LLMGenerationError(
+                ex.LLM_INVALID_QUERY.format(output=result.output)
+            )
+
+        query = _clean_cypher_response(result.output)
+        _validate_cypher_read_only(query)
+        return query
+
     async def generate(self, natural_language_query: str) -> str:
         logger.info(ls.CYPHER_GENERATING.format(query=natural_language_query))
         try:
-            result = await self.agent.run(natural_language_query)
-            if (
-                not isinstance(result.output, str)
-                or cs.CYPHER_MATCH_KEYWORD not in result.output.upper()
-            ):
-                raise ex.LLMGenerationError(
-                    ex.LLM_INVALID_QUERY.format(output=result.output)
-                )
-
-            query = _clean_cypher_response(result.output)
-            _validate_cypher_read_only(query)
+            query = await self._run_query_prompt(natural_language_query)
             logger.info(ls.CYPHER_GENERATED.format(query=query))
+            return query
+        except Exception as e:
+            logger.error(ls.CYPHER_ERROR.format(error=e))
+            raise ex.LLMGenerationError(ex.LLM_GENERATION_FAILED.format(error=e)) from e
+
+    async def repair(
+        self,
+        natural_language_query: str,
+        failed_query: str,
+        error_message: str,
+    ) -> str:
+        logger.info(ls.CYPHER_REPAIRING.format(query=natural_language_query))
+        try:
+            query = await self._run_query_prompt(
+                build_cypher_repair_prompt(
+                    natural_language_query,
+                    failed_query,
+                    error_message,
+                )
+            )
+            logger.info(ls.CYPHER_REPAIRED.format(query=query))
             return query
         except Exception as e:
             logger.error(ls.CYPHER_ERROR.format(error=e))

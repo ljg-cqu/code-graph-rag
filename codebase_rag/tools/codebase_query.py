@@ -26,6 +26,51 @@ from ..utils.token_utils import truncate_results_by_tokens
 from . import tool_descriptions as td
 
 
+_CYPHER_REPAIRABLE_ERROR_FRAGMENTS = (
+    "expected",
+    "invalid type",
+    "mismatched input",
+    "no viable alternative",
+    "not defined",
+    "parse",
+    "pattern",
+    "property",
+    "semantic",
+    "syntax error",
+    "type mismatch",
+    "unknown",
+    "variable",
+    "vertex",
+)
+
+_CYPHER_NON_REPAIRABLE_ERROR_FRAGMENTS = (
+    "authentication",
+    "broken pipe",
+    "closed",
+    "connection",
+    "network",
+    "refused",
+    "socket",
+    "ssl",
+    "timeout",
+    "unavailable",
+)
+
+_MAX_CYPHER_REPAIR_ATTEMPTS = 1
+
+
+def _should_attempt_cypher_repair(error: Exception) -> bool:
+    error_message = str(error).lower()
+    if any(
+        fragment in error_message
+        for fragment in _CYPHER_NON_REPAIRABLE_ERROR_FRAGMENTS
+    ):
+        return False
+    return any(
+        fragment in error_message for fragment in _CYPHER_REPAIRABLE_ERROR_FRAGMENTS
+    )
+
+
 def create_query_tool(
     ingestor: QueryProtocol,
     cypher_gen: CypherGenerator,
@@ -42,7 +87,23 @@ def create_query_tool(
         try:
             cypher_query = await cypher_gen.generate(natural_language_query)
 
-            results = await asyncio.to_thread(ingestor.fetch_all, cypher_query)
+            repair_attempts = 0
+            while True:
+                try:
+                    results = await asyncio.to_thread(ingestor.fetch_all, cypher_query)
+                    break
+                except Exception as e:
+                    if (
+                        repair_attempts >= _MAX_CYPHER_REPAIR_ATTEMPTS
+                        or not _should_attempt_cypher_repair(e)
+                    ):
+                        raise
+                    repair_attempts += 1
+                    cypher_query = await cypher_gen.repair(
+                        natural_language_query,
+                        cypher_query,
+                        str(e),
+                    )
 
             total_count = len(results)
             if total_count > settings.QUERY_RESULT_ROW_CAP:

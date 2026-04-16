@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
     from .models import LanguageSpec
 
-type LanguageLoader = Callable[[], Language] | None
+type LanguageLoader = Callable[[], object] | None
 
 PropertyValue = str | int | float | bool | list[str] | None
 PropertyDict = dict[str, PropertyValue]
@@ -547,15 +547,32 @@ NODE_SCHEMAS: tuple[NodeSchema, ...] = (
     # Document GraphRAG node schemas
     NodeSchema(
         NodeLabel.DOCUMENT,
-        "{qualified_name: string, path: string, file_type: string, word_count: int, total_section_count: int, modified_date: string, workspace: string}",
+        "{path: string, workspace: string, file_type: string, total_section_count: int, code_block_count: int, code_references: list[string], resolved_code_references: list[string], resolved_code_reference_count: int, word_count: int, modified_date: string, indexed_at: string, content_hash: string}",
     ),
     NodeSchema(
         NodeLabel.SECTION,
-        "{qualified_name: string, title: string, level: int, start_line: int, end_line: int, content_snippet: string, workspace: string}",
+        "{qualified_name: string, workspace: string, title: string, level: int, start_line: int, end_line: int, content_snippet: string, indexed_at: string}",
     ),
     NodeSchema(
         NodeLabel.CHUNK,
-        "{qualified_name: string, content: string, start_line: int, end_line: int, workspace: string}",
+        "{qualified_name: string, workspace: string, content: string, token_count: int, section_title: string, start_line: int, end_line: int, code_references: list[string], resolved_code_references: list[string], resolved_code_reference_count: int, embedding: list[float], indexed_at: string}",
+    ),
+    # JSON content node schemas
+    NodeSchema(
+        NodeLabel.JSON_OBJECT,
+        "{qualified_name: string, path: string, depth: int}",
+    ),
+    NodeSchema(
+        NodeLabel.JSON_ARRAY,
+        "{qualified_name: string, path: string, depth: int, length: int}",
+    ),
+    NodeSchema(
+        NodeLabel.JSON_FIELD,
+        "{qualified_name: string, path: string, key: string, value: string, value_type: string, depth: int}",
+    ),
+    NodeSchema(
+        NodeLabel.JSON_VALUE,
+        "{qualified_name: string, path: string, value: string, value_type: string, depth: int}",
     ),
 )
 
@@ -577,9 +594,14 @@ RELATIONSHIP_SCHEMAS: tuple[RelationshipSchema, ...] = (
         (NodeLabel.FILE,),
     ),
     RelationshipSchema(
-        (NodeLabel.PROJECT, NodeLabel.PACKAGE, NodeLabel.FOLDER),
+        (NodeLabel.PROJECT, NodeLabel.PACKAGE, NodeLabel.FOLDER, NodeLabel.FILE),
         RelationshipType.CONTAINS_MODULE,
         (NodeLabel.MODULE,),
+    ),
+    RelationshipSchema(
+        (NodeLabel.MODULE,),
+        RelationshipType.BELONGS_TO_FILE,
+        (NodeLabel.FILE,),
     ),
     RelationshipSchema(
         (NodeLabel.MODULE,),
@@ -754,13 +776,29 @@ RELATIONSHIP_SCHEMAS: tuple[RelationshipSchema, ...] = (
         (NodeLabel.CHUNK,),
     ),
     RelationshipSchema(
-        (NodeLabel.SECTION,),
-        RelationshipType.BELONGS_TO_SECTION,
         (NodeLabel.CHUNK,),
+        RelationshipType.BELONGS_TO_SECTION,
+        (NodeLabel.SECTION,),
+    ),
+    # JSON content relationship schemas
+    RelationshipSchema(
+        (NodeLabel.FILE,),
+        RelationshipType.CONTAINS_JSON,
+        (NodeLabel.JSON_OBJECT,),
     ),
     RelationshipSchema(
-        (NodeLabel.DOCUMENT, NodeLabel.SECTION),
-        RelationshipType.REFERENCES_CODE,
-        (NodeLabel.FUNCTION, NodeLabel.CLASS, NodeLabel.METHOD),
+        (NodeLabel.JSON_OBJECT,),
+        RelationshipType.HAS_FIELD,
+        (NodeLabel.JSON_FIELD,),
+    ),
+    RelationshipSchema(
+        (NodeLabel.JSON_FIELD,),
+        RelationshipType.HAS_VALUE,
+        (NodeLabel.JSON_VALUE,),
+    ),
+    RelationshipSchema(
+        (NodeLabel.JSON_ARRAY,),
+        RelationshipType.HAS_ELEMENT,
+        (NodeLabel.JSON_VALUE, NodeLabel.JSON_OBJECT, NodeLabel.JSON_ARRAY),
     ),
 )

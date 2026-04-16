@@ -8,7 +8,9 @@ CYPHER_DELETE_PROJECT = """
 MATCH (p:Project {name: $project_name})
 OPTIONAL MATCH (p)-[:CONTAINS_PACKAGE|CONTAINS_FOLDER|CONTAINS_FILE|CONTAINS_MODULE*]->(container)
 OPTIONAL MATCH (container)-[:DEFINES|DEFINES_METHOD*]->(defined)
-DETACH DELETE p, container, defined
+OPTIONAL MATCH (f:File)-[:CONTAINS_JSON]->(json_root)
+OPTIONAL MATCH (json_root)-[:HAS_FIELD|HAS_ELEMENT*]->(json_content)
+DETACH DELETE p, container, defined, json_root, json_content
 """
 
 CYPHER_EXAMPLE_DECORATED_FUNCTIONS = f"""MATCH (n:Function|Method)

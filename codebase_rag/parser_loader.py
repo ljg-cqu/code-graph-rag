@@ -1,6 +1,7 @@
 import importlib
 import subprocess
 import sys
+import warnings
 from copy import deepcopy
 from pathlib import Path
 
@@ -195,6 +196,19 @@ _language_loaders = _import_language_loaders()
 LANGUAGE_LIBRARIES: dict[cs.SupportedLanguage, LanguageLoader] = _language_loaders
 
 
+def coerce_language(lang_obj: object) -> Language:
+    if isinstance(lang_obj, Language):
+        return lang_obj
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="int argument support is deprecated",
+            category=DeprecationWarning,
+        )
+        return Language(lang_obj)
+
+
 def _build_query_pattern(node_types: tuple[str, ...], capture_name: str) -> str:
     return " ".join([f"({node_type}) @{capture_name}" for node_type in node_types])
 
@@ -290,11 +304,7 @@ def _process_language(
         else:
             lang_obj = lang_lib
 
-        # Check if already a Language instance
-        if isinstance(lang_obj, Language):
-            language = lang_obj
-        else:
-            language = Language(lang_obj)
+        language = coerce_language(lang_obj)
 
         parser = Parser(language)
         parsers[lang_name] = parser
@@ -328,11 +338,7 @@ def load_queries_for_language(lang: cs.SupportedLanguage) -> LanguageQueries | N
         else:
             lang_obj = lang_lib
 
-        # Check if already a Language instance
-        if isinstance(lang_obj, Language):
-            language = lang_obj
-        else:
-            language = Language(lang_obj)
+        language = coerce_language(lang_obj)
 
         parser = Parser(language)
         return _create_language_queries(language, parser, lang_config, lang)

@@ -1,3 +1,4 @@
+from .constants import NodeLabel
 from .types_defs import (
     NODE_SCHEMAS,
     RELATIONSHIP_SCHEMAS,
@@ -20,22 +21,57 @@ def _format_relationship_schema(schema: RelationshipSchema) -> str:
     return f"- {sources} -[:{schema.rel_type}]-> {targets}"
 
 
-def build_node_labels_section() -> str:
+_DOCUMENT_GRAPH_LABELS = frozenset(
+    {
+        NodeLabel.DOCUMENT,
+        NodeLabel.SECTION,
+        NodeLabel.CHUNK,
+    }
+)
+
+
+def _build_node_labels_section(node_schemas: tuple[NodeSchema, ...]) -> str:
     lines = ["Node Labels and Their Key Properties:"]
-    lines.extend(_format_node_schema(schema) for schema in NODE_SCHEMAS)
+    lines.extend(_format_node_schema(schema) for schema in node_schemas)
     return "\n".join(lines)
 
 
-def build_relationships_section() -> str:
+def _build_relationships_section(
+    relationship_schemas: tuple[RelationshipSchema, ...],
+) -> str:
     lines = ["Relationships (source)-[REL_TYPE]->(target):"]
-    lines.extend(_format_relationship_schema(schema) for schema in RELATIONSHIP_SCHEMAS)
+    lines.extend(
+        _format_relationship_schema(schema) for schema in relationship_schemas
+    )
     return "\n".join(lines)
 
 
-def build_graph_schema_text() -> str:
-    return f"""{build_node_labels_section()}
+def _is_code_graph_relationship(schema: RelationshipSchema) -> bool:
+    return not (
+        _DOCUMENT_GRAPH_LABELS.intersection(schema.sources)
+        or _DOCUMENT_GRAPH_LABELS.intersection(schema.targets)
+    )
 
-{build_relationships_section()}"""
+
+CODE_GRAPH_NODE_SCHEMAS: tuple[NodeSchema, ...] = tuple(
+    schema for schema in NODE_SCHEMAS if schema.label not in _DOCUMENT_GRAPH_LABELS
+)
+CODE_GRAPH_RELATIONSHIP_SCHEMAS: tuple[RelationshipSchema, ...] = tuple(
+    schema for schema in RELATIONSHIP_SCHEMAS if _is_code_graph_relationship(schema)
+)
+
+
+def build_graph_schema_text(
+    node_schemas: tuple[NodeSchema, ...] = NODE_SCHEMAS,
+    relationship_schemas: tuple[RelationshipSchema, ...] = RELATIONSHIP_SCHEMAS,
+) -> str:
+    return f"""{_build_node_labels_section(node_schemas)}
+
+{_build_relationships_section(relationship_schemas)}"""
 
 
 GRAPH_SCHEMA_DEFINITION = build_graph_schema_text()
+CODE_GRAPH_SCHEMA_DEFINITION = build_graph_schema_text(
+    CODE_GRAPH_NODE_SCHEMAS,
+    CODE_GRAPH_RELATIONSHIP_SCHEMAS,
+)

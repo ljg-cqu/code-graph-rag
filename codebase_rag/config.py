@@ -441,6 +441,12 @@ class AppConfig(BaseSettings):
     RUN_INGESTION_QUALITY_CHECKS: bool = True
     """Whether to run post-ingestion data quality validation checks after indexing completes."""
 
+    INCLUDE_BUILTIN_CALLS: bool = False
+    """Whether to include CALLS edges to built-in functions.
+    When False (default), calls to builtin functions (qualified_name starting with 'builtin.')
+    are filtered out during ingestion to reduce graph noise.
+    Set to True for complete call graph analysis."""
+
     MAX_MISSING_EMBEDDINGS_PCT: float = Field(default=2.0, gt=0, lt=100)
     """Maximum allowed percentage of nodes missing embeddings before quality check fails."""
 

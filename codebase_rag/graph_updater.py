@@ -11,7 +11,7 @@ from pathlib import Path
 
 from loguru import logger
 from rich.progress import Progress, SpinnerColumn, TextColumn
-from tree_sitter import Language, Node, Parser
+from tree_sitter import Node, Parser
 
 from . import constants as cs
 from . import exceptions as ex
@@ -714,7 +714,7 @@ class GraphUpdater:
         from tree_sitter import Parser
 
         from .language_spec import get_language_spec, get_supported_languages
-        from .parser_loader import load_queries_for_language
+        from .parser_loader import coerce_language, load_queries_for_language
         from .types_defs import SupportedLanguage
 
         # Initialize queries inside worker (avoids pickle issues with tree_sitter.Query objects)
@@ -738,10 +738,7 @@ class GraphUpdater:
                     lang_obj = lang_lib()
                 else:
                     lang_obj = lang_lib
-                if isinstance(lang_obj, Language):
-                    language = lang_obj
-                else:
-                    language = Language(lang_obj)
+                language = coerce_language(lang_obj)
                 parser.language = language
                 parsers[lang] = parser
             except Exception as e:
@@ -761,6 +758,9 @@ class GraphUpdater:
             function_registry=worker_function_registry,
             simple_name_lookup=worker_simple_name_lookup,
             ast_cache=worker_ast_cache,
+        )
+        worker_factory.structure_processor.structural_elements = dict(
+            structural_elements
         )
 
         all_nodes: list[dict] = []
@@ -802,6 +802,21 @@ class GraphUpdater:
                 or filepath.suffix.lower() == cs.CSPROJ_SUFFIX
             ):
                 worker_factory.definition_processor.process_dependencies(filepath)
+
+            elif filepath.suffix.lower() == ".json" and filepath.name.lower() not in cs.DEPENDENCY_FILES:
+                # Arbitrary JSON file — process for content structure
+                # Skip canonical ingestion payloads (they go to separate JSON graph)
+                try:
+                    with open(filepath, encoding="utf-8") as f:
+                        data = json.load(f)
+                    if "entities" not in data and "relationships" not in data:
+                        from .parsers.json_content_processor import JsonContentProcessor
+                        json_processor = JsonContentProcessor(
+                            worker_ingestor, repo_path, project_name
+                        )
+                        json_processor.process_json_file(filepath)
+                except (json.JSONDecodeError, OSError):
+                    pass  # Not valid JSON or unreadable, skip
 
             for label, props in worker_ingestor.nodes[nodes_offset:]:
                 all_nodes.append(

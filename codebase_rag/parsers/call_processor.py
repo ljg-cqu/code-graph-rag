@@ -7,6 +7,7 @@ from tree_sitter import Node, QueryCursor
 
 from .. import constants as cs
 from .. import logs as ls
+from ..config import settings
 from ..language_spec import LanguageSpec
 from ..services import IngestorProtocol
 from ..types_defs import FunctionRegistryTrieProtocol, LanguageQueries
@@ -364,6 +365,16 @@ class CallProcessor:
                 callee_type=callee_type,
                 callee_qn=callee_qn,
             )
+
+            if not settings.INCLUDE_BUILTIN_CALLS and callee_qn.startswith(
+                f"{cs.BUILTIN_PREFIX}{cs.SEPARATOR_DOT}"
+            ):
+                logger.debug(
+                    ls.CALL_BUILTIN_SKIPPED,
+                    caller=caller_qn,
+                    callee_qn=callee_qn,
+                )
+                continue
 
             self.ingestor.ensure_relationship_batch(
                 (caller_type, cs.KEY_QUALIFIED_NAME, caller_qn),

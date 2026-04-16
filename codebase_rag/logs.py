@@ -256,6 +256,8 @@ MG_EXPORTED = "Exported {nodes} nodes and {rels} relationships"
 # (H) LLM/Cypher logs
 CYPHER_GENERATING = "  [CypherGenerator] Generating query for: '{query}'"
 CYPHER_GENERATED = "  [CypherGenerator] Generated Cypher: {query}"
+CYPHER_REPAIRING = "  [CypherGenerator] Repairing failed Cypher for: '{query}'"
+CYPHER_REPAIRED = "  [CypherGenerator] Repaired Cypher: {query}"
 CYPHER_ERROR = "  [CypherGenerator] Error: {error}"
 
 # (H) Tool file logs
@@ -423,6 +425,7 @@ CALL_FOUND_NODES = "Found {count} call nodes in {language} for {caller}"
 CALL_FOUND = (
     "Found call from {caller} to {call_name} (resolved as {callee_type}:{callee_qn})"
 )
+CALL_BUILTIN_SKIPPED = "Skipping builtin call: {caller} -> {callee_qn}"
 CALL_NESTED_FOUND = "Found nested call from {caller} to {call_name} (resolved as {callee_type}:{callee_qn})"
 CALL_DIRECT_IMPORT = "Direct import resolved: {call_name} -> {qn}"
 CALL_TYPE_INFERRED = "Type-inferred object method resolved: {call_name} -> {method_qn} (via {obj}:{var_type})"

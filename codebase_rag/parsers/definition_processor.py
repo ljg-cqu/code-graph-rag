@@ -121,6 +121,18 @@ class DefinitionProcessor(
                 (cs.NodeLabel.MODULE, cs.KEY_QUALIFIED_NAME, module_qn),
             )
 
+            relative_filepath = relative_path.as_posix()
+            self.ingestor.ensure_relationship_batch(
+                (cs.NodeLabel.FILE, cs.KEY_PATH, relative_filepath),
+                cs.RelationshipType.CONTAINS_MODULE,
+                (cs.NodeLabel.MODULE, cs.KEY_QUALIFIED_NAME, module_qn),
+            )
+            self.ingestor.ensure_relationship_batch(
+                (cs.NodeLabel.MODULE, cs.KEY_QUALIFIED_NAME, module_qn),
+                cs.RelationshipType.BELONGS_TO_FILE,
+                (cs.NodeLabel.FILE, cs.KEY_PATH, relative_filepath),
+            )
+
             self.import_processor.parse_imports(root_node, module_qn, language, queries)
             self._ingest_missing_import_patterns(
                 root_node, module_qn, language, queries
