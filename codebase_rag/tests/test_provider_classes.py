@@ -146,16 +146,22 @@ class TestOpenAIProvider:
         provider.validate_config()
 
     def test_openai_validation_error(self) -> None:
-        provider = OpenAIProvider()
+        with patch.dict("os.environ", {}, clear=True):
+            provider = OpenAIProvider()
 
-        with pytest.raises(ValueError, match="OpenAI provider requires api_key"):
-            provider.validate_config()
+            with pytest.raises(ValueError, match="OpenAI provider requires api_key"):
+                provider.validate_config()
 
     def test_openai_custom_endpoint(self) -> None:
         provider = OpenAIProvider(
             api_key="sk-test-key", endpoint="https://api.custom-openai.com/v1"
         )
         assert provider.endpoint == "https://api.custom-openai.com/v1"
+
+    def test_openai_explicit_api_key_takes_precedence_over_env(self) -> None:
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "env-key"}):
+            provider = OpenAIProvider(api_key="role-key")
+            assert provider.api_key == "role-key"
 
 
 class TestOllamaProvider:
@@ -214,9 +220,12 @@ class TestAnthropicProvider:
         provider.validate_config()
 
     def test_anthropic_validation_error(self) -> None:
-        provider = AnthropicProvider()
-        with pytest.raises(ValueError, match="Anthropic provider requires api_key"):
-            provider.validate_config()
+        with patch.dict("os.environ", {}, clear=True):
+            provider = AnthropicProvider()
+            with pytest.raises(
+                ValueError, match="Anthropic provider requires api_key"
+            ):
+                provider.validate_config()
 
     @patch("codebase_rag.providers.base.PydanticAnthropicProvider")
     @patch("codebase_rag.providers.base.AnthropicModel")
@@ -345,7 +354,7 @@ class TestModelCreation:
         assert call_kwargs["settings"] == mock_settings
 
     @patch("codebase_rag.providers.base.PydanticOpenAIProvider")
-    @patch("codebase_rag.providers.base.OpenAIResponsesModel")
+    @patch("codebase_rag.providers.base.OpenAIChatModel")
     def test_openai_model_creation(
         self, mock_openai_model: Any, mock_openai_provider: Any
     ) -> None:
