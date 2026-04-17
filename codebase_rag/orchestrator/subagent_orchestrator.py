@@ -50,7 +50,14 @@ from codebase_rag.tools.semantic_search import (
 )
 
 from .dynamic_concurrency_controller import DynamicConcurrencyController
+from .investigation_tracker import InvestigationState
 from .result_aggregator import ResultAggregator
+from .sufficiency_analyzer import analyze_requirements
+from .sufficiency_gatekeeper import (
+    SubtaskResult,
+    SufficiencyMetadata,
+    evaluate_parallel_worker_sufficiency,
+)
 
 READ_ONLY_SUBAGENT_PROMPT = """
 You are a read-only parallel analysis worker for a codebase RAG system.
@@ -72,6 +79,7 @@ class ReadOnlySubAgent:
         enable_document_graph: bool = False,
         query_mode: QueryMode = QueryMode.CODE_ONLY,
         doc_workspace: str = "default",
+        worker_index: int = 0,
     ):
         self.repo_path = repo_path
         self.llm_config = llm_config
@@ -79,6 +87,7 @@ class ReadOnlySubAgent:
         self.enable_document_graph = enable_document_graph
         self.query_mode = query_mode
         self.doc_workspace = doc_workspace
+        self._worker_index = worker_index
         self.agent: Agent | None = None
         self.code_graph: MemgraphIngestor | None = None
         self.doc_graph: MemgraphIngestor | None = None
@@ -172,17 +181,40 @@ class ReadOnlySubAgent:
 
         return tools
 
-    def execute(self, subtask: dict[str, Any]) -> str:
+    def execute(self, subtask: dict[str, Any]) -> SubtaskResult:
         self._initialize()
         if self.agent is None:
             raise RuntimeError("Parallel sub-agent was not initialized")
 
+        subtask_reqs = analyze_requirements(subtask.get("prompt", ""))
+        state = InvestigationState.from_parallel_worker(worker_id=self._worker_index)
+
         response = asyncio.run(
             self.agent.run(subtask.get("prompt", ""), message_history=[])
         )
-        if not isinstance(response.output, str):
-            return str(response.output)
-        return response.output
+
+        if hasattr(response, "new_messages"):
+            for msg in response.new_messages():
+                for part in getattr(msg, "parts", []):
+                    tool_name = getattr(part, "tool_name", None)
+                    if tool_name is not None:
+                        state.record_tool(tool_name, "")
+
+        is_sufficient, warning = evaluate_parallel_worker_sufficiency(
+            state, subtask_reqs, worker_id=self._worker_index
+        )
+
+        output = response.output if isinstance(response.output, str) else str(response.output)
+
+        return SubtaskResult(
+            content=output,
+            sufficiency=SufficiencyMetadata(
+                passed=is_sufficient,
+                warning=warning,
+                tools_used=list(state.tools_used),
+                files_read=state.files_read,
+            ),
+        )
 
     def reset(self) -> None:
         if self.query_router is not None:
@@ -284,7 +316,9 @@ class SubAgentOrchestrator:
             except ValueError:
                 pass
 
-    def _default_agent_factory(self, llm_config: ModelConfig | None = None) -> Any:
+    def _default_agent_factory(
+        self, llm_config: ModelConfig | None = None, worker_index: int = 0
+    ) -> Any:
         worker_llm_config = llm_config or settings.active_orchestrator_config
         return ReadOnlySubAgent(
             repo_path=self.repo_path,
@@ -292,6 +326,7 @@ class SubAgentOrchestrator:
             enable_document_graph=self.enable_document_graph,
             query_mode=self.query_mode,
             doc_workspace=self.doc_workspace,
+            worker_index=worker_index,
         )
 
     def initialize_agents(self) -> None:
@@ -307,9 +342,9 @@ class SubAgentOrchestrator:
             if num_worker_llms > 0:
                 llm_config = worker_llms[self._llm_assignment_index % num_worker_llms]
                 self._llm_assignment_index += 1
-                agent = self.agent_factory(llm_config=llm_config)
+                agent = self.agent_factory(llm_config=llm_config, worker_index=index)
             else:
-                agent = self.agent_factory()
+                agent = self.agent_factory(worker_index=index)
             self.workers.append(
                 SubAgentWorker(worker_id=self._build_worker_id(index), agent=agent)
             )

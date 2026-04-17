@@ -575,6 +575,15 @@ async def _run_agent_response_loop(
     model_override: Model | None = None,
     model_override_config: ModelConfig | None = None,
 ) -> None:
+    from pydantic_ai.messages import ModelRequest, UserPromptPart
+
+    from .orchestrator.investigation_tracker import InvestigationState
+    from .orchestrator.sufficiency_analyzer import analyze_requirements
+    from .orchestrator.sufficiency_gatekeeper import evaluate_sufficiency
+
+    requirements = analyze_requirements(question_with_context)
+    state = InvestigationState()
+    rejection_count = 0
     deferred_results: DeferredToolResults | None = None
 
     while True:
@@ -692,18 +701,59 @@ async def _run_agent_response_loop(
             break
 
         if isinstance(response.output, DeferredToolRequests):
+            for call in response.output.approvals:
+                args = call.args_as_dict()
+                tool_name = call.tool_name
+                query_arg = _extract_tool_query_arg(tool_name, args)
+                state.record_tool(tool_name, query_arg)
+
+            state.rounds_completed += 1
+
             deferred_results = _process_tool_approvals(
                 response.output,
                 config.approval_prompt,
                 config.denial_default,
                 tool_names,
             )
-            message_history.extend(response.new_messages())
+            new_msgs = response.new_messages()
+            message_history.extend(new_msgs)
+            _update_state_from_tool_returns(new_msgs, state)
             continue
 
         output_text = response.output
         if not isinstance(output_text, str):
             continue
+
+        if not app_context.session.yolo_mode:
+            is_sufficient, feedback = evaluate_sufficiency(
+                state, requirements, rejection_count
+            )
+            if not is_sufficient:
+                rejection_count += 1
+                if rejection_count >= 3:
+                    app_context.console.print(
+                        Panel(
+                            "⚠️ Max rejections reached (3). Accepting response with incomplete investigation.",
+                            border_style=cs.Color.YELLOW,
+                        )
+                    )
+                else:
+                    feedback_msg = (
+                        f"\n**SYSTEM CORRECTION (attempt {rejection_count}/3):** {feedback}\n\n"
+                        f"You are not allowed to answer yet. Please use the required tools "
+                        f"to gather more information before generating a final response."
+                    )
+                    message_history.extend(response.new_messages())
+                    message_history.append(
+                        ModelRequest(parts=[UserPromptPart(feedback_msg)])
+                    )
+                    app_context.console.print(
+                        Panel(
+                            f"⚠️ Investigation Incomplete: {feedback}",
+                            border_style=cs.Color.YELLOW,
+                        )
+                    )
+                    continue
         markdown_response = Markdown(output_text)
         app_context.console.print(
             Panel(
@@ -716,6 +766,42 @@ async def _run_agent_response_loop(
         log_session_event(f"{cs.SESSION_PREFIX_ASSISTANT}{output_text}")
         message_history.extend(response.new_messages())
         break
+
+
+def _extract_tool_query_arg(tool_name: str, args: dict[str, object]) -> str:
+    if tool_name == "query_graph":
+        return str(args.get("natural_language_query", ""))
+    if tool_name == "semantic_search":
+        return str(args.get("query", ""))
+    if tool_name == "read_file":
+        return str(args.get("file_path", ""))
+    if tool_name == "get_code_snippet":
+        return str(args.get("qualified_name", ""))
+    if tool_name == "get_function_source":
+        return str(args.get("node_id", ""))
+    return str(args.get("query", args.get("command", "")))
+
+
+def _update_state_from_tool_returns(
+    new_messages: list[ModelMessage],
+    state: object,
+) -> None:
+    from pydantic_ai.messages import ModelRequest, ToolReturnPart
+
+    from .orchestrator.investigation_tracker import InvestigationState
+
+    if not isinstance(state, InvestigationState):
+        return
+
+    for msg in new_messages:
+        if not isinstance(msg, ModelRequest):
+            continue
+        for part in msg.parts:
+            if not isinstance(part, ToolReturnPart):
+                continue
+            content = str(part.content) if part.content is not None else ""
+            if not content or "no results" in content.lower() or "not found" in content.lower():
+                state.tool_failures.add(part.tool_name)
 
 
 def _find_image_paths(question: str) -> list[Path]:

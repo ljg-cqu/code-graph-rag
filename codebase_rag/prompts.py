@@ -102,6 +102,19 @@ Requirements:
 """
 
 
+MULTI_ROUND_PROTOCOL = """
+**MANDATORY INVESTIGATION PROTOCOL:**
+1.  You are monitored by a **Sufficiency Gatekeeper** that programmatically validates your work.
+2.  You CANNOT respond with a final answer until you have completed the required investigation:
+    - Use `semantic_search` first to find relevant candidates by intent/purpose.
+    - Use `query_graph` to explore structural relationships between code elements.
+    - Use `read_file`, `get_code_snippet`, or `get_function_source` to verify actual implementation details (required for functional/diagnostic questions).
+3.  If you try to answer before completing these steps, the system will **reject your response** and inject a correction message forcing you to continue investigating.
+4.  You have a maximum of 3 rejection attempts. After that, your answer will be accepted but flagged as incomplete.
+5.  If a tool returns no results or fails, you may skip it — the gatekeeper detects failures and adapts its requirements accordingly.
+""".strip()
+
+
 def build_rag_orchestrator_prompt(tools: list["Tool"]) -> str:
     t = extract_tool_names(tools)
     return f"""You are an expert AI assistant for analyzing codebases. Your answers are based **EXCLUSIVELY** on information retrieved using your tools.
@@ -171,6 +184,8 @@ def build_rag_orchestrator_prompt(tools: list["Tool"]) -> str:
     c. Summarize large results rather than including full content
     d. Prioritize most relevant findings over comprehensive coverage
 8.  **Synthesize Answer**: Analyze and explain the retrieved content. Cite your sources (file paths or qualified names). Report any errors gracefully.
+
+{MULTI_ROUND_PROTOCOL}
 """
 
 

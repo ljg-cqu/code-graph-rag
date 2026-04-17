@@ -243,6 +243,28 @@ class ResultAggregator:
         else:
             return self._format_text(resolved_results, unresolved_conflicts)
 
+    def _collect_sufficiency_warnings(self, results: list[dict[str, Any]]) -> list[str]:
+        warnings: list[str] = []
+        for entry in results:
+            result = entry.get("result")
+            if not isinstance(result, dict):
+                continue
+            sufficiency = result.get("sufficiency", {})
+            if not isinstance(sufficiency, dict):
+                continue
+            if not sufficiency.get("passed", True):
+                warning = sufficiency.get("warning")
+                if warning:
+                    warnings.append(warning)
+        return warnings
+
+    def _extract_result_content(self, result: Any) -> str:
+        if isinstance(result, str):
+            return result
+        if isinstance(result, dict) and "content" in result:
+            return str(result["content"])
+        return str(result)
+
     def _format_json(
         self,
         resolved_results: list[dict[str, Any]],
@@ -264,7 +286,10 @@ class ResultAggregator:
                 {
                     "subtask_id": entry["subtask"]["id"],
                     "file_path": entry["subtask"].get("relative_path"),
-                    "result": entry["result"],
+                    "result": self._extract_result_content(entry["result"]),
+                    "sufficiency": entry["result"].get("sufficiency")
+                    if isinstance(entry["result"], dict)
+                    else None,
                     "execution_time": entry["execution_time"],
                     "status": entry.get("status", "completed"),
                     "scope": entry.get("scope_key"),
@@ -346,12 +371,7 @@ class ResultAggregator:
                 lines.append("")
                 for entry in entries:
                     result = entry["result"]
-                    if isinstance(result, str):
-                        lines.append(result)
-                    elif isinstance(result, dict):
-                        lines.append(str(result))
-                    else:
-                        lines.append(str(result))
+                    lines.append(self._extract_result_content(result))
                     lines.append("")
 
         # Errors section
@@ -362,6 +382,14 @@ class ResultAggregator:
                 file_path = error_entry["subtask"].get("relative_path", "Unknown file")
                 lines.append(f"### {file_path}: {error_entry['error']}")
                 lines.append("")
+
+        sufficiency_warnings = self._collect_sufficiency_warnings(resolved_results)
+        if sufficiency_warnings:
+            lines.append("## Sufficiency Warnings")
+            lines.append("")
+            for warning in sufficiency_warnings:
+                lines.append(f"- {warning}")
+            lines.append("")
 
         return "\n".join(lines)
 
@@ -406,13 +434,20 @@ class ResultAggregator:
             for entry in resolved_results:
                 file_path = entry["subtask"].get("relative_path", "Unknown file")
                 lines.append(f"\n--- {file_path} ---")
-                lines.append(str(entry["result"]))
+                lines.append(self._extract_result_content(entry["result"]))
 
         if self.errors:
             lines.append("\n=== ERRORS ===")
             for error_entry in self.errors:
                 file_path = error_entry["subtask"].get("relative_path", "Unknown file")
                 lines.append(f"{file_path}: {error_entry['error']}")
+
+        sufficiency_warnings = self._collect_sufficiency_warnings(resolved_results)
+        if sufficiency_warnings:
+            lines.append("")
+            lines.append("=== SUFFICIENCY WARNINGS ===")
+            for warning in sufficiency_warnings:
+                lines.append(f"- {warning}")
 
         return "\n".join(lines)
 
