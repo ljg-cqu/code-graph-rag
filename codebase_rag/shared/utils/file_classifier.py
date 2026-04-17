@@ -15,6 +15,7 @@ class FileType(StrEnum):
 
     CODE = "code"
     DOCUMENT = "document"
+    JSON = "json"
     UNKNOWN = "unknown"
 
 
@@ -73,6 +74,12 @@ DOCUMENT_EXTENSIONS: dict[str, str] = {
     ".htm": "html",
 }
 
+# JSON file extensions
+JSON_EXTENSIONS: dict[str, str] = {
+    ".json": "json",
+    ".jsonl": "jsonl",
+}
+
 
 def classify_file(file_path: Path) -> FileClassification:
     """
@@ -103,6 +110,16 @@ def classify_file(file_path: Path) -> FileClassification:
             extension=extension,
             language=None,
             document_format=DOCUMENT_EXTENSIONS[extension],
+            confidence=1.0,
+        )
+
+    # Check JSON extensions
+    if extension in JSON_EXTENSIONS:
+        return FileClassification(
+            file_type=FileType.JSON,
+            extension=extension,
+            language=None,
+            document_format=None,
             confidence=1.0,
         )
 

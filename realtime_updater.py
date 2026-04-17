@@ -1,3 +1,4 @@
+import json
 import sys
 import threading
 import time
@@ -30,6 +31,7 @@ from codebase_rag.constants import (
 )
 from codebase_rag.graph_updater import GraphUpdater
 from codebase_rag.language_spec import get_language_spec
+from codebase_rag.json_ingestion import handle_json_update_event
 from codebase_rag.parser_loader import load_parsers
 from codebase_rag.services import QueryProtocol
 from codebase_rag.services.graph_service import MemgraphIngestor
@@ -552,6 +554,166 @@ class DocumentChangeEventHandler(FileSystemEventHandler):
             logger.error(f"Failed to process document {path.name}: {e}")
 
 
+class JSONChangeEventHandler(FileSystemEventHandler):
+    """
+    Handles JSON file changes using existing handle_json_update_event().
+
+    Pattern follows CodeChangeEventHandler and DocumentChangeEventHandler but
+    for JSON files with integration to json_ingestion.py.
+    """
+
+    def __init__(
+        self,
+        repo_path: Path,
+        dataset_id: str = "default",
+        debounce_seconds: float = DEFAULT_DEBOUNCE_SECONDS,
+        max_wait_seconds: float = DEFAULT_MAX_WAIT_SECONDS,
+    ):
+        self.repo_path = repo_path
+        self.dataset_id = dataset_id
+        self.ignore_patterns = IGNORE_PATTERNS
+
+        # Debounce configuration
+        self.debounce_seconds = debounce_seconds
+        self.max_wait_seconds = max_wait_seconds
+        self.debounce_enabled = debounce_seconds > 0
+
+        # Thread-safe state for tracking pending changes
+        self.timers: dict[str, threading.Timer] = {}
+        self.first_event_time: dict[str, float] = {}
+        self.pending_events: dict[str, FileSystemEvent] = {}
+        self.lock = threading.Lock()
+
+    def _is_relevant(self, path_str: str) -> bool:
+        """Check if file is a JSON file we should process."""
+        path = Path(path_str)
+        if path.suffix.lower() not in {".json", ".jsonl"}:
+            return False
+        return all(part not in self.ignore_patterns for part in path.parts)
+
+    def dispatch(self, event: FileSystemEvent) -> None:
+        src_path = event.src_path
+        if isinstance(src_path, bytes):
+            src_path = src_path.decode()
+
+        if event.is_directory or not self._is_relevant(src_path):
+            return
+
+        if not self.debounce_enabled:
+            self._process_change(event)
+            return
+
+        # Debounced processing (same pattern as other handlers)
+        path = Path(src_path)
+        relative_path_str = str(path.relative_to(self.repo_path))
+        current_time = time.time()
+
+        with self.lock:
+            if relative_path_str not in self.first_event_time:
+                self.first_event_time[relative_path_str] = current_time
+                logger.info(
+                    f"JSON change debouncing: {event.event_type} on {path.name}"
+                )
+
+            self.pending_events[relative_path_str] = event
+
+            if relative_path_str in self.timers:
+                self.timers[relative_path_str].cancel()
+
+            time_since_first = current_time - self.first_event_time[relative_path_str]
+
+            if time_since_first >= self.max_wait_seconds:
+                self._schedule_immediate_processing(relative_path_str)
+            else:
+                remaining_wait = self.max_wait_seconds - time_since_first
+                effective_delay = min(self.debounce_seconds, remaining_wait)
+                timer = threading.Timer(
+                    effective_delay,
+                    self._process_debounced_change,
+                    args=[relative_path_str],
+                )
+                timer.daemon = True
+                self.timers[relative_path_str] = timer
+                timer.start()
+
+    def _schedule_immediate_processing(self, relative_path_str: str) -> None:
+        timer = threading.Timer(
+            0, self._process_debounced_change, args=[relative_path_str]
+        )
+        timer.daemon = True
+        self.timers[relative_path_str] = timer
+        timer.start()
+
+    def _process_debounced_change(self, relative_path_str: str) -> None:
+        with self.lock:
+            event = self.pending_events.pop(relative_path_str, None)
+            self.first_event_time.pop(relative_path_str, None)
+            self.timers.pop(relative_path_str, None)
+
+        if event is None:
+            return
+
+        self._process_change(event)
+
+    def _process_change(self, event: FileSystemEvent) -> None:
+        """Process JSON file change via handle_json_update_event()."""
+        src_path = event.src_path
+        if isinstance(src_path, bytes):
+            src_path = src_path.decode()
+
+        path = Path(src_path)
+        logger.info(f"Processing JSON change: {path.name}")
+
+        relevant_events = {
+            EventType.MODIFIED,
+            EventType.CREATED,
+            EventType.DELETED,
+        }
+        if event.event_type not in relevant_events:
+            return
+
+        try:
+            # Map watchdog event type to JSON operation
+            if event.event_type == EventType.DELETED:
+                operation = "delete"
+                # For deletion, we need to identify which entities to delete
+                # This would require reading the JSON file before deletion or
+                # maintaining a mapping of file-to-entities. For now, log warning.
+                logger.warning(
+                    f"JSON file deleted: {path.name}. "
+                    f"Manual cleanup of JSON entities may be required."
+                )
+                # TODO: Implement proper JSON entity deletion tracking
+                return
+            else:
+                operation = "add" if event.event_type == EventType.CREATED else "update"
+
+            # Load JSON file and create update event
+            with open(path) as f:
+                data = json.load(f)
+
+            update_event = {
+                "operation": operation,
+                "entities": data.get("entities", []),
+                "relationships": data.get("relationships", []),
+            }
+
+            # Use existing handler from json_ingestion.py
+            result = handle_json_update_event(
+                event=update_event,
+                dataset_id=self.dataset_id,
+            )
+            logger.success(
+                f"JSON updated: {path.name} "
+                f"(entities: {result.entities_processed}, "
+                f"relationships: {result.relationships_processed})"
+            )
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON in {path.name}: {e}")
+        except Exception as e:
+            logger.error(f"Failed to process JSON {path.name}: {e}")
+
+
 class UnifiedChangeEventHandler(FileSystemEventHandler):
     """
     Unified handler that routes file changes to appropriate updater.
@@ -559,17 +721,20 @@ class UnifiedChangeEventHandler(FileSystemEventHandler):
     Routes:
     - Code files (py, js, ts, etc.) → CodeChangeEventHandler (code graph)
     - Document files (md, pdf, docx) → DocumentChangeEventHandler (doc graph)
+    - JSON files (.json, .jsonl) → JSONChangeEventHandler (json graph)
     """
 
     def __init__(
         self,
         code_updater: GraphUpdater,
         doc_updater,
+        json_handler=None,
         debounce_seconds: float = DEFAULT_DEBOUNCE_SECONDS,
         max_wait_seconds: float = DEFAULT_MAX_WAIT_SECONDS,
     ):
         self.code_updater = code_updater
         self.doc_updater = doc_updater
+        self.json_handler = json_handler
         self.debounce_seconds = debounce_seconds
         self.max_wait_seconds = max_wait_seconds
 
@@ -603,6 +768,8 @@ class UnifiedChangeEventHandler(FileSystemEventHandler):
             self.code_handler.dispatch(event)
         elif classification.file_type == FileType.DOCUMENT:
             self.doc_handler.dispatch(event)
+        elif classification.file_type == FileType.JSON and self.json_handler:
+            self.json_handler.dispatch(event)
         # else: skip unknown file types
 
 

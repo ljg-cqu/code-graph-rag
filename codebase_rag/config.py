@@ -571,8 +571,13 @@ class AppConfig(BaseSettings):
     JSON_PARALLEL_WORKERS: int = 10
 
     # Real-time updater (extended)
-    REALTIME_DEBOUNCE_SECONDS: int = Field(default=2, gt=0)
-    REALTIME_BATCH_SIZE: int = Field(default=100, gt=0)
+    REALTIME_DEBOUNCE_SECONDS: float = Field(default=5.0, gt=0, validation_alias="CGR_REALTIME_DEBOUNCE_SECONDS")
+    REALTIME_MAX_WAIT_SECONDS: float = Field(default=30.0, gt=0, validation_alias="CGR_REALTIME_MAX_WAIT_SECONDS")
+    REALTIME_BATCH_SIZE: int = Field(default=100, gt=0, validation_alias="CGR_REALTIME_BATCH_SIZE")
+    REALTIME_UPDATER_ENABLED: bool = Field(default=False, validation_alias="CGR_REALTIME_UPDATER")
+    REALTIME_CODE_ENABLED: bool = Field(default=True, validation_alias="CGR_REALTIME_CODE")
+    REALTIME_DOCS_ENABLED: bool = Field(default=False, validation_alias="CGR_REALTIME_DOCS")
+    REALTIME_JSON_ENABLED: bool = Field(default=False, validation_alias="CGR_REALTIME_JSON")
 
     QUERY_RESULT_MAX_TOKENS: int = Field(default=16000, gt=0)
     QUERY_RESULT_ROW_CAP: int = Field(default=500, gt=0)
