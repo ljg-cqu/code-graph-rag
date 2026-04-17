@@ -271,6 +271,7 @@ class AppConfig(BaseSettings):
     MEMGRAPH_QUERY_MAX_RETRIES: int = Field(default=3, ge=0)
     MEMGRAPH_RETRY_BASE_DELAY: float = Field(default=0.25, gt=0)
     MEMGRAPH_CONNECTION_TIMEOUT: int = Field(default=600, gt=0)
+    MEMGRAPH_QUERY_TIMEOUT: int = Field(default=120, gt=0)
     MEMGRAPH_USE_DYNAMIC_ALGORITHMS: bool | None = None
     AGENT_RETRIES: int = 3
     ORCHESTRATOR_OUTPUT_RETRIES: int = 100

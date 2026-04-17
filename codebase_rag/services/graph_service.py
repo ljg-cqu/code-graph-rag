@@ -212,7 +212,7 @@ class MemgraphIngestor:
 
     def __enter__(self) -> MemgraphIngestor:
         logger.info(ls.MG_CONNECTING.format(host=self._host, port=self._port))
-        self.conn = self._create_connection()
+        self.conn = self._create_connection_with_timeout()  # <-- CHANGED
         self._executor = ThreadPoolExecutor(max_workers=settings.FLUSH_THREAD_POOL_SIZE)
 
         # Auto-detect Enterprise edition and dynamic algorithm support
@@ -254,10 +254,15 @@ class MemgraphIngestor:
                 self.flush_all()
         finally:
             if self._executor:
-                self._executor.shutdown(wait=True)
+                # Shutdown without waiting to allow forced exit.
+                # cancel_futures=True (Python ≥3.9) prevents waiting for stuck workers.
+                self._executor.shutdown(wait=False, cancel_futures=True)
                 self._executor = None
             if self.conn:
-                self.conn.close()
+                try:
+                    self.conn.close()
+                except Exception:
+                    pass
                 logger.info(ls.MG_DISCONNECTED)
 
     async def __aenter__(self) -> MemgraphIngestor:
@@ -331,7 +336,7 @@ class MemgraphIngestor:
                     self.conn.close()
                 except Exception:
                     pass
-            self.conn = self._create_connection()
+            self.conn = self._create_connection_with_timeout()  # <-- CHANGED
 
     @classmethod
     def _is_retryable_memgraph_error(cls, error: Exception) -> bool:
@@ -349,7 +354,7 @@ class MemgraphIngestor:
                 current_conn.close()
             except Exception:
                 pass
-        self.conn = self._create_connection()
+        self.conn = self._create_connection_with_timeout()  # <-- CHANGED
 
     def _should_retry_shared_connection_error(
         self,
@@ -429,24 +434,27 @@ class MemgraphIngestor:
                 raise
         return []
 
+    def _get_connection_timeout(self) -> int:
+        """Resolve the effective connection timeout based on port/config."""
+        if self._connection_timeout is not None:
+            return self._connection_timeout
+        if self._port == settings.DOC_MEMGRAPH_PORT:
+            return settings.DOC_MEMGRAPH_CONNECTION_TIMEOUT
+        elif self._port == settings.JSON_MEMGRAPH_PORT:
+            return settings.JSON_MEMGRAPH_CONNECTION_TIMEOUT
+        return settings.MEMGRAPH_CONNECTION_TIMEOUT
+
     def _create_connection(self) -> mgclient.Connection:
         """Create a new Memgraph connection with timeout configuration.
 
-        Sets up TCP keepalive and timeout to prevent connection drops during
-        long-running operations like document indexing.
+        Sets up TCP keepalive and socket timeout to prevent connection drops
+        and indefinite blocking during long-running operations.
         """
-        # Get appropriate timeout based on connection type
-        timeout = self._connection_timeout
-        if timeout is None:
-            # Determine based on port
-            if self._port == settings.DOC_MEMGRAPH_PORT:
-                timeout = settings.DOC_MEMGRAPH_CONNECTION_TIMEOUT
-            elif self._port == settings.JSON_MEMGRAPH_PORT:
-                timeout = settings.JSON_MEMGRAPH_CONNECTION_TIMEOUT
-            else:
-                timeout = settings.MEMGRAPH_CONNECTION_TIMEOUT
+        timeout = self._get_connection_timeout()  # <-- CHANGED: use helper
 
-        # Create connection (timeout is configured server-side via Docker)
+        # Create connection (mgclient.connect() does not accept a timeout parameter;
+        # timeout is enforced via socket.settimeout() below and threading wrapper
+        # in _create_connection_with_timeout() for callers that need it)
         if self._username is not None:
             conn = mgclient.connect(
                 host=self._host,
@@ -455,10 +463,20 @@ class MemgraphIngestor:
                 password=self._password,
             )
         else:
-            conn = mgclient.connect(
-                host=self._host, port=self._port
-            )
+            conn = mgclient.connect(host=self._host, port=self._port)
         conn.autocommit = True
+
+        # Set socket timeout to prevent indefinite blocking on I/O operations
+        # (see Fix 2 for details)
+        try:
+            if hasattr(conn, "socket") or hasattr(conn, "_socket"):
+                sock = getattr(conn, "socket", getattr(conn, "_socket", None))
+                if sock:
+                    sock.settimeout(timeout)
+        except (OSError, AttributeError) as e:
+            logger.warning(
+                f"Could not set socket timeout for {self._host}:{self._port}: {e}"
+            )
 
         # Configure TCP keepalive for long-running connections
         try:
@@ -514,6 +532,116 @@ class MemgraphIngestor:
             )
 
         return conn
+
+    def _create_connection_with_timeout(self) -> mgclient.Connection:
+        """Create connection with timeout enforcement.
+
+        Uses threading to enforce connection timeout since mgclient.connect()
+        doesn't support a timeout parameter natively. If the connection attempt
+        times out, any connection object that may have been created by the
+        background thread is closed to prevent connection leaks.
+        """
+        timeout = self._get_connection_timeout()
+
+        result: list[mgclient.Connection | None] = [None]
+        error: list[Exception | None] = [None]
+
+        def connect_worker():
+            try:
+                result[0] = self._create_connection()
+            except Exception as e:
+                error[0] = e
+
+        thread = threading.Thread(target=connect_worker, daemon=True)
+        thread.start()
+        thread.join(timeout=timeout)
+
+        if thread.is_alive():
+            # Connection attempt timed out. The daemon thread may still complete
+            # the connection in the background — attempt to close any connection
+            # that was created to prevent a connection leak. There is an inherent
+            # race condition between this check and the thread writing result[0],
+            # so this is best-effort cleanup rather than guaranteed.
+            if result[0] is not None:
+                try:
+                    result[0].close()
+                except Exception:
+                    pass
+            raise TimeoutError(
+                f"Connection to Memgraph at {self._host}:{self._port} "
+                f"timed out after {timeout}s. Check if Memgraph is running "
+                f"and accessible."
+            )
+
+        if error[0] is not None:
+            raise error[0]
+
+        if result[0] is None:
+            raise ConnectionError("Failed to create Memgraph connection")
+
+        return result[0]
+
+    @contextmanager
+    def _socket_timeout_context(
+        self,
+        conn: mgclient.Connection,
+        timeout: int,
+    ) -> Generator[None, None, None]:
+        """Temporarily set socket timeout on a connection, restoring it on exit.
+        
+        Uses the same socket access pattern as existing keepalive/timeout code
+        in _create_connection() for consistency.
+        """
+        original_timeout = None
+        try:
+            if hasattr(conn, "socket") or hasattr(conn, "_socket"):
+                sock = getattr(conn, "socket", getattr(conn, "_socket", None))
+                if sock:
+                    original_timeout = sock.gettimeout()
+                    sock.settimeout(timeout)
+        except (OSError, AttributeError):
+            pass
+        try:
+            yield
+        finally:
+            if original_timeout is not None:
+                try:
+                    if hasattr(conn, "socket") or hasattr(conn, "_socket"):
+                        sock = getattr(conn, "socket", getattr(conn, "_socket", None))
+                        if sock:
+                            sock.settimeout(original_timeout)
+                except (OSError, AttributeError):
+                    pass
+
+    def _execute_batch_with_timeout(
+        self,
+        conn: mgclient.Connection,
+        query: str,
+        params_list: Sequence[BatchParams],
+        timeout: int | None = None,
+    ) -> None:
+        """Execute batch query with timeout enforcement (no return value)."""
+        if timeout is None:
+            timeout = settings.MEMGRAPH_QUERY_TIMEOUT
+        with self._socket_timeout_context(conn, timeout):
+            self._execute_batch_on(conn, query, params_list)
+
+    def _execute_batch_with_return_with_timeout(
+        self,
+        conn: mgclient.Connection,
+        query: str,
+        params_list: Sequence[BatchParams],
+        timeout: int | None = None,
+    ) -> list[ResultRow]:
+        """Execute batch query with timeout enforcement (returns results).
+        
+        This is the variant used by relationship flushing via
+        _flush_rel_pattern_group(), which is the primary hang scenario.
+        """
+        if timeout is None:
+            timeout = settings.MEMGRAPH_QUERY_TIMEOUT
+        with self._socket_timeout_context(conn, timeout):
+            return self._execute_batch_with_return_on(conn, query, params_list)
 
     def _execute_batch_on(
         self,
@@ -813,7 +941,7 @@ class MemgraphIngestor:
             return 0, skipped + len(batch_rows)
         lock = self._conn_lock if conn is None else nullcontext()
         with lock:
-            self._execute_batch_on(target_conn, query, batch_rows)
+            self._execute_batch_with_timeout(target_conn, query, batch_rows)
         return len(batch_rows), skipped
 
     def _flush_node_group_with_own_conn(
@@ -821,22 +949,28 @@ class MemgraphIngestor:
         label: str,
         props_list: list[dict[str, PropertyValue]],
     ) -> tuple[int, int]:
-        conn = self._create_connection()
+        conn = self._create_connection_with_timeout()  # <-- CHANGED
         try:
             return self._flush_node_label_group(label, props_list, conn=conn)
         finally:
-            conn.close()
+            try:
+                conn.close()
+            except Exception:
+                pass  # Best-effort close — consistent with _flush_rel_group_with_own_conn
 
     def _flush_rel_group_with_own_conn(
         self,
         pattern: tuple[str, str, str, str, str],
         params_list: list[RelBatchRow],
     ) -> tuple[int, int]:
-        conn = self._create_connection()
+        conn = self._create_connection_with_timeout()  # <-- CHANGED
         try:
             return self._flush_rel_pattern_group(pattern, params_list, conn=conn)
         finally:
-            conn.close()
+            try:
+                conn.close()
+            except Exception:
+                pass  # Best-effort close — connection may be degraded after timeout
 
     def flush_nodes(self) -> None:
         if not self.node_buffer:
@@ -921,7 +1055,7 @@ class MemgraphIngestor:
             return len(params_list), 0
         lock = self._conn_lock if conn is None else nullcontext()
         with lock:
-            results = self._execute_batch_with_return_on(
+            results = self._execute_batch_with_return_with_timeout(
                 target_conn, query, params_list
             )
         batch_successful = 0
@@ -949,19 +1083,21 @@ class MemgraphIngestor:
 
     def flush_relationships(self) -> None:
         if not self._rel_count:
+            logger.debug("No relationships to flush, skipping")
             return
 
         total_attempted = 0
         total_successful = 0
         first_error: Exception | None = None
 
-        if self._executor and len(self._rel_groups) > 1:
-            logger.info(
-                ls.MG_PARALLEL_FLUSH_RELS.format(
-                    count=len(self._rel_groups),
-                    workers=settings.FLUSH_THREAD_POOL_SIZE,
-                )
+        # Always log relationship flush start (previously conditional on executor + >1 groups)
+        logger.info(
+            ls.MG_PARALLEL_FLUSH_RELS.format(
+                count=len(self._rel_groups),
+                workers=settings.FLUSH_THREAD_POOL_SIZE,
             )
+        )
+        if self._executor and len(self._rel_groups) > 1:
             futures = {
                 self._executor.submit(
                     self._flush_rel_group_with_own_conn, pattern, params_list
