@@ -67,6 +67,7 @@ An accurate Retrieval-Augmented Generation (RAG) system that analyzes multi-lang
   - BFS context expansion automatically retrieves related code context during search
 - **⚡ Automatic Parallel Execution**: No explicit user request needed for safe read-only work. The system can preview path-scoped subtasks, block write-like requests from parallel execution, run real read-only sub-agents in parallel, and fall back to sequential execution when the task is unsafe or underspecified.
 - **⚡ Blazing Fast Parallel Indexing**: Up to 20x faster codebase ingestion with perfect round-robin load distribution across parallel workers, auto-optimized at runtime to match your CPU core count and workload size (never uses more workers than needed, no wasted overhead). Fully backward compatible with sequential mode, no configuration required out of the box.
+- **🔄 Integrated Realtime Updates**: Keep your knowledge graph synchronized automatically with the `--realtime-updater` flag. Watches for file changes in the background while you chat, updating the graph instantly for code, documents, and JSON files. No separate terminal needed—shares database connections with the chat session for efficiency.
 - **🧠 Intelligent Context Window Compression**: Automatically prevents LLM context window overflow with zero semantic loss for critical content, no manual intervention required. Uses 10 parallel round-robin workers (supports up to 20 for high throughput workloads) to evaluate 5 compression strategies and select the optimal one per scenario using weighted scoring (60% semantic retention, 30% token reduction, 10% execution speed). Features include: automatic 85% usage trigger with 5% hysteresis buffer, manual `/compress` CLI command with aggressive mode and custom preserve patterns, 24h context archive for restore capability, automatic rollback if retention falls below 70% threshold, and guaranteed preservation of latest 2 user turns, all system prompts, and tool call history. Delivers average 40% token reduction with >88% semantic retention in <200ms per compression run.
 - **🧠 Context Window Management System**: Flexible, multi-level context window configuration with automatic model detection:
   - Default context window increased to 256k tokens to align with modern LLM capabilities
@@ -420,17 +421,44 @@ For active development, you can keep your knowledge graph automatically synchron
 - Automatically updates the knowledge graph in real-time
 - Maintains consistency by recalculating all function call relationships
 - Filters out irrelevant files (`.git`, `node_modules`, etc.)
+- Supports code files, documents, and JSON files simultaneously
 
-**How to use:**
+**Two Ways to Use:**
 
-Run the realtime updater in a separate terminal:
+#### Option 1: Integrated Realtime Updater (Recommended)
+
+The easiest way - just add `--realtime-updater` to your `cgr start` command:
 
 ```bash
-# Using Python directly
+# Enable realtime updates for code files only (default)
+cgr start --repo-path /path/to/your/repo --realtime-updater
+
+# Enable realtime updates for code and documents
+cgr start --repo-path /path/to/your/repo --realtime-updater --realtime-docs --with-docs
+
+# Enable realtime updates for all file types (code, docs, JSON)
+cgr start --repo-path /path/to/your/repo --realtime-updater --realtime-docs --realtime-json --with-docs
+
+# Customize debounce timing (wait 2s after last change, max 10s wait)
+cgr start --repo-path /path/to/your/repo --realtime-updater --realtime-debounce 2 --realtime-max-wait 10
+```
+
+**Benefits of integrated mode:**
+- Single command to start both chat and file watcher
+- Shares database connections (more efficient)
+- Same configuration for chat and updater
+- Graceful shutdown when you exit the chat
+
+#### Option 2: Standalone Realtime Updater (Legacy)
+
+Run the realtime updater in a separate terminal for more control:
+
+```bash
+# Terminal 1: Start the realtime updater
 python realtime_updater.py /path/to/your/repo
 
-# Or using the Makefile
-make watch REPO_PATH=/path/to/your/repo
+# Terminal 2: Run the AI assistant
+cgr start --repo-path /path/to/your/repo
 ```
 
 **With custom Memgraph settings:**
@@ -442,22 +470,15 @@ python realtime_updater.py /path/to/your/repo --host localhost --port 7687 --bat
 make watch REPO_PATH=/path/to/your/repo HOST=localhost PORT=7687 BATCH_SIZE=1000
 ```
 
-**Multi-terminal workflow:**
-```bash
-# Terminal 1: Start the realtime updater
-python realtime_updater.py ~/my-project
-
-# Terminal 2: Run the AI assistant
-cgr start --repo-path ~/my-project
-```
-
 **Performance note:** The updater currently recalculates all CALLS relationships on every file change to ensure consistency. This prevents "island" problems where changes in one file aren't reflected in relationships from other files, but may impact performance on very large codebases with frequent changes. **Note:** Optimization of this behavior is a work in progress.
 
-**CLI Arguments:**
+**Standalone CLI Arguments:**
 - `repo_path` (required): Path to repository to watch
 - `--host`: Memgraph host (default: `localhost`)
 - `--port`: Memgraph port (default: `7687`)
 - `--batch-size`: Number of buffered nodes/relationships before flushing to Memgraph
+- `--debounce`: Debounce delay in seconds (default: `5.0`)
+- `--max-wait`: Maximum wait time before processing (default: `30.0`)
 
 **Specify Custom Models:**
 ```bash
@@ -691,6 +712,12 @@ cgr start --repo-path /path/to/your/repo --index-docs --with-docs --mode documen
 | `--doc-workspace` | Document workspace identifier (default: `default`) |
 | `--check-freshness/--no-check-freshness` | Check if indexed graphs are up-to-date and prompt for reindex if stale (default: enabled) |
 | `--index-timeout` | Maximum time in seconds for indexing operations (default: 300) |
+| `--realtime-updater` | **NEW**: Enable real-time file system monitoring and automatic graph updates |
+| `--realtime-debounce` | **NEW**: Debounce delay in seconds for realtime updates (default: `5.0`) |
+| `--realtime-max-wait` | **NEW**: Maximum wait time in seconds before processing changes (default: `30.0`) |
+| `--realtime-code` | **NEW**: Enable realtime updates for code files (default: `true`) |
+| `--realtime-docs` | **NEW**: Enable realtime updates for document files (default: `false`) |
+| `--realtime-json` | **NEW**: Enable realtime updates for JSON files (default: `false`) |
 | `--ingest-json` | **NEW**: Enable automatic JSON ingestion during document indexing (validates against [ingestion_schema.json](./ingestion_schema.json)) |
 | `--json-path` | **NEW**: Path to specific JSON file or directory to ingest (defaults to scanning repo root for all *.json files if not provided) |
 | `--json-skip-invalid/--json-fail-on-invalid` | **NEW**: Skip invalid JSON files (default) or fail ingestion if any JSON file fails schema validation |

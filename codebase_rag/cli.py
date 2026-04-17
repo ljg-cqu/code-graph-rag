@@ -18,6 +18,7 @@ from .graph_updater import GraphUpdater
 from .json_ingestion import recreate_json_vector_index
 from .main import (
     ParallelExecutionConfig,
+    RealtimeConfig,
     _check_graph_freshness,
     _prompt_for_reindex,
     app_context,
@@ -663,6 +664,39 @@ def start(
         "--json-exclude",
         help="Patterns of JSON files to exclude from ingestion (supports glob patterns)",
     ),
+    # === Realtime Updater Flags ===
+    realtime_updater: bool = typer.Option(
+        False,
+        "--realtime-updater/--no-realtime-updater",
+        help="Enable real-time file system monitoring and automatic graph updates",
+    ),
+    realtime_debounce: float = typer.Option(
+        5.0,
+        "--realtime-debounce",
+        "-rd",
+        help="Debounce delay in seconds for real-time updates (0 to disable)",
+    ),
+    realtime_max_wait: float = typer.Option(
+        30.0,
+        "--realtime-max-wait",
+        "-rm",
+        help="Maximum wait time in seconds before processing changes",
+    ),
+    realtime_code: bool = typer.Option(
+        True,
+        "--realtime-code/--no-realtime-code",
+        help="Enable real-time updates for code files",
+    ),
+    realtime_docs: bool = typer.Option(
+        False,
+        "--realtime-docs/--no-realtime-docs",
+        help="Enable real-time updates for document files",
+    ),
+    realtime_json: bool = typer.Option(
+        False,
+        "--realtime-json/--no-realtime-json",
+        help="Enable real-time updates for JSON files",
+    ),
 ) -> None:
     import re
 
@@ -880,6 +914,16 @@ def start(
         force_parallel=force_parallel,  # NEW
     )
 
+    # Build realtime config if enabled
+    rt_config = RealtimeConfig(
+        enabled=realtime_updater,
+        debounce=realtime_debounce,
+        max_wait=realtime_max_wait,
+        enable_code=realtime_code,
+        enable_docs=realtime_docs,
+        enable_json=realtime_json,
+    )
+
     try:
         if ask_agent:
             main_single_query(target_repo_path, effective_batch_size, ask_agent)
@@ -893,6 +937,7 @@ def start(
                     query_mode=query_mode,
                     doc_workspace=doc_workspace,
                     parallel_config=parallel_config,
+                    realtime_config=rt_config,
                 )
             )
         else:
@@ -901,6 +946,7 @@ def start(
                     target_repo_path,
                     effective_batch_size,
                     parallel_config=parallel_config,
+                    realtime_config=rt_config,
                 )
             )
     except KeyboardInterrupt:

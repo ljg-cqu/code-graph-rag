@@ -845,3 +845,48 @@ def start_unified_watcher(
             logger.info("Stopping watcher...")
             observer.stop()
         observer.join()
+
+
+class UnifiedWatcherManager:
+    """Lifecycle manager for realtime file watching as a background thread.
+
+    Wraps UnifiedChangeEventHandler and Observer for integration with
+    the main application lifecycle. The caller provides shared updaters/ingestors;
+    this class only manages the Observer thread and event routing.
+    """
+
+    def __init__(
+        self,
+        repo_path: Path,
+        code_updater: GraphUpdater,
+        doc_updater=None,
+        json_handler: JSONChangeEventHandler | None = None,
+        debounce_seconds: float = DEFAULT_DEBOUNCE_SECONDS,
+        max_wait_seconds: float = DEFAULT_MAX_WAIT_SECONDS,
+    ):
+        self.repo_path = repo_path
+        self.observer: Observer | None = None
+        self.event_handler = UnifiedChangeEventHandler(
+            code_updater=code_updater,
+            doc_updater=doc_updater,
+            json_handler=json_handler,
+            debounce_seconds=debounce_seconds,
+            max_wait_seconds=max_wait_seconds,
+        )
+
+    def start(self) -> None:
+        """Start the background file system observer."""
+        self.observer = Observer()
+        self.observer.schedule(self.event_handler, str(self.repo_path), recursive=True)
+        self.observer.start()
+        logger.info(f"Realtime watcher started for {self.repo_path}")
+
+    def stop(self) -> None:
+        """Signal the observer to stop."""
+        if self.observer:
+            self.observer.stop()
+
+    def join(self, timeout: float | None = None) -> None:
+        """Wait for the observer thread to finish."""
+        if self.observer:
+            self.observer.join(timeout=timeout)

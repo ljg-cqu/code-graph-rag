@@ -198,6 +198,18 @@ Use with caution on production codebases.
 
 
 @dataclass(frozen=True)
+class RealtimeConfig:
+    """Configuration for realtime file watching."""
+
+    enabled: bool = False
+    debounce: float = cs.DEFAULT_DEBOUNCE_SECONDS
+    max_wait: float = cs.DEFAULT_MAX_WAIT_SECONDS
+    enable_code: bool = True
+    enable_docs: bool = False
+    enable_json: bool = False
+
+
+@dataclass(frozen=True)
 class ParallelExecutionConfig:
     worker_count: int | None = None
     auto_split: bool = settings.CGR_AUTO_SPLIT_ENABLED
@@ -2469,6 +2481,7 @@ async def main_async(
     repo_path: str,
     batch_size: int,
     parallel_config: ParallelExecutionConfig | None = None,
+    realtime_config: RealtimeConfig | None = None,
 ) -> None:
     """Original main_async - unchanged for backward compatibility.
 
@@ -2480,6 +2493,7 @@ async def main_async(
         with_docs=False,
         query_mode=QueryMode.CODE_ONLY,
         parallel_config=parallel_config,
+        realtime_config=realtime_config,
     )
 
 
@@ -2490,6 +2504,7 @@ async def main_unified_async(
     query_mode: QueryMode | None = None,
     doc_workspace: str = "default",
     parallel_config: ParallelExecutionConfig | None = None,
+    realtime_config: RealtimeConfig | None = None,
     _fallback_attempted: bool = False,
 ) -> None:
     """Main async entry point with dual-graph support.
@@ -2500,6 +2515,7 @@ async def main_unified_async(
         with_docs: Enable document graph
         query_mode: Initial query mode (defaults to CODE_ONLY)
         doc_workspace: Document workspace identifier
+        realtime_config: Optional realtime file watcher configuration
         _fallback_attempted: Internal flag to prevent infinite recursion on fallback
     """
     # Default to CODE_ONLY if not specified
@@ -2553,15 +2569,30 @@ async def main_unified_async(
                     doc_workspace=doc_workspace,
                 )
 
-                await run_chat_loop(
-                    rag_agent,
-                    [],
-                    project_root,
-                    tool_names,
-                    query_router=query_router,
-                    current_mode=query_mode,
-                    parallel_config=parallel_config,
-                )
+                watcher_manager = None
+                if realtime_config and realtime_config.enabled:
+                    watcher_manager = _create_watcher_manager(
+                        project_root,
+                        code_graph,
+                        realtime_config,
+                        doc_ingestor=doc_graph,
+                    )
+                    watcher_manager.start()
+
+                try:
+                    await run_chat_loop(
+                        rag_agent,
+                        [],
+                        project_root,
+                        tool_names,
+                        query_router=query_router,
+                        current_mode=query_mode,
+                        parallel_config=parallel_config,
+                    )
+                finally:
+                    if watcher_manager:
+                        watcher_manager.stop()
+                        watcher_manager.join(timeout=5.0)
 
         except Exception as e:
             # Fallback to code-only if document graph fails
@@ -2578,6 +2609,7 @@ async def main_unified_async(
                     batch_size,
                     with_docs=False,
                     parallel_config=parallel_config,
+                    realtime_config=realtime_config,
                     _fallback_attempted=True,
                 )
             else:
@@ -2597,14 +2629,93 @@ async def main_unified_async(
             rag_agent, tool_names, query_router = _initialize_services_and_agent(
                 repo_path, ingestor
             )
-            await run_chat_loop(
-                rag_agent,
-                [],
-                project_root,
-                tool_names,
-                query_router=query_router,
-                parallel_config=parallel_config,
-            )
+
+            watcher_manager = None
+            if realtime_config and realtime_config.enabled:
+                watcher_manager = _create_watcher_manager(
+                    project_root,
+                    ingestor,
+                    realtime_config,
+                )
+                watcher_manager.start()
+
+            try:
+                await run_chat_loop(
+                    rag_agent,
+                    [],
+                    project_root,
+                    tool_names,
+                    query_router=query_router,
+                    parallel_config=parallel_config,
+                )
+            finally:
+                if watcher_manager:
+                    watcher_manager.stop()
+                    watcher_manager.join(timeout=5.0)
+
+
+def _create_watcher_manager(
+    project_root: Path,
+    code_ingestor: QueryProtocol,
+    realtime_config: RealtimeConfig,
+    doc_ingestor: MemgraphIngestor | None = None,
+):
+    """Create a UnifiedWatcherManager with the appropriate handlers.
+
+    Args:
+        project_root: Repository root path
+        code_ingestor: Shared code graph ingestor (thread-safe)
+        realtime_config: Realtime watcher configuration
+        doc_ingestor: Optional shared document graph ingestor
+
+    Returns:
+        Configured UnifiedWatcherManager instance
+    """
+    from .parser_loader import load_parsers
+
+    from realtime_updater import (
+        JSONChangeEventHandler,
+        UnifiedWatcherManager,
+    )
+
+    parsers, queries = load_parsers()
+
+    # Create GraphUpdater for the watcher (shares the same ingestor)
+    code_updater = GraphUpdater(
+        ingestor=code_ingestor,
+        repo_path=project_root,
+        parsers=parsers,
+        queries=queries,
+    )
+
+    # Create doc updater if docs enabled
+    doc_updater = None
+    if realtime_config.enable_docs and doc_ingestor:
+        from .document.document_updater import DocumentGraphUpdater
+
+        doc_updater = DocumentGraphUpdater(
+            host=settings.DOC_MEMGRAPH_HOST,
+            port=settings.DOC_MEMGRAPH_PORT,
+            repo_path=project_root,
+        )
+
+    # Create JSON handler if JSON enabled
+    json_handler = None
+    if realtime_config.enable_json:
+        json_handler = JSONChangeEventHandler(
+            repo_path=project_root,
+            debounce_seconds=realtime_config.debounce,
+            max_wait_seconds=realtime_config.max_wait,
+        )
+
+    return UnifiedWatcherManager(
+        repo_path=project_root,
+        code_updater=code_updater,
+        doc_updater=doc_updater,
+        json_handler=json_handler,
+        debounce_seconds=realtime_config.debounce,
+        max_wait_seconds=realtime_config.max_wait,
+    )
 
 
 async def main_optimize_async(
