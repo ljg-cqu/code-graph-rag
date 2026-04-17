@@ -784,6 +784,7 @@ class AppConfig(BaseSettings):
 
         # Parse from CGR_WORKER_LLMS config
         worker_llms_config = self.CGR_WORKER_LLMS
+        logger.info(f"CGR_WORKER_LLMS raw value type: {type(worker_llms_config)}, value: {repr(worker_llms_config)[:200]}...")
         parsed_llms: list[ModelConfig] = []
 
         if isinstance(worker_llms_config, str):
@@ -791,10 +792,12 @@ class AppConfig(BaseSettings):
             if config_str:
                 # Check if it's a JSON array or object
                 if config_str.startswith("[") or config_str.startswith("{"):
+                    logger.info("Detected JSON format for CGR_WORKER_LLMS")
                     try:
                         import json
 
                         parsed = json.loads(config_str)
+                        logger.info(f"Parsed JSON: {len(parsed) if isinstance(parsed, list) else 'single object'} entries")
                         if isinstance(parsed, list):
                             for entry in parsed:
                                 if isinstance(entry, str):
@@ -841,14 +844,14 @@ class AppConfig(BaseSettings):
 
         # Validate all parsed LLMs
         valid_llms = []
-        logger.debug(f"Validating {len(parsed_llms)} parsed worker LLM configs")
+        logger.info(f"Validating {len(parsed_llms)} parsed worker LLM configs")
         for llm_config in parsed_llms:
             has_key = bool(
                 llm_config.api_key
                 and llm_config.api_key.strip()
                 and llm_config.api_key != cs.DEFAULT_API_KEY
             )
-            logger.debug(
+            logger.info(
                 f"Worker LLM: {llm_config.provider}:{llm_config.model_id} "
                 f"(api_key={'set' if has_key else 'not set'}, "
                 f"endpoint={llm_config.endpoint})"
@@ -856,7 +859,7 @@ class AppConfig(BaseSettings):
             try:
                 llm_config.validate_api_key(role="worker")
                 valid_llms.append(llm_config)
-                logger.debug(f"  -> Validated successfully")
+                logger.info(f"  -> Validated successfully")
             except ValueError as e:
                 logger.warning(f"Skipping invalid worker LLM config: {str(e)}")
 
