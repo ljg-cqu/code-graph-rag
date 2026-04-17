@@ -937,7 +937,9 @@ def get_multiline_input(prompt_text: str = cs.PROMPT_ASK_QUESTION) -> str:
     return stripped
 
 
-def _handle_models_command(command: str) -> None:
+def _handle_models_command(
+    command: str, current_model_config: ModelConfig | None = None
+) -> None:
     """Handle /models command to display available models."""
     from .models_dynamic import build_dynamic_model_catalog
 
@@ -951,12 +953,12 @@ def _handle_models_command(command: str) -> None:
     catalog = build_dynamic_model_catalog()
 
     if arg is None:
-        _display_models_table(catalog)
+        _display_models_table(catalog, current_model_config)
         return
 
     if arg in catalog:
         provider_models = {arg: catalog[arg]}
-        _display_models_table(provider_models)
+        _display_models_table(provider_models, current_model_config)
     else:
         valid_providers = ", ".join(catalog.keys())
         app_context.console.print(
@@ -966,6 +968,7 @@ def _handle_models_command(command: str) -> None:
 
 def _display_models_table(
     catalog: dict[str, list[DynamicModelInfo]],
+    current_model_config: ModelConfig | None = None,
 ) -> None:
     """Display formatted model table using Rich Text for safe markup.
 
@@ -979,7 +982,7 @@ def _display_models_table(
         app_context.console.print("No models available.")
         return
 
-    current_config = settings.active_orchestrator_config
+    current_config = current_model_config or settings.active_orchestrator_config
     current_provider = current_config.provider
     current_model_id = current_config.model_id
 
@@ -1458,7 +1461,7 @@ async def _run_interactive_loop(
 
                 command_parts = stripped_lower.split(maxsplit=1)
                 if command_parts[0] == cs.MODELS_COMMAND_PREFIX:
-                    _handle_models_command(stripped_question)
+                    _handle_models_command(stripped_question, model_override_config)
                     initial_question = None
                     continue
                 if command_parts[0] == cs.MODEL_COMMAND_PREFIX:

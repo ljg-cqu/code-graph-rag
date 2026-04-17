@@ -812,6 +812,9 @@ class AppConfig(BaseSettings):
                                 cleaned_lines.append(cleaned)
                         cleaned_json = "\n".join(cleaned_lines)
 
+                        # Remove trailing commas before ] or } (left behind after comment removal)
+                        cleaned_json = re.sub(r',(\s*[\]\}])', r'\1', cleaned_json)
+
                         # Debug: log the cleaned JSON before parsing
                         logger.debug(f"Cleaned JSON for CGR_WORKER_LLMS: {cleaned_json[:200]}...")
 
