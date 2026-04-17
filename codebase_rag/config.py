@@ -788,6 +788,10 @@ class AppConfig(BaseSettings):
 
         if isinstance(worker_llms_config, str):
             config_str = worker_llms_config.strip()
+            # Strip surrounding quotes that may come from .env file
+            if (config_str.startswith("'") and config_str.endswith("'")) or \
+               (config_str.startswith('"') and config_str.endswith('"')):
+                config_str = config_str[1:-1]
             if config_str:
                 # Check if it's a JSON array or object
                 if config_str.startswith("[") or config_str.startswith("{"):
