@@ -787,18 +787,47 @@ class AppConfig(BaseSettings):
         parsed_llms: list[ModelConfig] = []
 
         if isinstance(worker_llms_config, str):
-            if worker_llms_config.strip():
-                # Split comma-separated list
-                entries = [
-                    entry.strip()
-                    for entry in worker_llms_config.split(",")
-                    if entry.strip()
-                ]
-                for entry in entries:
-                    provider, model = self.parse_model_string(entry)
-                    parsed_llms.append(
-                        self._get_model_config_for_provider(provider, model)
-                    )
+            config_str = worker_llms_config.strip()
+            if config_str:
+                # Check if it's a JSON array or object
+                if config_str.startswith("[") or config_str.startswith("{"):
+                    try:
+                        import json
+
+                        parsed = json.loads(config_str)
+                        if isinstance(parsed, list):
+                            for entry in parsed:
+                                if isinstance(entry, str):
+                                    provider, model = self.parse_model_string(entry)
+                                    parsed_llms.append(
+                                        self._get_model_config_for_provider(
+                                            provider, model
+                                        )
+                                    )
+                                elif isinstance(entry, dict):
+                                    parsed_llms.append(_model_config_from_mapping(entry))
+                        elif isinstance(parsed, dict):
+                            # Single object wrapped in braces
+                            parsed_llms.append(_model_config_from_mapping(parsed))
+                    except json.JSONDecodeError:
+                        # Invalid JSON, fall through to comma-separated parsing
+                        logger.debug(
+                            "CGR_WORKER_LLMS looks like JSON but failed to parse, "
+                            "falling back to comma-separated format"
+                        )
+                        pass
+                else:
+                    # Split comma-separated list (e.g., "openai:gpt-4o,anthropic:claude-3")
+                    entries = [
+                        entry.strip()
+                        for entry in worker_llms_config.split(",")
+                        if entry.strip()
+                    ]
+                    for entry in entries:
+                        provider, model = self.parse_model_string(entry)
+                        parsed_llms.append(
+                            self._get_model_config_for_provider(provider, model)
+                        )
         elif isinstance(worker_llms_config, list):
             for entry in worker_llms_config:
                 if isinstance(entry, str):
