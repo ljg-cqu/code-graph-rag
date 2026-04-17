@@ -8,7 +8,7 @@ from typing import Literal, TypedDict, Unpack
 
 from dotenv import load_dotenv
 from loguru import logger
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from . import constants as cs
@@ -571,8 +571,14 @@ class AppConfig(BaseSettings):
     JSON_PARALLEL_WORKERS: int = 10
 
     # Real-time updater (extended)
-    REALTIME_DEBOUNCE_SECONDS: float = Field(default=5.0, gt=0, validation_alias="CGR_REALTIME_DEBOUNCE_SECONDS")
-    REALTIME_MAX_WAIT_SECONDS: float = Field(default=30.0, gt=0, validation_alias="CGR_REALTIME_MAX_WAIT_SECONDS")
+    REALTIME_DEBOUNCE_SECONDS: float = Field(
+        default=5.0, gt=0,
+        validation_alias=AliasChoices("CGR_REALTIME_DEBOUNCE", "CGR_REALTIME_DEBOUNCE_SECONDS")
+    )
+    REALTIME_MAX_WAIT_SECONDS: float = Field(
+        default=30.0, gt=0,
+        validation_alias=AliasChoices("CGR_REALTIME_MAX_WAIT", "CGR_REALTIME_MAX_WAIT_SECONDS")
+    )
     REALTIME_BATCH_SIZE: int = Field(default=100, gt=0, validation_alias="CGR_REALTIME_BATCH_SIZE")
     REALTIME_UPDATER_ENABLED: bool = Field(default=False, validation_alias="CGR_REALTIME_UPDATER")
     REALTIME_CODE_ENABLED: bool = Field(default=True, validation_alias="CGR_REALTIME_CODE")
