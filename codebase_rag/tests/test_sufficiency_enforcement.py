@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import pytest
-
 from codebase_rag.orchestrator.investigation_tracker import InvestigationState
 from codebase_rag.orchestrator.sufficiency_analyzer import (
     QuestionType,
@@ -12,13 +10,14 @@ from codebase_rag.orchestrator.sufficiency_gatekeeper import (
     evaluate_parallel_worker_sufficiency,
     evaluate_sufficiency,
 )
+from codebase_rag.tools.tool_descriptions import AgenticToolName
 
 
 class TestSufficiencyGatekeeperLogic:
     def test_gatekeeper_insufficient_file_read(self) -> None:
         state = InvestigationState(
             rounds_completed=3,
-            tools_used={"query_graph", "semantic_search"},
+            tools_used={AgenticToolName.QUERY_GRAPH, AgenticToolName.SEMANTIC_SEARCH},
             files_read=[],
         )
         reqs = analyze_requirements("how does the authentication logic work")
@@ -30,7 +29,11 @@ class TestSufficiencyGatekeeperLogic:
     def test_gatekeeper_insufficient_rounds(self) -> None:
         state = InvestigationState(
             rounds_completed=1,
-            tools_used={"query_graph", "semantic_search", "read_file"},
+            tools_used={
+                AgenticToolName.QUERY_GRAPH,
+                AgenticToolName.SEMANTIC_SEARCH,
+                AgenticToolName.READ_FILE,
+            },
             files_read=["main.py"],
         )
         reqs = analyze_requirements("how does the authentication logic work")
@@ -42,7 +45,11 @@ class TestSufficiencyGatekeeperLogic:
     def test_gatekeeper_sufficient_functional(self) -> None:
         state = InvestigationState(
             rounds_completed=3,
-            tools_used={"semantic_search", "query_graph", "read_file"},
+            tools_used={
+                AgenticToolName.SEMANTIC_SEARCH,
+                AgenticToolName.QUERY_GRAPH,
+                AgenticToolName.READ_FILE,
+            },
             files_read=["main.py"],
         )
         reqs = analyze_requirements("how does the authentication logic work")
@@ -53,20 +60,22 @@ class TestSufficiencyGatekeeperLogic:
     def test_gatekeeper_max_rejection_override(self) -> None:
         state = InvestigationState(
             rounds_completed=1,
-            tools_used={"query_graph", "semantic_search"},
+            tools_used={AgenticToolName.QUERY_GRAPH, AgenticToolName.SEMANTIC_SEARCH},
             files_read=[],
         )
         reqs = analyze_requirements("how does the authentication logic work")
-        allowed, feedback = evaluate_sufficiency(state, reqs, rejection_count=MAX_REJECTION_LIMIT)
+        allowed, feedback = evaluate_sufficiency(
+            state, reqs, rejection_count=MAX_REJECTION_LIMIT
+        )
         assert allowed
         assert feedback is None
 
     def test_gatekeeper_graceful_degradation(self) -> None:
         state = InvestigationState(
             rounds_completed=3,
-            tools_used={"read_file"},
+            tools_used={AgenticToolName.READ_FILE},
             files_read=["main.py"],
-            tool_failures={"semantic_search", "query_graph"},
+            tool_failures={AgenticToolName.SEMANTIC_SEARCH, AgenticToolName.QUERY_GRAPH},
         )
         reqs = analyze_requirements("how does the authentication logic work")
         allowed, feedback = evaluate_sufficiency(state, reqs)
@@ -76,9 +85,13 @@ class TestSufficiencyGatekeeperLogic:
     def test_gatekeeper_all_file_tools_failed(self) -> None:
         state = InvestigationState(
             rounds_completed=3,
-            tools_used={"semantic_search", "query_graph"},
+            tools_used={AgenticToolName.SEMANTIC_SEARCH, AgenticToolName.QUERY_GRAPH},
             files_read=[],
-            tool_failures={"read_file", "get_code_snippet", "get_function_source"},
+            tool_failures={
+                AgenticToolName.READ_FILE,
+                AgenticToolName.GET_CODE_SNIPPET,
+                AgenticToolName.GET_FUNCTION_SOURCE,
+            },
         )
         reqs = analyze_requirements("how does the authentication logic work")
         allowed, feedback = evaluate_sufficiency(state, reqs)
@@ -114,20 +127,20 @@ class TestSufficiencyAnalyzerClassification:
 class TestInvestigationTracker:
     def test_tracker_records_all_file_tools(self) -> None:
         state = InvestigationState()
-        state.record_tool("read_file", "main.py")
-        state.record_tool("get_code_snippet", "MyClass.method")
-        state.record_tool("get_function_source", "node-123")
+        state.record_tool(AgenticToolName.READ_FILE, "main.py")
+        state.record_tool(AgenticToolName.GET_CODE_SNIPPET, "MyClass.method")
+        state.record_tool(AgenticToolName.GET_FUNCTION_SOURCE, "node-123")
         assert "main.py" in state.files_read
         assert "MyClass.method" in state.files_read
         assert "node-123" in state.files_read
-        assert "read_file" in state.tools_used
-        assert "get_code_snippet" in state.tools_used
-        assert "get_function_source" in state.tools_used
+        assert AgenticToolName.READ_FILE in state.tools_used
+        assert AgenticToolName.GET_CODE_SNIPPET in state.tools_used
+        assert AgenticToolName.GET_FUNCTION_SOURCE in state.tools_used
 
     def test_tracker_detects_tool_failure_via_record_tool(self) -> None:
         state = InvestigationState()
-        state.record_tool("semantic_search", "auth logic", results_count=0)
-        assert "semantic_search" in state.tool_failures
+        state.record_tool(AgenticToolName.SEMANTIC_SEARCH, "auth logic", results_count=0)
+        assert AgenticToolName.SEMANTIC_SEARCH in state.tool_failures
 
     def test_tracker_parallel_worker_state(self) -> None:
         state = InvestigationState.from_parallel_worker(worker_id=5)
@@ -138,34 +151,38 @@ class TestInvestigationTracker:
 
     def test_tracker_graph_queries_incremented(self) -> None:
         state = InvestigationState()
-        state.record_tool("query_graph", "find all classes")
-        state.record_tool("query_graph", "find all functions")
+        state.record_tool(AgenticToolName.QUERY_GRAPH, "find all classes")
+        state.record_tool(AgenticToolName.QUERY_GRAPH, "find all functions")
         assert state.graph_queries_run == 2
 
     def test_tracker_no_failure_for_positive_results(self) -> None:
         state = InvestigationState()
-        state.record_tool("semantic_search", "auth logic", results_count=5)
-        assert "semantic_search" not in state.tool_failures
+        state.record_tool(AgenticToolName.SEMANTIC_SEARCH, "auth logic", results_count=5)
+        assert AgenticToolName.SEMANTIC_SEARCH not in state.tool_failures
 
 
 class TestParallelWorkerSufficiency:
     def test_parallel_worker_sufficiency_pass(self) -> None:
         state = InvestigationState(
-            tools_used={"query_graph", "read_file"},
+            tools_used={AgenticToolName.QUERY_GRAPH, AgenticToolName.READ_FILE},
             files_read=["auth.py"],
         )
         reqs = analyze_requirements("how does authentication work")
-        allowed, warning = evaluate_parallel_worker_sufficiency(state, reqs, worker_id=0)
+        allowed, warning = evaluate_parallel_worker_sufficiency(
+            state, reqs, worker_id=0
+        )
         assert allowed
         assert warning is None
 
     def test_parallel_worker_sufficiency_warning(self) -> None:
         state = InvestigationState(
-            tools_used={"semantic_search"},
+            tools_used={AgenticToolName.SEMANTIC_SEARCH},
             files_read=[],
         )
         reqs = analyze_requirements("how does authentication work")
-        allowed, warning = evaluate_parallel_worker_sufficiency(state, reqs, worker_id=3)
+        allowed, warning = evaluate_parallel_worker_sufficiency(
+            state, reqs, worker_id=3
+        )
         assert not allowed
         assert warning is not None
         assert "[Worker 3]" in warning
@@ -173,11 +190,13 @@ class TestParallelWorkerSufficiency:
 
     def test_parallel_worker_graph_not_queried_warning(self) -> None:
         state = InvestigationState(
-            tools_used={"read_file"},
+            tools_used={AgenticToolName.READ_FILE},
             files_read=["main.py"],
         )
         reqs = analyze_requirements("list all classes in the module")
-        allowed, warning = evaluate_parallel_worker_sufficiency(state, reqs, worker_id=7)
+        allowed, warning = evaluate_parallel_worker_sufficiency(
+            state, reqs, worker_id=7
+        )
         assert not allowed
         assert warning is not None
         assert "[Worker 7]" in warning
@@ -185,11 +204,14 @@ class TestParallelWorkerSufficiency:
 
     def test_parallel_worker_graph_failure_skipped(self) -> None:
         state = InvestigationState(
-            tools_used={"read_file"},
+            tools_used={AgenticToolName.READ_FILE},
             files_read=["main.py"],
-            tool_failures={"query_graph"},
+            tool_failures={AgenticToolName.QUERY_GRAPH},
         )
         reqs = analyze_requirements("list all classes in the module")
-        allowed, warning = evaluate_parallel_worker_sufficiency(state, reqs, worker_id=2)
+        allowed, warning = evaluate_parallel_worker_sufficiency(
+            state, reqs, worker_id=2
+        )
         assert allowed
         assert warning is None
+

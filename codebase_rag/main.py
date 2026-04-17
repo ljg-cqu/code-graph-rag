@@ -769,15 +769,17 @@ async def _run_agent_response_loop(
 
 
 def _extract_tool_query_arg(tool_name: str, args: dict[str, object]) -> str:
-    if tool_name == "query_graph":
+    from .tools.tool_descriptions import AgenticToolName
+
+    if tool_name == AgenticToolName.QUERY_GRAPH:
         return str(args.get("natural_language_query", ""))
-    if tool_name == "semantic_search":
+    if tool_name == AgenticToolName.SEMANTIC_SEARCH:
         return str(args.get("query", ""))
-    if tool_name == "read_file":
+    if tool_name == AgenticToolName.READ_FILE:
         return str(args.get("file_path", ""))
-    if tool_name == "get_code_snippet":
+    if tool_name == AgenticToolName.GET_CODE_SNIPPET:
         return str(args.get("qualified_name", ""))
-    if tool_name == "get_function_source":
+    if tool_name == AgenticToolName.GET_FUNCTION_SOURCE:
         return str(args.get("node_id", ""))
     return str(args.get("query", args.get("command", "")))
 
