@@ -776,3 +776,19 @@ MG_VECTOR_INDEX_INFO = "Vector index info: {info}"
 MG_VECTOR_CLOSED = "Closed Memgraph vector backend connection"
 VECTOR_DELETE_FAILED = "Failed to delete vector embeddings: {error}"
 VECTOR_BACKEND_SELECTED = "Using vector backend: {backend}"
+
+# (H) Python inspector logs
+PYTHON_INSPECT_INIT = "PythonObjectInspector initialized with root: {root}"
+PYTHON_INSPECT_SEARCH = "Inspecting Python object: {path}"
+PYTHON_INSPECT_SUCCESS = "Successfully inspected: {path}"
+PYTHON_INSPECT_FAILED = "Failed to inspect '{path}': {error}"
+
+# (H) Graph navigation logs
+GRAPH_NAVIGATOR_INIT = "GraphNavigator initialized with root: {root}"
+GRAPH_NAVIGATOR_SEARCH = "Searching references for: {name}"
+GRAPH_NAVIGATOR_FOUND = "Found {count} references for: {name}"
+GRAPH_NAVIGATOR_ERROR = "Graph navigation error for '{name}': {error}"
+GRAPH_CALL_HIERARCHY = "Getting call hierarchy for: {name} (direction={direction}, depth={depth})"
+GRAPH_IMPLEMENTATIONS = "Finding implementations for: {name}"
+GRAPH_PROJECT_STRUCTURE = "Getting project structure"
+GRAPH_IMPORT_DEPS = "Analyzing import dependencies for: {path} (depth={depth})"

@@ -75,6 +75,7 @@ An accurate Retrieval-Augmented Generation (RAG) system that analyzes multi-lang
   - Automatic context window detection for all common LLM models across supported providers
   - Graceful fallback to global default value when detection fails
   - Fully backwards compatible with existing configurations
+- **🤖 Dynamic Model Catalog**: Automatically discovers models configured via `.env` variables (ORCHESTRATOR_*, CYPHER_*, CGR_WORKER_LLMS) and displays them in the `/models` command with configuration status indicators. Supports external catalog files via `CGR_MODEL_CATALOG_PATH` and dynamic discovery toggle via `CGR_DISABLE_MODEL_DISCOVERY`.
 - **🔍 Hybrid Retrieval Pipeline**: Combines semantic vector search, graph traversal, and PageRank ranking in a single atomic Memgraph query for more relevant results and lower latency. No separate vector search and graph query steps needed.
 - **🌐 Global Filesystem Access**: Access files anywhere on your host system (enabled by default), with optional write approval requirements and built-in protection against path traversal attacks.
 - **📚 Document GraphRAG**: Index and query documentation (Markdown, PDF, DOCX) alongside code. Supports bidirectional validation between code and specs, merged queries across both graphs, and automated documentation audits.
@@ -101,11 +102,13 @@ An accurate Retrieval-Augmented Generation (RAG) system that analyzes multi-lang
 - **🌳 Tree-sitter Parsing**: Uses Tree-sitter for robust, language-agnostic AST parsing
 - **📊 Knowledge Graph Storage**: Uses Memgraph to store codebase structure as an interconnected graph
 - **🗣️ Natural Language Querying**: Ask questions about your codebase in plain English
-- **🤖 AI-Powered Cypher Generation**: Supports both cloud models (Google Gemini), local models (Ollama), and OpenAI models for natural language to Cypher translation
+- **🤖 AI-Powered Cypher Generation**: Supports cloud models (Google Gemini, Anthropic Claude), local models (Ollama), and OpenAI models for natural language to Cypher translation
 - **🤖 OpenAI Integration**: Leverage OpenAI models to enhance AI functionalities.
 - **📝 Code Snippet Retrieval**: Retrieves actual source code snippets for found functions/methods
 - **✍️ Advanced File Editing**: Surgical code replacement with AST-based function targeting, visual diff previews, and exact code block modifications
 - **⚡️ Shell Command Execution**: Can execute terminal commands for tasks like running tests or using CLI tools.
+- **🔍 Python Introspection**: Inspect Python modules, classes, and functions at runtime without shell access.
+- **🗺️ Graph Navigation**: Deterministic graph queries for references, call hierarchies, implementations, and import dependencies.
 - **🚀 Interactive Code Optimization**: AI-powered codebase optimization with language-specific best practices and interactive approval workflow
 - **📚 Reference-Guided Optimization**: Use your own coding standards and architectural documents to guide optimization suggestions
 - **🔗 Dependency Analysis**: Parses `pyproject.toml` to understand external dependencies
@@ -230,7 +233,28 @@ CYPHER_MODEL=gemini-2.5-flash
 CYPHER_API_KEY=your-google-api-key
 ```
 
-#### Option 4: Mixed Providers
+#### Option 4: All Anthropic Models
+```bash
+# .env file
+ORCHESTRATOR_PROVIDER=anthropic
+ORCHESTRATOR_MODEL=claude-3-5-sonnet-latest
+ORCHESTRATOR_API_KEY=sk-ant-api03-your-anthropic-key
+
+CYPHER_PROVIDER=anthropic
+CYPHER_MODEL=claude-3-haiku-latest
+CYPHER_API_KEY=sk-ant-api03-your-anthropic-key
+```
+
+#### Option 5: Anthropic-Compatible Endpoints
+```bash
+# .env file - Custom Anthropic-compatible endpoint (e.g., Baidu Qianfan)
+ORCHESTRATOR_PROVIDER=anthropic
+ORCHESTRATOR_MODEL=GLM-5
+ORCHESTRATOR_API_KEY=your-custom-api-key
+ORCHESTRATOR_ENDPOINT=https://qianfan.baidubce.com/anthropic/coding
+```
+
+#### Option 6: Mixed Providers
 ```bash
 # .env file - Google orchestrator + Ollama cypher
 ORCHESTRATOR_PROVIDER=google
@@ -1036,7 +1060,7 @@ Values from the custom `ENV_FILE` will take precedence over any values in a defa
 ### Provider-Specific Settings
 
 #### Orchestrator Model Configuration
-- `ORCHESTRATOR_PROVIDER`: Provider name (`google`, `openai`, `ollama`)
+- `ORCHESTRATOR_PROVIDER`: Provider name (`google`, `openai`, `ollama`, `anthropic`)
 - `ORCHESTRATOR_MODEL`: Model ID (e.g., `gemini-2.5-pro`, `gpt-4o`, `llama3.2`)
 - `ORCHESTRATOR_API_KEY`: API key for the provider (if required)
 - `ORCHESTRATOR_ENDPOINT`: Custom endpoint URL (if required)
@@ -1047,7 +1071,7 @@ Values from the custom `ENV_FILE` will take precedence over any values in a defa
 - `ORCHESTRATOR_SERVICE_ACCOUNT_FILE`: Path to service account file (for Vertex AI)
 
 #### Cypher Model Configuration
-- `CYPHER_PROVIDER`: Provider name (`google`, `openai`, `ollama`)
+- `CYPHER_PROVIDER`: Provider name (`google`, `openai`, `ollama`, `anthropic`)
 - `CYPHER_MODEL`: Model ID (e.g., `gemini-2.5-flash`, `gpt-4o-mini`, `codellama`)
 - `CYPHER_API_KEY`: API key for the provider (if required)
 - `CYPHER_ENDPOINT`: Custom endpoint URL (if required)

@@ -86,6 +86,45 @@ RETURN n.name AS name, n.start_line AS start, n.end_line AS end, m.path AS path,
 LIMIT 1
 """
 
+# (H) Graph navigation queries
+CYPHER_FIND_CALLERS = """
+MATCH (caller:Function|Method)-[:CALLS]->(target)
+WHERE target.qualified_name = $qn
+OPTIONAL MATCH (m:Module)-[:DEFINES]->(caller)
+RETURN caller.qualified_name AS qualified_name, caller.name AS name,
+       labels(caller) AS type, m.path AS path, caller.start_line AS start_line
+ORDER BY caller.qualified_name
+"""
+
+CYPHER_FIND_IMPORTERS = """
+MATCH (importer:Module)-[:IMPORTS]->(target:Module)
+WHERE target.qualified_name = $qn OR target.path = $qn
+RETURN importer.qualified_name AS qualified_name, importer.path AS path
+ORDER BY importer.qualified_name
+"""
+
+CYPHER_FIND_IMPLEMENTATIONS = """
+MATCH (impl:Class)-[r:IMPLEMENTS|INHERITS*1..2]->(base)
+WHERE base.qualified_name = $qn OR base.name = $qn
+OPTIONAL MATCH (m:Module)-[:DEFINES]->(impl)
+RETURN DISTINCT impl.qualified_name AS qualified_name, impl.name AS name,
+       type(r[0]) AS relationship_type, m.path AS path, impl.start_line AS start_line
+ORDER BY impl.qualified_name
+"""
+
+CYPHER_PROJECT_STRUCTURE = """
+MATCH (p:Project {name: $project_name})
+OPTIONAL MATCH (p)-[:CONTAINS_PACKAGE|CONTAINS_FOLDER*]->(d)
+OPTIONAL MATCH (d)-[:CONTAINS_FILE]->(f:File)
+OPTIONAL MATCH (f)-[:CONTAINS_MODULE]->(m:Module)-[:DEFINES]->(func:Function)
+OPTIONAL MATCH (m)-[:DEFINES]->(cls:Class)
+RETURN d.name AS dir_name, d.path AS dir_path,
+       count(DISTINCT f) AS file_count,
+       count(DISTINCT func) AS function_count,
+       count(DISTINCT cls) AS class_count
+ORDER BY d.path
+"""
+
 
 CYPHER_STATS_NODE_COUNTS = """
 MATCH (n)

@@ -343,6 +343,7 @@ class AppConfig(BaseSettings):
 
     TARGET_REPO_PATH: str = "."
     SHELL_COMMAND_TIMEOUT: int = 30
+    PYTHON_INSPECT_TIMEOUT: int = Field(default=10, gt=0)
     SHELL_COMMAND_ALLOWLIST: frozenset[str] = frozenset(
         {
             "ls",
@@ -667,7 +668,6 @@ class AppConfig(BaseSettings):
     CGR_WORKER_LLM_ASSIGNMENT_STRATEGY: Literal["round-robin"] = "round-robin"
 
     # Context Window Management Configuration
-    CONTEXT_WINDOW_DEFAULT: int = 256000
     DEFAULT_CONTEXT_WINDOW: int = Field(default=256000, gt=0)
     ORCHESTRATOR_CONTEXT_WINDOW: int | None = Field(default=None, gt=0)
     CYPHER_CONTEXT_WINDOW: int | None = Field(default=None, gt=0)

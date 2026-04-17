@@ -16,6 +16,15 @@ class AgenticToolName(StrEnum):
     SEMANTIC_SEARCH = "semantic_search"
     GET_FUNCTION_SOURCE = "get_function_source"
     GET_CODE_SNIPPET = "get_code_snippet"
+    # Python introspection tool
+    INSPECT_PYTHON_OBJECT = "inspect_python_object"
+    # Graph navigation tools
+    FIND_REFERENCES = "find_references"
+    GET_CALL_HIERARCHY = "get_call_hierarchy"
+    FIND_IMPLEMENTATIONS = "find_implementations"
+    # Project understanding tools
+    GET_PROJECT_STRUCTURE = "get_project_structure"
+    GET_IMPORT_DEPENDENCIES = "get_import_dependencies"
     # Document GraphRAG tools
     QUERY_DOCUMENT_GRAPH = "query_document_graph"
     QUERY_BOTH_GRAPHS = "query_both_graphs"
@@ -88,6 +97,45 @@ QUERY_BOTH_GRAPHS = (
     "Use for comprehensive searches spanning code and documentation. "
     "Results are labeled with their source (code_graph or document_graph). "
     "Examples: 'Tell me everything about authentication', 'Find all information about the API'"
+)
+
+# (H) Python introspection tool
+INSPECT_PYTHON_OBJECT = (
+    "Inspect Python modules, classes, functions, and objects at runtime. "
+    "Provide a fully-qualified Python path (e.g., 'mgclient.connect', "
+    "'codebase_rag.config.settings'). Returns type, signature, docstring, "
+    "file location, and public members."
+)
+
+# (H) Graph navigation tools
+FIND_REFERENCES = (
+    "Find all references (callers, importers) to a named entity. "
+    "Provide a fully-qualified name and optionally filter by reference type: "
+    "'calls', 'imports', or 'all' (default). Returns file paths and locations."
+)
+
+GET_CALL_HIERARCHY = (
+    "Get callers and/or callees for a function or method with depth control. "
+    "Provide a fully-qualified name, direction ('callers', 'callees', 'both'), "
+    "and depth (1-5, default 2). Returns a hierarchical text tree."
+)
+
+FIND_IMPLEMENTATIONS = (
+    "Find all classes implementing an interface or inheriting from a base class. "
+    "Provide the interface or base class name. Returns implementing classes "
+    "with file locations and relationship types."
+)
+
+# (H) Project understanding tools
+GET_PROJECT_STRUCTURE = (
+    "Get a high-level project overview combining directory structure with graph metadata. "
+    "Returns key directories, language breakdown, function/class counts per package."
+)
+
+GET_IMPORT_DEPENDENCIES = (
+    "Analyze the import dependency tree for a module. "
+    "Provide a module path or qualified name and optionally depth (1-5, default 3). "
+    "Returns formatted dependency tree with circular dependency detection."
 )
 
 # (H) MCP tool descriptions
@@ -237,6 +285,14 @@ MCP_PARAM_SCOPE = "Scope of validation: 'all', 'sections', or 'claims'"
 MCP_PARAM_MAX_COST_USD = "Maximum cost budget for validation in USD (default: 0.50)"
 MCP_PARAM_DRY_RUN = "If true, only estimate cost without running validation"
 
+# (H) MCP descriptions for new tools
+MCP_INSPECT_PYTHON_OBJECT = INSPECT_PYTHON_OBJECT
+MCP_FIND_REFERENCES = FIND_REFERENCES
+MCP_GET_CALL_HIERARCHY = GET_CALL_HIERARCHY
+MCP_FIND_IMPLEMENTATIONS = FIND_IMPLEMENTATIONS
+MCP_GET_PROJECT_STRUCTURE = GET_PROJECT_STRUCTURE
+MCP_GET_IMPORT_DEPENDENCIES = GET_IMPORT_DEPENDENCIES
+
 
 MCP_TOOLS: dict[MCPToolName, str] = {
     MCPToolName.LIST_PROJECTS: MCP_LIST_PROJECTS,
@@ -260,6 +316,13 @@ MCP_TOOLS: dict[MCPToolName, str] = {
     MCPToolName.VALIDATE_CODE_AGAINST_SPEC: MCP_VALIDATE_CODE_AGAINST_SPEC,
     MCPToolName.VALIDATE_DOC_AGAINST_CODE: MCP_VALIDATE_DOC_AGAINST_CODE,
     MCPToolName.INDEX_DOCUMENTS: MCP_INDEX_DOCUMENTS,
+    # New tools
+    MCPToolName.INSPECT_PYTHON_OBJECT: MCP_INSPECT_PYTHON_OBJECT,
+    MCPToolName.FIND_REFERENCES: MCP_FIND_REFERENCES,
+    MCPToolName.GET_CALL_HIERARCHY: MCP_GET_CALL_HIERARCHY,
+    MCPToolName.FIND_IMPLEMENTATIONS: MCP_FIND_IMPLEMENTATIONS,
+    MCPToolName.GET_PROJECT_STRUCTURE: MCP_GET_PROJECT_STRUCTURE,
+    MCPToolName.GET_IMPORT_DEPENDENCIES: MCP_GET_IMPORT_DEPENDENCIES,
 }
 
 AGENTIC_TOOLS: dict[AgenticToolName, str] = {
@@ -273,6 +336,15 @@ AGENTIC_TOOLS: dict[AgenticToolName, str] = {
     AgenticToolName.SEMANTIC_SEARCH: SEMANTIC_SEARCH,
     AgenticToolName.GET_FUNCTION_SOURCE: GET_FUNCTION_SOURCE,
     AgenticToolName.GET_CODE_SNIPPET: CODE_RETRIEVAL,
+    # Python introspection
+    AgenticToolName.INSPECT_PYTHON_OBJECT: INSPECT_PYTHON_OBJECT,
+    # Graph navigation
+    AgenticToolName.FIND_REFERENCES: FIND_REFERENCES,
+    AgenticToolName.GET_CALL_HIERARCHY: GET_CALL_HIERARCHY,
+    AgenticToolName.FIND_IMPLEMENTATIONS: FIND_IMPLEMENTATIONS,
+    # Project understanding
+    AgenticToolName.GET_PROJECT_STRUCTURE: GET_PROJECT_STRUCTURE,
+    AgenticToolName.GET_IMPORT_DEPENDENCIES: GET_IMPORT_DEPENDENCIES,
     # Document GraphRAG tools
     AgenticToolName.QUERY_DOCUMENT_GRAPH: QUERY_DOCUMENT_GRAPH,
     AgenticToolName.QUERY_BOTH_GRAPHS: QUERY_BOTH_GRAPHS,

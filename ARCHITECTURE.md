@@ -182,7 +182,7 @@
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                      │
 │  Agent Configuration:                                               │
-│  - Model: Configurable (Google/OpenAI/Ollama)                       │
+│  - Model: Configurable (Google/OpenAI/Anthropic/Ollama)             │
 │  - System Prompt: RAG orchestration instructions                    │
 │  - Tools: 10 specialized tools                                      │
 │  - Output: str | DeferredToolRequests                               │
@@ -381,13 +381,13 @@
 │  │ - MEMGRAPH_BATCH_SIZE                                        │  │
 │  │                                                               │  │
 │  │ Orchestrator Model:                                           │  │
-│  │ - ORCHESTRATOR_PROVIDER (google/openai/ollama)               │  │
+│  │ - ORCHESTRATOR_PROVIDER (google/openai/anthropic/ollama)     │  │
 │  │ - ORCHESTRATOR_MODEL                                         │  │
 │  │ - ORCHESTRATOR_API_KEY                                       │  │
 │  │ - ORCHESTRATOR_ENDPOINT                                      │  │
 │  │                                                               │  │
 │  │ Cypher Model:                                                 │  │
-│  │ - CYPHER_PROVIDER (google/openai/ollama)                     │  │
+│  │ - CYPHER_PROVIDER (google/openai/anthropic/ollama)           │  │
 │  │ - CYPHER_MODEL                                               │  │
 │  │ - CYPHER_API_KEY                                             │  │
 │  │ - CYPHER_ENDPOINT                                            │  │

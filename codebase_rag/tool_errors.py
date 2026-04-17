@@ -76,6 +76,16 @@ MCP_PROJECT_NOT_FOUND = (
     "Project '{project_name}' not found. Available projects: {projects}"
 )
 
+# (H) Python inspector errors
+PYTHON_INSPECT_TIMEOUT = "Python object inspection timed out after {timeout} seconds"
+PYTHON_INSPECT_MODULE_NOT_FOUND = "Module not found: {error}"
+PYTHON_INSPECT_ATTRIBUTE_NOT_FOUND = "Object not found in module: {error}"
+PYTHON_INSPECT_UNEXPECTED_ERROR = "Unexpected error during Python inspection: {error}"
+
+# (H) Graph navigation errors
+GRAPH_NAV_INVALID_REF_TYPE = "Invalid reference_type: '{type}'. Use 'calls', 'imports', or 'all'."
+GRAPH_NAV_INVALID_DIRECTION = "Invalid direction: '{direction}'. Use 'callers', 'callees', or 'both'."
+
 # (H) CLI validation errors
 INVALID_POSITIVE_INT = "{value!r} is not a valid positive integer"
 INVALID_NON_NEGATIVE_FLOAT = "Value must be non-negative, got {value}"

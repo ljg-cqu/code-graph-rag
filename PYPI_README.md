@@ -140,7 +140,7 @@ Configure via `.env` or environment variables:
 |----------|---------|-------------|
 | `MEMGRAPH_HOST` | `localhost` | Memgraph hostname |
 | `MEMGRAPH_PORT` | `7687` | Memgraph port |
-| `ORCHESTRATOR_PROVIDER` | | Provider: `google`, `openai`, `ollama` |
+| `ORCHESTRATOR_PROVIDER` | | Provider: `google`, `openai`, `ollama`, `anthropic` |
 | `ORCHESTRATOR_MODEL` | | Model ID (e.g. `gpt-4o`, `gemini-2.5-pro`) |
 | `ORCHESTRATOR_API_KEY` | | API key for the provider (not needed for `ollama`) |
 | `CYPHER_PROVIDER` | | Provider for Cypher generation |

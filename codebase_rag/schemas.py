@@ -166,3 +166,24 @@ class UpdateResult(IngestionResult):
     operation: str = "add"
     event_id: str | None = None
     processed_at: str | None = None
+
+
+class PythonObjectInfo(BaseModel):
+    object_path: str
+    object_type: str | None = None
+    name: str | None = None
+    signature: str | None = None
+    docstring: str | None = None
+    file_path: str | None = None
+    line_start: int | None = None
+    line_end: int | None = None
+    members: list[str] | None = None
+    is_builtin: bool = False
+    error_message: str | None = None
+
+    @model_validator(mode="after")
+    def _set_success_on_error(self) -> PythonObjectInfo:
+        if self.error_message is not None:
+            # error_message presence signals failure (follows EditResult/FileCreationResult pattern)
+            pass
+        return self

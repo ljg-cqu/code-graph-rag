@@ -83,10 +83,12 @@ class ModelProvider(ABC):
 
 
 def _resolve_api_key(api_key: str | None, env_var: str) -> str | None:
-    if api_key and api_key != cs.DEFAULT_API_KEY:
+    # Handle whitespace-only API keys
+    if api_key and api_key.strip() and api_key != cs.DEFAULT_API_KEY:
         return api_key
     env_key = os.environ.get(env_var)
-    if env_key:
+    # Also check env_key is not whitespace-only
+    if env_key and env_key.strip():
         return env_key
     return None
 
@@ -247,7 +249,7 @@ class OllamaProvider(ModelProvider):
 
 
 class AnthropicProvider(ModelProvider):
-    __slots__ = ("api_key",)
+    __slots__ = ("api_key", "endpoint")
 
     MODEL_CONTEXT_WINDOWS = {
         "claude-3-5-sonnet*": 200000,
@@ -261,10 +263,12 @@ class AnthropicProvider(ModelProvider):
     def __init__(
         self,
         api_key: str | None = None,
+        endpoint: str | None = None,
         **kwargs: str | int | None,
     ) -> None:
         super().__init__(**kwargs)
         self.api_key = _resolve_api_key(api_key, cs.ENV_ANTHROPIC_API_KEY)
+        self.endpoint = endpoint or os.environ.get(cs.ENV_ANTHROPIC_ENDPOINT)
 
     @property
     def provider_name(self) -> cs.Provider:
@@ -278,7 +282,21 @@ class AnthropicProvider(ModelProvider):
         self.validate_config()
         # (H) api_key is guaranteed to be set by validate_config
         assert self.api_key is not None
-        provider = PydanticAnthropicProvider(api_key=self.api_key)
+
+        # The Anthropic SDK reads ANTHROPIC_AUTH_TOKEN from the environment
+        # when auth_token=None, and auth_token takes precedence over api_key
+        # for the Authorization header. An empty ANTHROPIC_AUTH_TOKEN causes
+        # "Illegal header value b'Bearer '" errors. Work around this by
+        # temporarily clearing the env var during client creation.
+        auth_token_env = os.environ.pop("ANTHROPIC_AUTH_TOKEN", None)
+        try:
+            provider = PydanticAnthropicProvider(
+                api_key=self.api_key,
+                base_url=self.endpoint,
+            )
+        finally:
+            if auth_token_env is not None:
+                os.environ["ANTHROPIC_AUTH_TOKEN"] = auth_token_env
         return AnthropicModel(model_id, provider=provider)
 
 

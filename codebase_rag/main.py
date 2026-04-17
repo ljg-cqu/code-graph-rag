@@ -63,7 +63,16 @@ from .tools.document_validation import (
 from .tools.file_editor import FileEditor, create_file_editor_tool
 from .tools.file_reader import FileReader, create_file_reader_tool
 from .tools.file_writer import FileWriter, create_file_writer_tool
+from .tools.graph_navigation import (
+    GraphNavigator,
+    create_find_implementations_tool,
+    create_find_references_tool,
+    create_get_call_hierarchy_tool,
+    create_get_import_dependencies_tool,
+    create_get_project_structure_tool,
+)
 from .tools.graph_query import create_graph_query_tool
+from .tools.python_inspector import PythonObjectInspector, create_inspect_python_object_tool
 from .tools.semantic_search import (
     create_get_function_source_tool,
     create_semantic_search_tool,
@@ -627,7 +636,7 @@ async def _run_agent_response_loop(
             except Exception as e:
                 # Fallback to default
                 logger.debug(
-                    f"Failed to retrieve model context window, using default {settings.CONTEXT_WINDOW_DEFAULT:,}: {e}"
+                    f"Failed to retrieve model context window, using default {settings.DEFAULT_CONTEXT_WINDOW:,}: {e}"
                 )
 
             trigger_threshold = int(
@@ -930,7 +939,7 @@ def get_multiline_input(prompt_text: str = cs.PROMPT_ASK_QUESTION) -> str:
 
 def _handle_models_command(command: str) -> None:
     """Handle /models command to display available models."""
-    from .models_catalog import MODEL_CATALOG
+    from .models_dynamic import build_dynamic_model_catalog
 
     parts = command.strip().split(maxsplit=1)
     arg = parts[1].strip().lower() if len(parts) > 1 else None
@@ -939,24 +948,31 @@ def _handle_models_command(command: str) -> None:
         app_context.console.print(cs.UI_MODELS_USAGE)
         return
 
+    catalog = build_dynamic_model_catalog()
+
     if arg is None:
-        _display_models_table(MODEL_CATALOG)
+        _display_models_table(catalog)
         return
 
-    if arg in MODEL_CATALOG:
-        provider_models = {arg: MODEL_CATALOG[arg]}
+    if arg in catalog:
+        provider_models = {arg: catalog[arg]}
         _display_models_table(provider_models)
     else:
-        valid_providers = ", ".join(MODEL_CATALOG.keys())
+        valid_providers = ", ".join(catalog.keys())
         app_context.console.print(
             cs.UI_MODELS_INVALID_PROVIDER.format(provider=arg, available=valid_providers)
         )
 
 
 def _display_models_table(
-    catalog: dict[str, list[ModelInfo]],
+    catalog: dict[str, list[DynamicModelInfo]],
 ) -> None:
-    """Display formatted model table using Rich Text for safe markup."""
+    """Display formatted model table using Rich Text for safe markup.
+
+    Shows configured (.env) models first with indicators:
+      - configured/working models
+      - static models that may need API key configuration
+    """
     from .models_catalog import PROVIDER_DISPLAY_NAMES
 
     if not catalog:
@@ -971,12 +987,26 @@ def _display_models_table(
         display_name = PROVIDER_DISPLAY_NAMES.get(provider, provider.title())
         app_context.console.print(Text(f"  {display_name}", style="bold cyan"))
 
-        for model_info in models:
+        # Sort: configured models first, then by model_id
+        sorted_models = sorted(
+            models, key=lambda m: (0 if m.is_configured else 1, m.model_id)
+        )
+
+        for model_info in sorted_models:
             is_current = (
                 provider == current_provider
                 and model_info.model_id == current_model_id
             )
-            marker = "\u2713" if is_current else "\u2022"
+
+            # Status indicator
+            if model_info.is_configured:
+                status_icon = "\u2705"  # ✅
+            elif model_info.requires_api_key and not model_info.is_local:
+                status_icon = "\u26a0\ufe0f"  # ⚠️
+            else:
+                status_icon = "\u2022"
+
+            marker = status_icon
 
             ctx = model_info.context_window
             if ctx >= 1_000_000:
@@ -988,7 +1018,21 @@ def _display_models_table(
 
             line = Text(f"  {marker} ")
             line.append(model_info.model_id, style="bold")
-            line.append(f" (Context: {ctx_str} tokens) - {model_info.description}")
+            if model_info.description:
+                line.append(f" (Context: {ctx_str} tokens) - {model_info.description}")
+            else:
+                line.append(f" (Context: {ctx_str} tokens)")
+
+            # Source attribution for env-configured models
+            if model_info.source != "static":
+                line.append(
+                    f" - Configured from .env", style="green"
+                )
+
+            if is_current:
+                line.append(" ✓", style="bold green")
+                line.append(" [Active]", style="bold green")
+
             app_context.console.print(line)
 
         app_context.console.print("")
@@ -1017,21 +1061,67 @@ def _create_model_from_string(
     if not provider_name:
         raise ValueError(ex.PROVIDER_EMPTY)
 
+    # Look up dynamic catalog for endpoint and configuration info
+    model_info = _get_dynamic_model_info(provider_name, model_id)
+    dynamic_endpoint = model_info.endpoint if model_info else None
+
+    # Warn if model is not configured (missing API key)
+    if model_info and not model_info.is_configured:
+        logger.warning(
+            f"Model {provider_name}:{model_id} is not configured (missing API key). "
+            "It may fail at runtime."
+        )
+
     if provider_name == base_config.provider:
-        config = replace(base_config, model_id=model_id)
+        config = replace(
+            base_config,
+            model_id=model_id,
+            endpoint=dynamic_endpoint or base_config.endpoint,
+        )
     elif provider_name == cs.Provider.OLLAMA:
         config = ModelConfig(
             provider=provider_name,
             model_id=model_id,
-            endpoint=settings.ollama_endpoint,
+            endpoint=dynamic_endpoint or settings.ollama_endpoint,
             api_key=cs.DEFAULT_API_KEY,
         )
     else:
-        config = ModelConfig(provider=provider_name, model_id=model_id)
+        config = ModelConfig(
+            provider=provider_name,
+            model_id=model_id,
+            endpoint=dynamic_endpoint,
+        )
 
     canonical_string = f"{provider_name}{cs.CHAR_COLON}{model_id}"
     provider = get_provider_from_config(config)
     return provider.create_model(model_id), canonical_string, config
+
+
+def _get_dynamic_model_info(provider: str, model_id: str) -> DynamicModelInfo | None:
+    """Look up model info from the dynamic catalog.
+
+    Returns the DynamicModelInfo if found in catalog, or None.
+    """
+    from .models_dynamic import build_dynamic_model_catalog, DynamicModelInfo
+
+    catalog = build_dynamic_model_catalog()
+    models = catalog.get(provider, [])
+    for m in models:
+        if m.model_id == model_id:
+            return m
+    return None
+
+
+def _find_dynamic_endpoint(provider: str, model_id: str) -> str | None:
+    """Look up a model's endpoint from the dynamic catalog.
+
+    Returns the endpoint if the model was configured via .env with a custom
+    endpoint, or None if not found / no custom endpoint.
+    """
+    model_info = _get_dynamic_model_info(provider, model_id)
+    if model_info and model_info.endpoint:
+        return model_info.endpoint
+    return None
 
 
 def _handle_model_command(
@@ -1064,6 +1154,15 @@ def _handle_model_command(
         app_context.console.print(
             cs.UI_MODEL_SWITCHED.format(model=canonical_model_string)
         )
+        # Warn if model is not configured
+        model_info = _get_dynamic_model_info(new_config.provider, new_config.model_id)
+        if model_info and not model_info.is_configured:
+            app_context.console.print(
+                style(
+                    f"⚠️ Warning: Model {new_config.provider}:{new_config.model_id} is not configured (missing API key). It may fail at runtime.",
+                    cs.Color.YELLOW,
+                )
+            )
         return new_model, canonical_model_string, new_config
     except (ValueError, AssertionError) as e:
         logger.error(ls.MODEL_SWITCH_FAILED.format(error=e))
@@ -2252,6 +2351,10 @@ def _initialize_services_and_agent(
     )
     directory_lister = DirectoryLister(project_root=repo_path)
 
+    # === Introspection & navigation tools ===
+    python_inspector = PythonObjectInspector(project_root=repo_path)
+    graph_navigator = GraphNavigator(project_root=repo_path, ingestor=ingestor)
+
     # === Document-aware services ===
     if doc_ingestor:
         document_analyzer = DocumentAnalyzer(
@@ -2288,6 +2391,14 @@ def _initialize_services_and_agent(
     semantic_search_tool = create_semantic_search_tool()
     function_source_tool = create_get_function_source_tool()
 
+    # Introspection & navigation tools
+    inspect_python_tool = create_inspect_python_object_tool(python_inspector)
+    find_references_tool = create_find_references_tool(graph_navigator)
+    call_hierarchy_tool = create_get_call_hierarchy_tool(graph_navigator)
+    find_impl_tool = create_find_implementations_tool(graph_navigator)
+    project_structure_tool = create_get_project_structure_tool(graph_navigator)
+    import_deps_tool = create_get_import_dependencies_tool(graph_navigator)
+
     # Build tools list
     tools: list[Tool] = [
         query_tool,
@@ -2300,6 +2411,12 @@ def _initialize_services_and_agent(
         *document_analyzer_tools,
         semantic_search_tool,
         function_source_tool,
+        inspect_python_tool,
+        find_references_tool,
+        call_hierarchy_tool,
+        find_impl_tool,
+        project_structure_tool,
+        import_deps_tool,
     ]
 
     # Add Document GraphRAG tools only if query_router is available

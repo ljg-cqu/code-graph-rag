@@ -46,6 +46,31 @@ CYPHER_API_KEY=your-google-api-key
 
 Get your Google API key from [Google AI Studio](https://aistudio.google.com/app/apikey).
 
+### All Anthropic Models
+
+```bash
+ORCHESTRATOR_PROVIDER=anthropic
+ORCHESTRATOR_MODEL=claude-3-5-sonnet-latest
+ORCHESTRATOR_API_KEY=sk-ant-api03-your-anthropic-key
+
+CYPHER_PROVIDER=anthropic
+CYPHER_MODEL=claude-3-haiku-latest
+CYPHER_API_KEY=sk-ant-api03-your-anthropic-key
+```
+
+Get your Anthropic API key from [Anthropic Console](https://console.anthropic.com/settings/keys).
+
+### Anthropic-Compatible Endpoints
+
+For custom Anthropic-compatible endpoints (e.g., Baidu Qianfan, vLLM, or other proxies):
+
+```bash
+ORCHESTRATOR_PROVIDER=anthropic
+ORCHESTRATOR_MODEL=GLM-5
+ORCHESTRATOR_API_KEY=your-custom-api-key
+ORCHESTRATOR_ENDPOINT=https://qianfan.baidubce.com/anthropic/coding
+```
+
 ### Mixed Providers
 
 ```bash
@@ -62,7 +87,7 @@ CYPHER_ENDPOINT=http://localhost:11434/v1
 
 | Variable | Description |
 |----------|-------------|
-| `ORCHESTRATOR_PROVIDER` | Provider name (`google`, `openai`, `ollama`) |
+| `ORCHESTRATOR_PROVIDER` | Provider name (`google`, `openai`, `ollama`, `anthropic`) |
 | `ORCHESTRATOR_MODEL` | Model ID (e.g., `gemini-2.5-pro`, `gpt-4o`, `llama3.2`) |
 | `ORCHESTRATOR_API_KEY` | API key for the provider (if required) |
 | `ORCHESTRATOR_ENDPOINT` | Custom endpoint URL (if required) |
@@ -76,7 +101,7 @@ CYPHER_ENDPOINT=http://localhost:11434/v1
 
 | Variable | Description |
 |----------|-------------|
-| `CYPHER_PROVIDER` | Provider name (`google`, `openai`, `ollama`) |
+| `CYPHER_PROVIDER` | Provider name (`google`, `openai`, `ollama`, `anthropic`) |
 | `CYPHER_MODEL` | Model ID (e.g., `gemini-2.5-flash`, `gpt-4o-mini`, `codellama`) |
 | `CYPHER_API_KEY` | API key for the provider (if required) |
 | `CYPHER_ENDPOINT` | Custom endpoint URL (if required) |
@@ -97,6 +122,20 @@ CYPHER_ENDPOINT=http://localhost:11434/v1
 | `MEMGRAPH_BATCH_SIZE` | `1000` | Batch size for Memgraph operations |
 | `TARGET_REPO_PATH` | `.` | Default repository path |
 | `LOCAL_MODEL_ENDPOINT` | `http://localhost:11434/v1` | Fallback endpoint for Ollama |
+| `DEFAULT_CONTEXT_WINDOW` | `256000` | Global default context window (fallback when model-specific not detected) |
+| `PYTHON_INSPECT_TIMEOUT` | `10` | Timeout for Python object inspection operations (seconds) |
+| `SHELL_COMMAND_TIMEOUT` | `30` | Timeout for shell command execution (seconds) |
+
+## Model Catalog Management
+
+Configure dynamic model discovery and external catalog files:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CGR_MODEL_CATALOG_PATH` | `None` | Path to external JSON/YAML model catalog file (overrides static catalog) |
+| `CGR_DISABLE_MODEL_DISCOVERY` | `False` | Disable dynamic model discovery from `.env` configuration |
+
+**Note**: Role-configured models (ORCHESTRATOR_*, CYPHER_*, CGR_WORKER_LLMS) automatically appear in `/models` command output with configuration status indicators.
 
 ## Document GraphRAG Settings
 

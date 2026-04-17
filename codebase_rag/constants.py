@@ -181,6 +181,7 @@ DEFAULT_API_KEY = "ollama"
 ENV_OPENAI_API_KEY = "OPENAI_API_KEY"
 ENV_GOOGLE_API_KEY = "GOOGLE_API_KEY"
 ENV_ANTHROPIC_API_KEY = "ANTHROPIC_API_KEY"
+ENV_ANTHROPIC_ENDPOINT = "ANTHROPIC_ENDPOINT"
 ENV_AZURE_API_KEY = "AZURE_API_KEY"
 ENV_AZURE_ENDPOINT = "AZURE_OPENAI_ENDPOINT"
 ENV_AZURE_API_VERSION = "AZURE_API_VERSION"
@@ -3446,6 +3447,15 @@ class MCPToolName(StrEnum):
     VALIDATE_CODE_AGAINST_SPEC = "validate_code_against_spec"
     VALIDATE_DOC_AGAINST_CODE = "validate_doc_against_code"
     INDEX_DOCUMENTS = "index_documents"
+    # Python introspection
+    INSPECT_PYTHON_OBJECT = "inspect_python_object"
+    # Graph navigation
+    FIND_REFERENCES = "find_references"
+    GET_CALL_HIERARCHY = "get_call_hierarchy"
+    FIND_IMPLEMENTATIONS = "find_implementations"
+    # Project understanding
+    GET_PROJECT_STRUCTURE = "get_project_structure"
+    GET_IMPORT_DEPENDENCIES = "get_import_dependencies"
 
 
 # (H) MCP transport selection

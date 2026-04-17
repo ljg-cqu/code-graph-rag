@@ -69,6 +69,7 @@ cgr start --repo-path /path/to/repo --index-docs --with-docs --mode document_onl
 |---------|-------------|
 | `/mode <mode>` | Switch query mode during chat (e.g., `/mode both_merged`) |
 | `/model <provider:model>` | Switch LLM model during chat |
+| `/models` | Show all available models (static catalog + .env configured) with configuration status |
 | `/help` | Show available commands |
 | `/exit` | Exit the session |
 

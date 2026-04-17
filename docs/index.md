@@ -20,7 +20,7 @@ Code-Graph-RAG is an accurate Retrieval-Augmented Generation (RAG) system that a
 - **Tree-sitter Parsing** for robust, language-agnostic AST analysis
 - **Knowledge Graph Storage** using Memgraph for interconnected codebase structure
 - **Natural Language Querying** to ask questions about your code in plain English
-- **AI-Powered Cypher Generation** with Google Gemini, OpenAI, and Ollama support
+- **AI-Powered Cypher Generation** with Google Gemini, OpenAI, Anthropic Claude, and Ollama support
 - **Code Snippet Retrieval** with actual source code for found functions and methods
 - **Advanced File Editing** with AST-based function targeting and visual diff previews
 - **Shell Command Execution** for running tests and CLI tools
