@@ -797,9 +797,10 @@ class AppConfig(BaseSettings):
                         import json
 
                         parsed = json.loads(config_str)
-                        logger.info(f"Parsed JSON: {len(parsed) if isinstance(parsed, list) else 'single object'} entries")
+                        logger.info(f"Parsed JSON: {len(parsed) if isinstance(parsed, list) else 'single object'} entries, type={type(parsed)}")
                         if isinstance(parsed, list):
-                            for entry in parsed:
+                            for i, entry in enumerate(parsed):
+                                logger.info(f"  Entry {i}: type={type(entry)}, value={repr(entry)[:100]}...")
                                 if isinstance(entry, str):
                                     provider, model = self.parse_model_string(entry)
                                     parsed_llms.append(
@@ -808,17 +809,22 @@ class AppConfig(BaseSettings):
                                         )
                                     )
                                 elif isinstance(entry, dict):
-                                    parsed_llms.append(_model_config_from_mapping(entry))
+                                    try:
+                                        parsed_llms.append(_model_config_from_mapping(entry))
+                                        logger.info(f"    -> Added model config for {entry.get('provider')}:{entry.get('model_id')}")
+                                    except ValueError as e:
+                                        logger.warning(f"    -> Failed to create ModelConfig: {e}")
+                                else:
+                                    logger.warning(f"    -> Skipping: entry is not dict or string")
                         elif isinstance(parsed, dict):
                             # Single object wrapped in braces
                             parsed_llms.append(_model_config_from_mapping(parsed))
-                    except json.JSONDecodeError:
+                    except json.JSONDecodeError as e:
                         # Invalid JSON, fall through to comma-separated parsing
-                        logger.debug(
-                            "CGR_WORKER_LLMS looks like JSON but failed to parse, "
-                            "falling back to comma-separated format"
+                        logger.warning(
+                            f"CGR_WORKER_LLMS JSON parsing failed: {e}. "
+                            "Falling back to comma-separated format."
                         )
-                        pass
                 else:
                     # Split comma-separated list (e.g., "openai:gpt-4o,anthropic:claude-3")
                     entries = [
