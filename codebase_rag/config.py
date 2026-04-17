@@ -632,11 +632,35 @@ class AppConfig(BaseSettings):
 
     # Automatic Concurrency Detection (no explicit user request needed)
     CGR_AUTO_PARALLEL_ENABLED: bool = True
-    CGR_PARALLEL_ELIGIBILITY_THRESHOLD: float = 0.7
+    CGR_PARALLEL_ELIGIBILITY_THRESHOLD: float = 0.6
     CGR_SIMPLE_TASK_MODEL: str | None = None
     CGR_AGGREGATION_DEDUPLICATION_ENABLED: bool = True
     CGR_PARALLEL_METRICS_ENABLED: bool = True
-    CGR_PARALLEL_MAX_QUEUE_SIZE: int = 100
+    CGR_PARALLEL_MAX_QUEUE_SIZE: int = 200
+
+    # ─────────────────────────────────────────────────────────
+    # Enhanced Parallel Execution Configuration (NEW)
+    # ─────────────────────────────────────────────────────────
+
+    # Strict write detection mode: when True, uses the current broad regex patterns
+    # (more false positives, more conservative). When False (default), uses the
+    # enhanced Layer 1-4 detection with contextual understanding.
+    CGR_PARALLEL_WRITE_DETECTION_STRICT: bool = False
+
+    # Minimum subtasks required to justify parallel execution overhead
+    CGR_PARALLEL_MIN_SUBTASKS: int = Field(default=2, gt=0)
+
+    # Enable adaptive threshold adjustment based on historical parallel execution success rates
+    # When True, replaces the existing confidence-multiplier calibration with threshold-based adjustment
+    CGR_PARALLEL_ADAPTIVE_THRESHOLD: bool = True
+
+    # Enable file type hint extraction for better task splitting
+    # When True, _extract_file_type_hints() is used in _collect_scoped_files() Strategy 2
+    CGR_PARALLEL_FILE_TYPE_HINTS: bool = True
+
+    # Include codebase context (file count, languages, repo size) in LLM eligibility analysis
+    # When True, codebase stats are computed once per agent initialization and included in the system prompt
+    CGR_PARALLEL_CODEBASE_CONTEXT: bool = True
 
     # Worker LLM Configuration for Sub-Agents
     CGR_WORKER_LLMS: str | list[str | dict] = Field(default_factory=list)

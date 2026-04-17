@@ -194,6 +194,7 @@ class ParallelExecutionConfig:
     dry_run: bool = False
     scheduling_strategy: str = "fifo"
     doc_workspace: str = "default"
+    force_parallel: bool = False  # NEW: Explicit user override
 
 
 def _display_yolo_warning() -> None:
@@ -1043,12 +1044,112 @@ Available modes:
 
 
 def _has_write_intent(prompt: str) -> bool:
-    write_patterns = [
-        r"\b(create|write|edit|modify|update|delete|remove|refactor|rename|move|implement|fix|patch)\b",
-        r"\badd\b.{0,40}\b(file|files|code|test|tests|function|class|method|doc|docs|documentation|config)\b",
+    """
+    Enhanced write operation detection with contextual understanding.
+    The current implementation uses r"\\b(create|write|edit|modify|...)\\b" which
+    matches write-related words ANYWHERE in the prompt, causing false positives
+    on read-only queries like "show me how the code creates objects" or
+    "explain what the write method does".
+
+    This replacement:
+    1. Checks for explicit imperative write commands (verb + code target noun)
+    2. Excludes queries in known read-only phrasing patterns (question/explanation)
+    3. Returns False for ambiguous cases where write words appear but no imperative
+       command structure is detected (instead of the current blanket True)
+    """
+    # Use strict mode if configured (backward compatibility)
+    if settings.CGR_PARALLEL_WRITE_DETECTION_STRICT:
+        write_patterns = [
+            r"\b(create|write|edit|modify|update|delete|remove|refactor|rename|move|implement|fix|patch)\b",
+            r"\badd\b.{0,40}\b(file|files|code|test|tests|function|class|method|doc|docs|documentation|config)\b",
+        ]
+        lowered_prompt = prompt.lower()
+        return any(re.search(pattern, lowered_prompt) for pattern in write_patterns)
+
+    lowered_prompt = prompt.lower().strip()
+
+    # ── Layer 1: Explicit imperative write command patterns ──
+    # These match when a write verb is used as an imperative/instruction
+    # directly targeting a code entity (verb followed by a code noun object).
+    # This eliminates false positives where "write"/"create" appear as nouns
+    # or in descriptive/analytical contexts.
+    explicit_write_patterns = [
+        # Imperative: "create a file", "modify the code", "fix the following test"
+        r"\b(create|write|edit|modify|update|delete|remove|refactor|rename|move|implement|fix|patch)\s+(the\s+)?(following\s+)?(file|files|code|test|tests|function|class|method|doc|docs|documentation|config|configuration|module|package|script|component)\b",
+        # "add/insert a function/class/test" — add requires a direct object
+        r"\b(add|insert)\s+(the\s+)?(following\s+)?(code|function|class|test|tests|documentation|module|package|file|files)\b",
+        # "generate and save", "produce to file" — explicit save intent
+        r"\b(generate|produce)\s+(and\s+)?(save|persist|store|write|output\s+to)\b",
+        # "save/store/persist the result/output/code" — explicit persistence
+        r"\b(save|store|persist)\s+(the\s+)?(result|output|code|file|changes|modification)\b",
+        # "replace X with Y", "overwrite the file" — destructive operations
+        r"\b(replace|overwrite)\s+.*\b(with|by)\b",
+        # "remove/delete the file/function" (without a question context)
+        r"\b(remove|delete)\s+(the\s+)?(file|files|directory|folder|code|function|class|method|module)\b",
     ]
-    lowered_prompt = prompt.lower()
-    return any(re.search(pattern, lowered_prompt) for pattern in write_patterns)
+
+    for pattern in explicit_write_patterns:
+        if re.search(pattern, lowered_prompt, re.IGNORECASE):
+            return True
+
+    # ── Layer 2: Read-only context detection ──
+    # If the prompt is phrased as a question, explanation request, or
+    # analytical query, any write-related words are being used descriptively,
+    # not as instructions to modify code.
+    read_only_context_patterns = [
+        # Questions about how to do something (learning, not doing)
+        r"how\s+(to|do|can\s+i|does|should\s+i)\s+(write|create|modify|update|delete|remove|edit|implement|fix)",
+        # Requests for examples or demonstrations
+        r"(example|demonstration|sample|illustration)\s+(of|for|showing)\s+(writing|creating|modifying|updating|deleting|removing|how\s+to)",
+        # Best practices / guidelines (knowledge, not action)
+        r"(best\s+practice|guideline|recommendation|pattern|convention)\s+(for|about|on)\s+(writing|creating|modifying|updating|deleting|removing)",
+        # Explanation requests
+        r"(explain|describe|what\s+(does|is|are)|tell\s+me\s+about|show\s+me\s+how)\s+.*(write|create|modify|update|delete|remove|wrote|created|writes|creates)",
+        # Documentation/reference queries
+        r"(documentation|docs|reference|api)\s+(for|about|on)\s+(write|create|modify|update|delete|remove)",
+        # Analytical/review queries: "analyze how X creates Y", "review the update logic"
+        r"(analyze|review|examine|investigate|compare|find|search|list|count|check|verify|understand)\s+.*(write|create|modify|update|delete|remove)",
+        # Past-tense or third-person: "where the code writes to disk", "how the factory creates objects"
+        r"(where|how|when|why)\s+.*(writes|creates|modifies|updates|deletes|removes|wrote|created|modified|updated|deleted|removed)",
+        # "the write method", "the create function" — referring to named entities
+        r"(the\s+)?(write|create|modify|update|delete|remove)\s+(method|function|handler|callback|operation|routine|procedure|class|module|interface|trait|decorator)",
+    ]
+
+    # If ANY read-only context pattern matches, treat the entire prompt as read-only
+    # regardless of whether individual write words appear. This is the key fix:
+    # queries like "explain what the write method does" or "show me how the code
+    # creates objects" will match read-only patterns and return False.
+    for pattern in read_only_context_patterns:
+        if re.search(pattern, lowered_prompt, re.IGNORECASE):
+            return False
+
+    # ── Layer 3: Ambiguous case handling ──
+    # If write-related words appear but no explicit imperative command matched
+    # (Layer 1) and no read-only context matched (Layer 2), we have an
+    # ambiguous case. The current code returns True for ALL such cases
+    # (any word in lowered_prompt from write_words → True), which is overly
+    # conservative. Instead, we only return True if the write word appears
+    # in a syntactic position suggesting an instruction (followed by a direct
+    # object within 40 chars, similar to the current second pattern but broader).
+    ambiguous_write_patterns = [
+        # "write something", "create something" with a nearby target
+        r"\b(create|write|edit|modify|update|delete|remove|refactor|rename|move|implement)\b.{0,40}\b(file|files|code|test|tests|function|class|method|doc|docs|documentation|config|module|package|component|script)\b",
+        # Standalone imperative without explicit target but with instruction cues
+        r"\b(please|kindly|make\s+sure|ensure)\s+.*\b(create|write|edit|modify|update|delete|remove)\b",
+    ]
+
+    for pattern in ambiguous_write_patterns:
+        if re.search(pattern, lowered_prompt, re.IGNORECASE):
+            return True
+
+    # ── Layer 4: Default safe ──
+    # If nothing matched, default to False (read-only). This is a deliberate
+    # change from the current behavior which defaults to True when write words
+    # appear. The rationale: the explicit and ambiguous patterns above already
+    # catch genuine write intents; remaining cases are likely read-only queries
+    # that happen to contain write-related words in passing. The LLM eligibility
+    # classifier provides a second safety net for truly ambiguous edge cases.
+    return False
 
 
 def _normalize_parallel_config(
@@ -1065,6 +1166,7 @@ def _normalize_parallel_config(
         dry_run=normalized.dry_run,
         scheduling_strategy=scheduling_strategy,
         doc_workspace=normalized.doc_workspace,
+        force_parallel=normalized.force_parallel,  # NEW: Must be passed through
     )
 
 
@@ -1341,33 +1443,27 @@ async def _run_interactive_loop(
                     logger.info(
                         "Parallel execution skipped due to explicit sequential override"
                     )
-                elif (
-                    preview_count is not None
-                    and preview_count > settings.CGR_PARALLEL_MAX_QUEUE_SIZE
-                ):
+                elif has_write_operations:
+                    # SAFETY: Write operations ALWAYS block parallel execution.
+                    # force_parallel does NOT override this — it only bypasses the
+                    # LLM eligibility classifier's threshold, not the write-safety gate.
+                    # Attempting to parallelize write operations risks data corruption
+                    # from concurrent file modifications.
                     logger.info(
-                        f"Parallel execution skipped because preview split exceeded queue limit ({preview_count} > {settings.CGR_PARALLEL_MAX_QUEUE_SIZE})"
+                        "Parallel execution skipped: contains write operations "
+                        "(cannot be overridden by --force-parallel for safety)"
                     )
-                else:
-                    (
-                        eligible,
-                        task_type,
-                        confidence,
-                    ) = await concurrency_classifier.is_eligible(
-                        question_with_context,
-                        subtask_count=preview_count,
-                        has_write_operations=has_write_operations,
+                elif normalized_parallel_config.force_parallel:
+                    # force_parallel bypasses the LLM eligibility classifier's threshold.
+                    # It should only be used when the user knows their task is read-only
+                    # but the classifier incorrectly rejects it (e.g., low confidence).
+                    logger.warning(
+                        "Parallel execution forced by user override (--force-parallel). "
+                        "Write safety checks are still enforced; this only bypasses "
+                        "the LLM eligibility threshold."
                     )
-
-                    if not eligible:
-                        logger.info(
-                            f"Parallel execution skipped: task_type={task_type}, confidence={confidence:.2f}"
-                        )
-                    elif not normalized_parallel_config.auto_split:
-                        logger.info(
-                            "Parallel execution skipped because auto-splitting is disabled"
-                        )
-                    elif preview_count is None or preview_count < 2:
+                    eligible, task_type, confidence = True, "user_forced", 1.0
+                    if preview_count is None or preview_count < settings.CGR_PARALLEL_MIN_SUBTASKS:
                         logger.info(
                             f"Parallel execution downgraded to sequential because only {preview_count or 0} safe subtasks were found"
                         )
@@ -1396,6 +1492,100 @@ async def _run_interactive_loop(
                             dry_run=normalized_parallel_config.dry_run,
                         )
                         parallel_result = aggregator.consolidate()
+                        
+                        # RECORD: Successful forced parallel execution
+                        concurrency_classifier.record_execution_result(task_type, success=True)
+                        
+                        summary_label = (
+                            "plan generated"
+                            if normalized_parallel_config.dry_run
+                            else "completed"
+                        )
+                        app_context.console.print(
+                            style(
+                                f"⚡ Parallel execution {summary_label} in {aggregator.metadata['total_execution_time']:.2f}s",
+                                cs.Color.GREEN,
+                            )
+                        )
+                        context_header = (
+                            "### Parallel Execution Plan"
+                            if normalized_parallel_config.dry_run
+                            else "### Parallel Execution Results"
+                        )
+                        question_with_context += (
+                            f"\n\n{context_header}:\n{parallel_result}"
+                        )
+                elif (
+                    preview_count is not None
+                    and preview_count > settings.CGR_PARALLEL_MAX_QUEUE_SIZE
+                ):
+                    logger.info(
+                        f"Parallel execution skipped because preview split exceeded queue limit ({preview_count} > {settings.CGR_PARALLEL_MAX_QUEUE_SIZE})"
+                    )
+                else:
+                    (
+                        eligible,
+                        task_type,
+                        confidence,
+                    ) = await concurrency_classifier.is_eligible(
+                        question_with_context,
+                        subtask_count=preview_count,
+                        has_write_operations=has_write_operations,
+                    )
+
+                    if not eligible:
+                        logger.info(
+                            f"Parallel execution skipped: task_type={task_type}, confidence={confidence:.2f}"
+                        )
+                        # RECORD: LLM-driven rejection for calibration
+                        # Only record non-deterministic rejection types (LLM decisions).
+                        # Deterministic rejections (write, safety rules) are always correct
+                        # and don't benefit from threshold adjustment.
+                        if task_type not in (
+                            "write_operation",
+                            "user_requested_sequential",
+                            "safety_rule_blocked",
+                            "insufficient_subtasks",
+                            "concurrency_disabled",
+                        ):
+                            concurrency_classifier.record_execution_result(task_type, success=False)
+                    elif not normalized_parallel_config.auto_split:
+                        logger.info(
+                            "Parallel execution skipped because auto-splitting is disabled"
+                        )
+                    elif preview_count is None or preview_count < settings.CGR_PARALLEL_MIN_SUBTASKS:
+                        logger.info(
+                            f"Parallel execution downgraded to sequential because only {preview_count or 0} safe subtasks were found"
+                        )
+                    else:
+                        app_context.console.print(
+                            style(
+                                f"\n✅ Auto-activating parallel execution: {task_type} (confidence: {confidence:.2f})",
+                                cs.Color.GREEN,
+                            )
+                        )
+                        app_context.console.print(
+                            style(
+                                f"🔄 Using {subagent_orchestrator.dynamic_controller.get_effective_worker_count(normalized_parallel_config.worker_count, preview_count)} workers with {normalized_parallel_config.scheduling_strategy} scheduling",
+                                cs.Color.CYAN,
+                            )
+                        )
+                        app_context.console.print(
+                            style(
+                                f"📋 Split into {preview_count} independent subtasks",
+                                cs.Color.CYAN,
+                            )
+                        )
+
+                        aggregator = subagent_orchestrator.execute_tasks(
+                            preview_subtasks,
+                            dry_run=normalized_parallel_config.dry_run,
+                        )
+                        parallel_result = aggregator.consolidate()
+                        
+                        # RECORD: Successful classifier-approved parallel execution
+                        concurrency_classifier.record_execution_result(task_type, success=True)
+                        
                         summary_label = (
                             "plan generated"
                             if normalized_parallel_config.dry_run

@@ -629,6 +629,12 @@ def start(
         "--scheduling-strategy",
         help=ch.HELP_SCHEDULING_STRATEGY,
     ),
+    force_parallel: bool = typer.Option(
+        False,
+        "--force-parallel",
+        help="Force parallel execution bypassing LLM eligibility threshold "
+             "(write-safety checks are still enforced)",
+    ),
     # New JSON ingestion flags (disabled by default, backward compatible)
     ingest_json: bool = typer.Option(
         False,
@@ -871,6 +877,7 @@ def start(
         dry_run=parallel_dry_run,
         scheduling_strategy=normalized_scheduling_strategy,
         doc_workspace=doc_workspace,
+        force_parallel=force_parallel,  # NEW
     )
 
     try:

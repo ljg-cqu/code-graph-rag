@@ -6,6 +6,7 @@ Determines if a task can be safely parallelized without explicit user request.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import cast
 
 from loguru import logger
@@ -13,6 +14,7 @@ from pydantic_ai import Agent
 
 from codebase_rag.config import settings
 from codebase_rag.providers import get_provider_from_config
+from codebase_rag.utils.path_utils import get_all_code_files
 
 
 class ConcurrencyEligibilityClassifier:
@@ -49,16 +51,31 @@ class ConcurrencyEligibilityClassifier:
         ),  # Write operations are sequential only
     ]
 
-    # LLM prompt template for eligibility analysis (lightweight, low token usage)
+    # Enhanced LLM system prompt with codebase context
+    # NOTE: {prompt} is NOT included here. pydantic_ai sends the user prompt
+    # as a separate message via agent.run(prompt). Including {prompt} in the
+    # system prompt would create a confusing double-prompt where the LLM sees
+    # both "{prompt}" literally in the system message AND the actual user message.
     LLM_ELIGIBILITY_PROMPT = """
-    You are a parallel task eligibility classifier. Evaluate if the following user request can be split into independent, non-overlapping subtasks that can be executed in parallel to speed up results.
+You are a parallel task eligibility classifier for a codebase analysis system.
+Evaluate if the user request (provided separately) can be split into independent,
+non-overlapping subtasks that can be executed in parallel to speed up results.
 
-    User request: {prompt}
+Codebase Context:
+- Total files: {file_count}
+- Primary languages: {languages}
+- Repository size: {repo_size}
 
-    Respond ONLY with a valid JSON object with two keys:
-    1. "eligible": boolean (true if request can be parallelized, false otherwise)
-    2. "confidence": float between 0.0 and 1.0 indicating how confident you are in this assessment
-    """
+Respond ONLY with a valid JSON object with three keys:
+1. "eligible": boolean (true if request can be safely parallelized, false otherwise)
+2. "confidence": float between 0.0 and 1.0 indicating confidence in this assessment
+3. "reasoning": string explaining the decision briefly
+
+Safety Rules:
+- NEVER parallelize tasks that modify, create, delete, or update files/code
+- ALWAYS parallelize read-only tasks that analyze multiple files or entities
+- When uncertain, prefer sequential execution (eligible=false)
+"""
 
     @staticmethod
     def _coerce_float(value: object, default: float = 0.0) -> float:
@@ -75,25 +92,183 @@ class ConcurrencyEligibilityClassifier:
 
     def __init__(self):
         self.enabled: bool = getattr(settings, "CGR_AUTO_PARALLEL_ENABLED", True)
+        # self.threshold is the BASE threshold (unchanged from current code).
+        # It is set from CGR_PARALLEL_ELIGIBILITY_THRESHOLD and stays fixed.
         self.threshold: float = getattr(
-            settings, "CGR_PARALLEL_ELIGIBILITY_THRESHOLD", 0.7
+            settings, "CGR_PARALLEL_ELIGIBILITY_THRESHOLD", 0.6
         )
-        self.min_subtask_count: int = (
-            2  # Minimum subtasks required to justify parallel overhead
+        # self._effective_threshold is the dynamically adjusted threshold that
+        # actually gets used in the eligibility decision. It starts equal to
+        # self.threshold and may be adjusted based on historical success rates.
+        # This replaces the previous approach of adjusting confidence scores
+        # via multipliers, which produced opaque "effective threshold" changes.
+        self._effective_threshold: float = self.threshold
+        self.min_subtask_count: int = getattr(
+            settings, "CGR_PARALLEL_MIN_SUBTASKS", 2
         )
         self.agent: Agent | None = None
         # Dynamic calibration state (tracks success rates per task type)
         self.success_rate_tracker: dict[str, list[bool]] = {}
+        # Adaptive adjustment enabled via CGR_PARALLEL_ADAPTIVE_THRESHOLD config
+        self.adaptive_adjustment_enabled: bool = getattr(
+            settings, "CGR_PARALLEL_ADAPTIVE_THRESHOLD", True
+        )
+        # Cache for codebase context to avoid recomputation
+        self._codebase_context_cache: dict[str, object] | None = None
+
+    def _adjust_threshold_based_on_success(self, task_type: str) -> float:
+        """Dynamically adjust the effective eligibility threshold based on historical success rates.
+
+        This REPLACES the existing confidence-multiplier calibration in is_eligible()
+        (which adjusted confidence by *1.1 or *0.9). Threshold-based adjustment is:
+        - More intuitive: lowering the bar vs. boosting the score
+        - More observable: log messages show explicit threshold changes
+        - Less prone to double-effect: only one mechanism, not two
+
+        The effective threshold is adjusted relative to self.threshold (the base):
+        - High success rate (>0.85): lower threshold to enable more parallelization
+        - Good success rate (>0.7): keep base threshold
+        - Moderate success rate (>0.5): slightly raise threshold
+        - Low success rate (<0.5): significantly raise threshold
+
+        Args:
+            task_type: The task type to adjust threshold for
+
+        Returns:
+            The effective threshold to use for this eligibility decision
+        """
+        if not self.adaptive_adjustment_enabled:
+            return self.threshold
+
+        if task_type not in self.success_rate_tracker:
+            return self._effective_threshold
+
+        successes = self.success_rate_tracker[task_type]
+        # Aligned with existing code's minimum of 10 data points (not 5).
+        # The previous spec used 5, but the existing code requires 10 for
+        # more reliable calibration. Using fewer data points produces noisy
+        # threshold adjustments that may over-correct on limited evidence.
+        if len(successes) < 10:
+            return self._effective_threshold
+
+        success_rate = sum(successes) / len(successes)
+
+        # Adjust effective threshold based on success rate
+        if success_rate >= 0.85:
+            # High success rate: lower threshold to enable more parallelization
+            new_threshold = max(0.5, self.threshold * 0.8)
+        elif success_rate >= 0.7:
+            # Good success rate: keep base threshold
+            new_threshold = self.threshold
+        elif success_rate >= 0.5:
+            # Moderate success rate: slightly raise threshold
+            new_threshold = min(0.8, self.threshold * 1.1)
+        else:
+            # Low success rate: significantly raise threshold
+            new_threshold = min(0.9, self.threshold * 1.3)
+
+        if new_threshold != self._effective_threshold:
+            logger.info(
+                f"Adaptive threshold adjusted for {task_type}: "
+                f"{self._effective_threshold:.2f} → {new_threshold:.2f} "
+                f"(success rate: {success_rate:.2%}, base threshold: {self.threshold:.2f})"
+            )
+            self._effective_threshold = new_threshold
+
+        return self._effective_threshold
+
+    def _get_codebase_context(self) -> tuple[int, str, str]:
+        """Get codebase context (file count, primary languages, repo size).
+
+        Returns:
+            Tuple of (file_count, languages, repo_size)
+        """
+        if self._codebase_context_cache is not None:
+            return cast(
+                tuple[int, str, str],
+                tuple(self._codebase_context_cache.values()),
+            )
+
+        try:
+            repo_path = Path(settings.TARGET_REPO_PATH)
+            all_files = get_all_code_files(repo_path)
+            file_count = len(all_files)
+
+            # Detect primary languages from file extensions
+            extensions = [f.suffix.lower() for f in all_files if f.suffix]
+            lang_counts: dict[str, int] = {}
+            for ext in extensions:
+                lang = {
+                    ".py": "Python",
+                    ".js": "JavaScript",
+                    ".ts": "TypeScript",
+                    ".jsx": "JavaScript",
+                    ".tsx": "TypeScript",
+                    ".java": "Java",
+                    ".cpp": "C++",
+                    ".h": "C++",
+                    ".hpp": "C++",
+                    ".go": "Go",
+                    ".rs": "Rust",
+                    ".cs": "C#",
+                    ".rb": "Ruby",
+                    ".php": "PHP",
+                    ".swift": "Swift",
+                    ".kt": "Kotlin",
+                    ".scala": "Scala",
+                }.get(ext, "Other")
+                lang_counts[lang] = lang_counts.get(lang, 0) + 1
+
+            primary_langs = sorted(lang_counts.items(), key=lambda x: x[1], reverse=True)[:3]
+            languages = ", ".join([lang for lang, count in primary_langs if count > 5])
+
+            # Get repo size
+            total_size = sum(f.stat().st_size for f in all_files if f.exists())
+            repo_size = f"{total_size / (1024 * 1024):.1f}MB" if total_size > 0 else "unknown"
+
+            self._codebase_context_cache = {
+                "file_count": file_count,
+                "languages": languages,
+                "repo_size": repo_size,
+            }
+
+            return file_count, languages, repo_size
+
+        except Exception as e:
+            logger.warning(f"Failed to get codebase context: {e}")
+            self._codebase_context_cache = {
+                "file_count": 0,
+                "languages": "unknown",
+                "repo_size": "unknown",
+            }
+            return 0, "unknown", "unknown"
 
     async def _get_llm_eligibility(self, prompt: str) -> tuple[float, str]:
-        """Run lightweight LLM analysis to determine parallel eligibility and confidence score."""
+        """Run enhanced LLM analysis with codebase context."""
         if not self.agent:
             config = settings.active_orchestrator_config
             provider = get_provider_from_config(config)
             llm = provider.create_model(config.model_id)
+
+            # Get codebase context (only if enabled and not already cached)
+            if getattr(settings, "CGR_PARALLEL_CODEBASE_CONTEXT", True):
+                file_count, languages, repo_size = self._get_codebase_context()
+            else:
+                file_count = 0
+                languages = "unknown"
+                repo_size = "unknown"
+
+            # Format system prompt with codebase context only (NO {prompt} placeholder)
+            # The user prompt is sent separately by pydantic_ai via agent.run(prompt)
+            system_prompt = self.LLM_ELIGIBILITY_PROMPT.format(
+                file_count=file_count,
+                languages=languages,
+                repo_size=repo_size,
+            )
+
             self.agent = Agent(
                 model=llm,
-                system_prompt=self.LLM_ELIGIBILITY_PROMPT,
+                system_prompt=system_prompt,
                 output_type=dict,
                 retries=settings.AGENT_RETRIES,
             )
@@ -114,6 +289,10 @@ class ConcurrencyEligibilityClassifier:
                 if result_data.get("eligible", False)
                 else "llm_rejected"
             )
+            # Log reasoning for debugging/auditability
+            reasoning = result_data.get("reasoning", "")
+            if reasoning:
+                logger.debug(f"LLM eligibility reasoning: {reasoning}")
 
             return confidence, str(task_type)
         except Exception as e:
@@ -184,37 +363,24 @@ class ConcurrencyEligibilityClassifier:
         # 5. LLM intent analysis (primary eligibility detection)
         confidence, task_type = await self._get_llm_eligibility(prompt)
 
-        # 6. Apply dynamic calibration adjustment (based on past success rates)
-        if (
-            task_type in self.success_rate_tracker
-            and len(self.success_rate_tracker[task_type]) >= 10
-        ):
-            success_rate = sum(self.success_rate_tracker[task_type]) / len(
-                self.success_rate_tracker[task_type]
-            )
-            if success_rate > 0.9:
-                confidence = min(
-                    1.0, confidence * 1.1
-                )  # Lower effective threshold for high success task types
-            elif success_rate < 0.6:
-                confidence = max(
-                    0.0, confidence * 0.9
-                )  # Raise effective threshold for low success task types
+        # 6. Apply dynamic threshold adjustment based on historical success rates
+        # This REPLACES the existing confidence-multiplier calibration
+        effective_threshold = self._adjust_threshold_based_on_success(task_type)
 
-        # Final eligibility decision
-        if confidence >= self.threshold:
+        # Final eligibility decision using effective threshold
+        if confidence >= effective_threshold:
             logger.info(
-                f"Task eligible for parallel execution: type={task_type}, confidence={confidence:.2f}"
+                f"Task eligible for parallel execution: type={task_type}, confidence={confidence:.2f}, effective_threshold={effective_threshold:.2f}"
             )
             return True, task_type, confidence
 
         logger.debug(
-            f"Task not eligible for parallel execution: LLM confidence {confidence:.2f} below threshold {self.threshold}"
+            f"Task not eligible for parallel execution: LLM confidence {confidence:.2f} below effective threshold {effective_threshold:.2f} (base: {self.threshold:.2f})"
         )
         return False, "llm_rejected", confidence
 
     def record_execution_result(self, task_type: str, success: bool) -> None:
-        """Record execution result for dynamic confidence calibration."""
+        """Record execution result for dynamic threshold calibration."""
         if task_type not in self.success_rate_tracker:
             self.success_rate_tracker[task_type] = []
         self.success_rate_tracker[task_type].append(success)

@@ -167,25 +167,51 @@ class TaskSplitter:
         return subtasks
 
     def _collect_scoped_files(self, prompt: str) -> list[Path]:
-        all_files = get_all_code_files(self.repo_path)
+        """Enhanced file collection with file type hint filtering.
+
+        Fallback order:
+        1. Explicit scope paths from prompt (existing, unchanged)
+        2. File type hints inferred from prompt language/category keywords (NEW)
+        3. All code files (existing fallback — no truncation)
+        """
+        # Strategy 1: Extract explicit paths from prompt (unchanged from current)
         scope_paths = self._extract_scope_paths(prompt)
 
-        if not scope_paths:
-            return all_files
+        if scope_paths:
+            all_files = get_all_code_files(self.repo_path)
+            scoped_files = [
+                file_path for file_path in all_files
+                if any(self._path_matches_scope(file_path, scope_path) for scope_path in scope_paths)
+            ]
+            if scoped_files:
+                scoped_files.sort(key=lambda path: os.path.relpath(path, self.repo_path))
+                logger.info(f"Scoped file split selected {len(scoped_files)} files from explicit paths")
+                return scoped_files
 
-        scoped_files = [
-            file_path
-            for file_path in all_files
-            if any(
-                self._path_matches_scope(file_path, scope_path)
-                for scope_path in scope_paths
-            )
-        ]
-        scoped_files.sort(key=lambda path: os.path.relpath(path, self.repo_path))
-        logger.info(
-            f"Scoped file split selected {len(scoped_files)} files from {len(scope_paths)} prompt path hints"
-        )
-        return scoped_files
+        # Strategy 2: Analyze prompt for file type hints (NEW)
+        # This reduces subtask count by narrowing to relevant file types
+        # instead of returning all files, which may be thousands.
+        if getattr(settings, "CGR_PARALLEL_FILE_TYPE_HINTS", True):
+            extension_hints, name_pattern_hints = self._extract_file_type_hints(prompt)
+            if extension_hints or name_pattern_hints:
+                all_files = get_all_code_files(self.repo_path)
+                hinted_files = _filter_files_by_hints(all_files, extension_hints, name_pattern_hints)
+                if hinted_files:
+                    hinted_files.sort(key=lambda path: os.path.relpath(path, self.repo_path))
+                    logger.info(
+                        f"File type hints yielded {len(hinted_files)} files "
+                        f"(extensions: {extension_hints}, patterns: {name_pattern_hints})"
+                    )
+                    return hinted_files
+
+        # Strategy 3: Fallback to all code files (unchanged from current)
+        # NOTE: Do NOT truncate to all_files[:500] — that silently drops parts of
+        # the codebase. The existing CGR_PARALLEL_MAX_QUEUE_SIZE check in
+        # _run_interactive_loop handles excessive subtask counts correctly
+        # by falling back to sequential execution with a clear log message.
+        all_files = get_all_code_files(self.repo_path)
+        logger.info(f"Using all {len(all_files)} code files (no scope paths or type hints found)")
+        return all_files
 
     def _extract_scope_paths(self, prompt: str) -> list[Path]:
         candidates: list[str] = []
@@ -338,3 +364,104 @@ class TaskSplitter:
 
         logger.info("Subtasks validation passed")
         return True
+
+    def _extract_file_type_hints(self, prompt: str) -> tuple[list[str], list[str]]:
+        """Extract file type hints from prompt, returning extension hints and name pattern hints separately.
+
+        Returns:
+            Tuple of (extension_hints, name_pattern_hints) where:
+            - extension_hints: pure file extensions like '.py', '.js' — matched via f.suffix
+            - name_pattern_hints: substrings of filenames like '_test', 'test_', 'readme',
+              'config' — matched via f.name (NOT f.suffix, which only contains the extension)
+
+        This separation is critical: the previous version mixed these two types into a
+        single list and checked all hints against f.suffix.lower(), causing filename
+        patterns like '_test.py' and 'readme' to never match (since f.suffix is just '.py'
+        or '.md', not the full filename).
+        """
+        lowered = prompt.lower()
+        extension_hints: list[str] = []
+        name_pattern_hints: list[str] = []
+
+        # Language-specific extension hints (matched against f.suffix)
+        if any(word in lowered for word in ['python', '.py', 'django', 'flask']):
+            extension_hints.append('.py')
+        if any(word in lowered for word in ['javascript', '.js', 'react', 'node', 'express']):
+            extension_hints.extend(['.js', '.jsx', '.ts', '.tsx'])
+        if any(word in lowered for word in ['java', '.java', 'spring', 'android']):
+            extension_hints.append('.java')
+        if any(word in lowered for word in ['c++', '.cpp', 'stl']):
+            extension_hints.extend(['.cpp', '.h', '.hpp'])
+        if any(word in lowered for word in ['go', '.go', 'golang']):
+            extension_hints.append('.go')
+        if any(word in lowered for word in ['rust', '.rs', 'cargo']):
+            extension_hints.append('.rs')
+        if any(word in lowered for word in ['c#', '.cs', 'csharp', '.net', 'asp.net']):
+            extension_hints.append('.cs')
+        if any(word in lowered for word in ['ruby', '.rb', 'rails']):
+            extension_hints.append('.rb')
+        if any(word in lowered for word in ['php', '.php', 'laravel']):
+            extension_hints.append('.php')
+        if any(word in lowered for word in ['swift', '.swift', 'ios']):
+            extension_hints.append('.swift')
+        if any(word in lowered for word in ['kotlin', '.kt', 'android']):
+            extension_hints.append('.kt')
+        if any(word in lowered for word in ['scala', '.scala']):
+            extension_hints.append('.scala')
+        if any(word in lowered for word in ['typescript', '.ts']):
+            extension_hints.extend(['.ts', '.tsx'])
+
+        # General name pattern hints (matched against f.name, NOT f.suffix)
+        if 'test' in lowered or 'spec' in lowered:
+            name_pattern_hints.extend(['_test', '_spec', 'test_', 'spec_', '.test', '.spec'])
+        if 'config' in lowered or 'setting' in lowered:
+            # Config files can be extension-based (.json, .yaml, .toml) or name-based (config, settings)
+            extension_hints.extend(['.json', '.yaml', '.yml', '.toml', '.ini'])
+            name_pattern_hints.extend(['config', 'settings', 'configuration'])
+        if 'readme' in lowered:
+            name_pattern_hints.extend(['readme'])
+            extension_hints.extend(['.md', '.rst'])
+        if 'doc' in lowered and 'documentation' not in lowered:
+            # Avoid false positive on "documentation for" queries
+            name_pattern_hints.extend(['doc', 'docs'])
+        if 'html' in lowered or 'web' in lowered or 'frontend' in lowered:
+            extension_hints.extend(['.html', '.css', '.scss', '.sass'])
+        if 'sql' in lowered or 'database' in lowered:
+            extension_hints.extend(['.sql'])
+        if 'shell' in lowered or 'bash' in lowered or 'script' in lowered:
+            extension_hints.extend(['.sh', '.bash'])
+
+        return extension_hints, name_pattern_hints
+
+
+def _filter_files_by_hints(
+    all_files: list[Path],
+    extension_hints: list[str],
+    name_pattern_hints: list[str],
+) -> list[Path]:
+    """Filter files by extension hints (suffix-based) and name pattern hints (filename-based).
+
+    This function correctly handles the two distinct types of hints:
+    - Extension hints (e.g., '.py', '.js') are matched against f.suffix.lower()
+    - Name pattern hints (e.g., '_test', 'test_', 'readme', 'config') are matched
+      against f.name.lower() — NOT f.suffix, since f.suffix only contains the
+      extension (e.g., '.py') not the full filename.
+    """
+    if not extension_hints and not name_pattern_hints:
+        return all_files
+
+    filtered = []
+    for f in all_files:
+        suffix_lower = f.suffix.lower()
+        name_lower = f.name.lower()
+
+        # Check extension hints against suffix
+        ext_match = any(hint == suffix_lower for hint in extension_hints)
+
+        # Check name pattern hints against filename
+        name_match = any(hint in name_lower for hint in name_pattern_hints)
+
+        if ext_match or name_match:
+            filtered.append(f)
+
+    return filtered
