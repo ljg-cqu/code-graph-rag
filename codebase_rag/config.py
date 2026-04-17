@@ -841,10 +841,22 @@ class AppConfig(BaseSettings):
 
         # Validate all parsed LLMs
         valid_llms = []
+        logger.debug(f"Validating {len(parsed_llms)} parsed worker LLM configs")
         for llm_config in parsed_llms:
+            has_key = bool(
+                llm_config.api_key
+                and llm_config.api_key.strip()
+                and llm_config.api_key != cs.DEFAULT_API_KEY
+            )
+            logger.debug(
+                f"Worker LLM: {llm_config.provider}:{llm_config.model_id} "
+                f"(api_key={'set' if has_key else 'not set'}, "
+                f"endpoint={llm_config.endpoint})"
+            )
             try:
                 llm_config.validate_api_key(role="worker")
                 valid_llms.append(llm_config)
+                logger.debug(f"  -> Validated successfully")
             except ValueError as e:
                 logger.warning(f"Skipping invalid worker LLM config: {str(e)}")
 

@@ -294,7 +294,9 @@ def _extract_configured_models_from_env() -> list[DynamicModelInfo]:
                 seen.add(key)
 
     # 3. Worker LLMs
-    for worker_config in settings.active_worker_llms:
+    worker_llms_list = settings.active_worker_llms
+    logger.debug(f"Processing {len(worker_llms_list)} worker LLM configs")
+    for worker_config in worker_llms_list:
         model_info = _build_dynamic_model_from_config(
             provider=worker_config.provider,
             model_id=worker_config.model_id,
