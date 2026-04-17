@@ -24,7 +24,10 @@ def _handle_models_command(command: str) -> None:
     - Valid provider → show that provider only
     - Invalid provider → explicit error with available provider list
     """
-    from .models_catalog import MODEL_CATALOG, PROVIDER_DISPLAY_NAMES
+    from .models_catalog import MODEL_CATALOG
+    # Note: PROVIDER_DISPLAY_NAMES is not imported here because it's only
+    # needed by _display_models_table(). The error message uses MODEL_CATALOG.keys()
+    # (the authoritative data source) rather than PROVIDER_DISPLAY_NAMES.keys().
 
     parts = command.strip().split(maxsplit=1)
     arg = parts[1].strip().lower() if len(parts) > 1 else None
@@ -44,7 +47,10 @@ def _handle_models_command(command: str) -> None:
         _display_models_table(provider_models)
     else:
         # Invalid provider — explicit error, NOT silent fallback
-        valid_providers = ", ".join(PROVIDER_DISPLAY_NAMES.keys())
+        # Use MODEL_CATALOG.keys() (the authoritative data source) for the
+        # valid-provider list, not PROVIDER_DISPLAY_NAMES.keys(). This avoids
+        # listing a provider that has display name but no actual model entries.
+        valid_providers = ", ".join(MODEL_CATALOG.keys())
         app_context.console.print(
             cs.UI_MODELS_INVALID_PROVIDER.format(provider=arg, available=valid_providers)
         )
@@ -171,6 +177,11 @@ def _display_models_table(
         app_context.console.print("")  # Blank line between providers
 
     # Current model summary
+    # Note: We intentionally use `style()` (Rich markup strings) for fixed text here
+    # because the content is static and has no brackets that Rich would misinterpret.
+    # Dynamic content (model_id, descriptions) above uses `Text` objects instead,
+    # which bypass Rich's markup parser and prevent accidental style tag interpretation
+    # (e.g., model descriptions containing "[...]" patterns).
     current_model_str = f"{current_provider}{cs.CHAR_COLON}{current_model_id}"
     app_context.console.print(
         style(f"Current Model: {current_model_str}", cs.Color.CYAN)
@@ -257,7 +268,9 @@ def get_multiline_input(prompt_text: str = cs.PROMPT_ASK_QUESTION) -> str:
     ENTER always inserts a newline. CTRL+J submits. CTRL+C interrupts.
     All existing behavior is preserved — only the completer is added.
     """
-    from prompt_toolkit.completion import WordCompleter
+    # WordCompleter is imported at module level alongside other prompt_toolkit
+    # imports (prompt, KeyBindings, HTML, print_formatted_text) for consistency
+    # with the existing import pattern in main.py. No local import needed.
 
     bindings = KeyBindings()
 
@@ -274,6 +287,10 @@ def get_multiline_input(prompt_text: str = cs.PROMPT_ASK_QUESTION) -> str:
         event.app.exit(exception=KeyboardInterrupt)
 
     # Command completion — TAB triggers suggestions
+    # Note: Only top-level commands are listed here. Sub-options like
+    # /compress --aggressive or /mode code_only are NOT included in
+    # Phase 1 — a NestedCompleter or custom completer for sub-commands
+    # can be added in Phase 2 when the overlay panel UX is implemented.
     command_completer = WordCompleter(
         [
             cs.MODELS_COMMAND_PREFIX,    # /models
@@ -367,7 +384,7 @@ def get_multiline_input(prompt_text: str = cs.PROMPT_ASK_QUESTION) -> str:
 
 | File | Changes |
 |------|---------|
-| `codebase_rag/main.py` | Add `_handle_models_command()`, `_display_models_table()`, update `get_multiline_input()` with completer, add command routing in `_run_interactive_loop()` |
+| `codebase_rag/main.py` | Add `ModelInfo` to existing `from .types_defs import (...)` block (line ~49-60), add `_handle_models_command()`, `_display_models_table()`, update `get_multiline_input()` with completer, add `from prompt_toolkit.completion import WordCompleter` to module-level imports, add command routing in `_run_interactive_loop()` |
 | `codebase_rag/constants.py` | Add `MODELS_COMMAND_PREFIX`, `UI_MODELS_USAGE`, `UI_MODELS_INVALID_PROVIDER`, update `UI_HELP_COMMANDS` |
 
 ## Implementation Checklist
@@ -380,5 +397,6 @@ def get_multiline_input(prompt_text: str = cs.PROMPT_ASK_QUESTION) -> str:
 - [ ] Update `UI_HELP_COMMANDS` in `constants.py` (add `/models` and `/compress`)
 - [ ] Add `MODELS_COMMAND_PREFIX` command routing in `_run_interactive_loop()`
 - [ ] Add `completer` parameter to `get_multiline_input()` in `main.py`
-- [ ] Add `CGR_MODEL_CATALOG_PATH` and `CGR_DISABLE_MODEL_DISCOVERY` fields to `AppConfig` in `config.py`
+- [ ] ~~Add `CGR_MODEL_CATALOG_PATH` field to `AppConfig`~~ — **Deferred to Phase 3**: JSON/YAML schema for custom catalogs is not yet defined. Add only when `_load_custom_catalog()` is implemented.
+- [ ] Add `CGR_DISABLE_MODEL_DISCOVERY: bool = False` field to `AppConfig` in `config.py` — **Phase 3 placeholder** (no-op in Phase 1; dynamic discovery not yet implemented)
 - [ ] Write unit tests for catalog, command parsing, and display formatting

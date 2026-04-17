@@ -25,7 +25,7 @@ Available Models:
 
 [Google AI]
 • gemini-2.5-pro (Context: 1M tokens) - Advanced reasoning
-• gemini-2.5-flash (Context: 1M tokens) - Fast responses  
+• gemini-2.5-flash (Context: 1M tokens) - Fast responses
 • gemini-1.5-pro (Context: 2M tokens) - Balanced performance
 • gemini-1.5-flash (Context: 1M tokens) - Cost-effective
 
@@ -33,11 +33,16 @@ Available Models:
 • gpt-4o (Context: 128K tokens) - Multimodal, fast
 • gpt-4o-mini (Context: 128K tokens) - Lightweight, economical
 • gpt-4-turbo (Context: 128K tokens) - High intelligence
+• gpt-4 (Context: 8K tokens) - Legacy model, limited context
+• gpt-3.5-turbo (Context: 128K tokens) - Budget-friendly, legacy
 
 [Anthropic]
 • claude-3-5-sonnet (Context: 200K tokens) - Best overall
 • claude-3-opus (Context: 200K tokens) - Maximum intelligence
+• claude-3-sonnet (Context: 200K tokens) - Balanced legacy model
 • claude-3-haiku (Context: 200K tokens) - Fastest responses
+• claude-2.1 (Context: 200K tokens) - Legacy, long context
+• claude-2.0 (Context: 100K tokens) - Legacy, shorter context
 
 [Azure OpenAI]
 • gpt-4o (Context: 128K tokens) - Multimodal, fast
@@ -49,6 +54,8 @@ Available Models:
 • llama3.1 (Context: 128K tokens) - Extended context
 • mistral-nemo (Context: 128K tokens) - High performance
 • gemma2 (Context: 128K tokens) - Google's lightweight model
+• qwen2 (Context: 128K tokens) - Alibaba's multilingual model
+• phi3 (Context: 128K tokens) - Microsoft's compact model
 
 Current Model: google:gemini-2.5-flash
 Usage: /model <provider>:<model_id> to switch
@@ -68,7 +75,7 @@ Usage: /model <provider>:<model_id> to switch
 
 #### 1.4 Model Metadata Structure
 ```python
-from typing import NamedTuple
+from typing import Literal, NamedTuple
 
 class ModelInfo(NamedTuple):
     """Metadata for a single model entry in the catalog.
@@ -83,8 +90,16 @@ class ModelInfo(NamedTuple):
     description: str         # e.g. "Advanced reasoning" — short description for display
     requires_api_key: bool   # True for cloud providers, False for Ollama
     is_local: bool          # True for Ollama/vLLM, False for cloud providers
-    pricing_tier: str       # "free", "low", "medium", "high"
+    pricing_tier: Literal["free", "low", "medium", "high"]  # Constrained to prevent inconsistent values
 ```
+
+> **Design decision**: `pricing_tier` uses `Literal["free", "low", "medium", "high"]`
+> rather than bare `str` to prevent inconsistent values across catalog entries
+> (e.g., "cheap" vs "low"). This follows the project's pattern of constraining
+> string choices via `StrEnum` or `Literal` types (see `Color`, `StyleModifier`,
+> `GoogleProviderType` in `constants.py`). Note: `pricing_tier` is not displayed
+> in Phase 1's `_display_models_table()` — it's included for future filtering
+> and sorting capabilities (Phase 3+).
 
 > **Important**: `model_id` must be a **real, valid model ID** that can be passed directly to
 > `/model <provider>:<model_id>` — NOT a wildcard pattern from `MODEL_CONTEXT_WINDOWS`.
@@ -94,12 +109,18 @@ class ModelInfo(NamedTuple):
 ### 2. Interactive Command Discovery
 **Purpose**: Provide real-time command suggestions when users type `/`.
 
-#### 2.1 Trigger Mechanism
-- When user types `/` at the beginning of input line
-- Display overlay panel with available commands
-- Support arrow keys (↑/↓) for navigation
-- Support Enter key to select and execute command
-- Support Esc key to dismiss suggestions
+#### 2.1 Trigger Mechanism (Phase 1: TAB Completion)
+- Completion is triggered by **TAB** key (prompt_toolkit default behavior)
+- When user types `/` and presses TAB, a dropdown list of matching commands appears
+- ENTER always inserts a newline (existing behavior, unchanged)
+- CTRL+J submits the input (existing behavior, unchanged)
+- CTRL+C interrupts (existing behavior, unchanged)
+
+> **Phase 2/3 Enhancement**: An overlay panel with arrow-key (↑/↓) navigation and
+> Enter-to-select semantics may be added later using `prompt_toolkit`'s
+> `PromptSession` with custom `NestedCompleter`. This requires careful refactoring
+> of `get_multiline_input()` and is **not** part of Phase 1 because it risks
+> breaking the existing multiline input flow (ENTER must remain newline, not submit).
 
 #### 2.2 Command Categories
 ```
@@ -192,6 +213,14 @@ MODEL_CATALOG: dict[str, list[ModelInfo]] = {
                    display_name="GPT-4 Turbo", context_window=128000,
                    description="High intelligence", requires_api_key=True,
                    is_local=False, pricing_tier="high"),
+        ModelInfo(provider="openai", model_id="gpt-4",
+                   display_name="GPT-4", context_window=8192,
+                   description="Legacy model, limited context", requires_api_key=True,
+                   is_local=False, pricing_tier="high"),
+        ModelInfo(provider="openai", model_id="gpt-3.5-turbo",
+                   display_name="GPT-3.5 Turbo", context_window=128000,
+                   description="Budget-friendly, legacy", requires_api_key=True,
+                   is_local=False, pricing_tier="low"),
     ],
     cs.Provider.ANTHROPIC: [
         ModelInfo(provider="anthropic", model_id="claude-3-5-sonnet",
@@ -202,9 +231,21 @@ MODEL_CATALOG: dict[str, list[ModelInfo]] = {
                    display_name="Claude 3 Opus", context_window=200000,
                    description="Maximum intelligence", requires_api_key=True,
                    is_local=False, pricing_tier="high"),
+        ModelInfo(provider="anthropic", model_id="claude-3-sonnet",
+                   display_name="Claude 3 Sonnet", context_window=200000,
+                   description="Balanced legacy model", requires_api_key=True,
+                   is_local=False, pricing_tier="medium"),
         ModelInfo(provider="anthropic", model_id="claude-3-haiku",
                    display_name="Claude 3 Haiku", context_window=200000,
                    description="Fastest responses", requires_api_key=True,
+                   is_local=False, pricing_tier="low"),
+        ModelInfo(provider="anthropic", model_id="claude-2.1",
+                   display_name="Claude 2.1", context_window=200000,
+                   description="Legacy, long context", requires_api_key=True,
+                   is_local=False, pricing_tier="medium"),
+        ModelInfo(provider="anthropic", model_id="claude-2.0",
+                   display_name="Claude 2.0", context_window=100000,
+                   description="Legacy, shorter context", requires_api_key=True,
                    is_local=False, pricing_tier="low"),
     ],
     cs.Provider.AZURE: [
@@ -243,6 +284,14 @@ MODEL_CATALOG: dict[str, list[ModelInfo]] = {
                    display_name="Gemma 2", context_window=128000,
                    description="Google's lightweight model", requires_api_key=False,
                    is_local=True, pricing_tier="free"),
+        ModelInfo(provider="ollama", model_id="qwen2",
+                   display_name="Qwen 2", context_window=128000,
+                   description="Alibaba's multilingual model", requires_api_key=False,
+                   is_local=True, pricing_tier="free"),
+        ModelInfo(provider="ollama", model_id="phi3",
+                   display_name="Phi 3", context_window=128000,
+                   description="Microsoft's compact model", requires_api_key=False,
+                   is_local=True, pricing_tier="free"),
     ],
 }
 
@@ -265,42 +314,43 @@ PROVIDER_DISPLAY_NAMES: dict[str, str] = {
 #### 4.2 New Functions in main.py
 ```python
 def _handle_models_command(command: str) -> None:
-    """Handle /models command with optional provider filter."""
-    parts = command.strip().split(maxsplit=1)
-    provider_filter = parts[1].strip().lower() if len(parts) > 1 else None
-    
-    if provider_filter == cs.HELP_ARG:  # "help" — matches existing /model pattern
-        app_context.console.print(cs.UI_MODELS_USAGE)
-        return
-        
-    available_models = _get_available_models(provider_filter)
-    
-    if available_models is None:
-        # provider_filter was provided but not a valid provider — show error
-        valid_providers = ", ".join(PROVIDER_DISPLAY_NAMES.keys())
-        app_context.console.print(
-            cs.UI_MODELS_INVALID_PROVIDER.format(provider=provider_filter, available=valid_providers)
-        )
-        return
-    
-    _display_models_table(available_models)
+    """Handle /models command to display available models.
 
-def _get_available_models(provider_filter: str | None = None) -> dict[str, list[ModelInfo]] | None:
-    """Retrieve available models from static MODEL_CATALOG, optionally filtered by provider.
-    
-    Returns None if provider_filter is provided but not found in catalog (invalid provider).
-    Returns the full catalog if provider_filter is None.
+    Follows the same pattern as existing _handle_model_command():
+    - No arg → show all providers
+    - "help" → show usage (cs.HELP_ARG == "help")
+    - Valid provider → show that provider only
+    - Invalid provider → explicit error with available provider list
     """
     from .models_catalog import MODEL_CATALOG
-    
-    if provider_filter is None:
-        return MODEL_CATALOG
-    
-    if provider_filter in MODEL_CATALOG:
-        return {provider_filter: MODEL_CATALOG[provider_filter]}
-    
-    # Invalid provider — return None to signal error
-    return None
+    # Note: PROVIDER_DISPLAY_NAMES is not imported here because it's only
+    # needed by _display_models_table(). The error message uses MODEL_CATALOG.keys()
+    # (the authoritative data source) rather than PROVIDER_DISPLAY_NAMES.keys().
+
+    parts = command.strip().split(maxsplit=1)
+    arg = parts[1].strip().lower() if len(parts) > 1 else None
+
+    if arg == cs.HELP_ARG:
+        app_context.console.print(cs.UI_MODELS_USAGE)
+        return
+
+    if arg is None:
+        # Show all providers
+        _display_models_table(MODEL_CATALOG)
+        return
+
+    # Check if arg is a valid provider key
+    if arg in MODEL_CATALOG:
+        provider_models = {arg: MODEL_CATALOG[arg]}
+        _display_models_table(provider_models)
+    else:
+        # Invalid provider — explicit error, NOT silent fallback
+        # Use MODEL_CATALOG.keys() (the authoritative data source) for the
+        # valid-provider list, not PROVIDER_DISPLAY_NAMES.keys().
+        valid_providers = ", ".join(MODEL_CATALOG.keys())
+        app_context.console.print(
+            cs.UI_MODELS_INVALID_PROVIDER.format(provider=arg, available=valid_providers)
+        )
 
 def _display_models_table(models_by_provider: dict[str, list[ModelInfo]]) -> None:
     """Display formatted table of available models using Rich Text for safe markup."""
@@ -324,8 +374,8 @@ def get_multiline_input(prompt_text: str = cs.PROMPT_ASK_QUESTION) -> str:
     ENTER always inserts a newline. CTRL+J submits. CTRL+C interrupts.
     All existing behavior is preserved — only TAB completion is added.
     """
-    from prompt_toolkit.completion import WordCompleter
-
+    # WordCompleter is imported at module level alongside other prompt_toolkit imports
+    # (prompt, KeyBindings, HTML, print_formatted_text) for consistency with existing code.
     bindings = KeyBindings()
 
     @bindings.add(cs.KeyBinding.CTRL_J)
@@ -373,12 +423,15 @@ def get_multiline_input(prompt_text: str = cs.PROMPT_ASK_QUESTION) -> str:
 
 ### 5. User Experience Flow
 
-#### 5.1 Basic Usage
+#### 5.1 Basic Usage (Phase 1: TAB Completion)
 1. User types `/` in chat input
-2. System displays command suggestions panel
-3. User navigates with arrow keys, presses Enter on desired command
-4. Selected command is inserted into input line
+2. User presses TAB — prompt_toolkit displays a dropdown of matching commands
+3. User selects a command from the dropdown (or continues typing to filter)
+4. Command text is inserted into the input line
 5. User can modify parameters and press Ctrl+J to execute
+
+> **Phase 2/3 Enhancement**: An overlay panel with arrow-key navigation and Enter-to-select
+> semantics may replace or supplement TAB completion in later phases (see §2.1).
 
 #### 5.2 Model Browsing Flow
 1. User types `/models`
@@ -388,11 +441,19 @@ def get_multiline_input(prompt_text: str = cs.PROMPT_ASK_QUESTION) -> str:
 5. System validates and switches model with confirmation
 
 #### 5.3 Error Handling
-- Invalid provider: "Provider 'invalid' not found. Available: google, openai, anthropic, azure, ollama"
+- Invalid provider: "Provider '{provider}' not found. Available providers: google, openai, anthropic, azure, ollama" — uses `MODEL_CATALOG.keys()` for the valid-provider list (see §4.2 implementation)
 - Invalid model: "Model 'gpt-5' not available for OpenAI. Available: gpt-4o, gpt-4o-mini, gpt-4-turbo"
 - Missing API key: Clear instructions on setting up required API keys (using existing `format_missing_api_key_errors` from `config.py`)
 - Local model not running: "Ollama not running. Start with 'ollama serve'"
-- Unimplemented provider enum value: "Provider 'cohere' is defined but not yet implemented in PROVIDER_REGISTRY"
+
+> **Note on unimplemented providers**: When a user types `/models cohere`, the `/models`
+> command checks `MODEL_CATALOG` keys (which only contains registered providers). Since
+> `cohere` is in the `Provider` enum but not in `PROVIDER_REGISTRY`/`MODEL_CATALOG`, it
+> triggers the **same generic** `UI_MODELS_INVALID_PROVIDER` error as any invalid string
+> like `/models foobar`. A specialized "defined but not yet implemented" message would
+> require checking `Provider` enum membership separately, which adds complexity without
+> much user benefit. The generic error already lists the available providers, making it
+> clear that `cohere` is not among them. If desired, this can be enhanced in Phase 2.
 
 ### 6. Configuration and Extensibility
 
@@ -405,8 +466,20 @@ def get_multiline_input(prompt_text: str = cs.PROMPT_ASK_QUESTION) -> str:
 - `CGR_MODEL_CATALOG_PATH: str | None = None`: Custom model catalog file path (JSON/YAML).
   When set, the catalog is loaded from this file instead of the static `MODEL_CATALOG`.
   Must be validated as a valid file path at startup if provided.
+
+  > **Phase 3 — Not implementation-ready for Phase 1**: The JSON/YAML schema for custom
+  > catalogs is not yet defined. A custom catalog file must map to `ModelInfo` NamedTuple
+  > fields, but the exact schema (required vs optional fields, validation rules, YAML
+  > structure) needs separate specification. This env var should be added to `AppConfig`
+  > only when the schema is finalized and a `_load_custom_catalog()` function is implemented.
+  > For Phase 1, the static `MODEL_CATALOG` dict in `models_catalog.py` is the sole source.
+
 - `CGR_DISABLE_MODEL_DISCOVERY: bool = False`: Disable dynamic model discovery (Ollama
   querying, provider API integration). Only the static `MODEL_CATALOG` is used.
+
+  > **Phase 3 placeholder**: This setting has no effect in Phase 1 since dynamic discovery
+  > is not yet implemented. It can be added to `AppConfig` as a no-op field for forward
+  > compatibility, but actual functionality requires Phase 3's Ollama querying logic.
 
 > **Removed**: `CGR_DEFAULT_MODEL_PROVIDER` — this overlaps with existing `ORCHESTRATOR_PROVIDER`
 > and `CYPHER_PROVIDER` settings in `AppConfig`. The default provider for model suggestions is
@@ -440,9 +513,15 @@ def get_multiline_input(prompt_text: str = cs.PROMPT_ASK_QUESTION) -> str:
 ### 8. Performance Considerations
 
 #### 8.1 Caching Strategy
-- Cache model catalogs for 1 hour
-- Cache Ollama model lists for 5 minutes
-- Lazy loading of detailed model metadata
+
+> **Phase 3 — Not applicable to Phase 1**: In Phase 1, `MODEL_CATALOG` is a static
+> Python dict loaded once at module import time. There is zero runtime cost and no
+> need for caching. The strategies below apply only when dynamic model discovery
+> (Ollama querying, provider API integration) is introduced in Phase 3.
+
+- Cache model catalogs for 1 hour (Phase 3: dynamic provider API responses)
+- Cache Ollama model lists for 5 minutes (Phase 3: local instance queries)
+- Lazy loading of detailed model metadata (Phase 3: optional detailed info)
 
 #### 8.2 Memory Usage
 - Stream model display for large catalogs

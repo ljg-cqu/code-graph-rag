@@ -683,6 +683,18 @@ class AppConfig(BaseSettings):
     CONTEXT_COMPRESSION_ARCHIVE_TTL_HOURS: int = Field(default=24, gt=0)
     CONTEXT_COMPRESSION_ENABLED: bool = True
 
+    # ─────────────────────────────────────────────────────────
+    # Model Management Feature Configuration (Phase 3 placeholders)
+    # ─────────────────────────────────────────────────────────
+
+    # Custom model catalog file path (JSON/YAML). When set, the catalog is loaded from this file
+    # instead of the static MODEL_CATALOG. Must be validated as a valid file path at startup if provided.
+    CGR_MODEL_CATALOG_PATH: str | None = None
+
+    # Disable dynamic model discovery (Ollama querying, provider API integration).
+    # Only the static MODEL_CATALOG is used.
+    CGR_DISABLE_MODEL_DISCOVERY: bool = False
+
     def _get_default_config(self, role: str) -> ModelConfig:
         role_upper = role.upper()
 

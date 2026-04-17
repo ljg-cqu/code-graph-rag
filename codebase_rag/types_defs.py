@@ -7,6 +7,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple, Protocol, TypedDict
 
+from typing import Literal
+
 from prompt_toolkit.styles import Style
 
 from .constants import NodeLabel, RelationshipType, SupportedLanguage
@@ -152,6 +154,19 @@ class TreeSitterNodeProtocol(Protocol):
     def children(self) -> list[TreeSitterNodeProtocol]: ...
     @property
     def text(self) -> bytes: ...
+
+
+class ModelInfo(NamedTuple):
+    """Metadata for a single model entry in the catalog."""
+
+    provider: str
+    model_id: str
+    display_name: str
+    context_window: int
+    description: str
+    requires_api_key: bool
+    is_local: bool
+    pricing_tier: Literal["free", "low", "medium", "high"]
 
 
 class ModelConfigKwargs(TypedDict, total=False):

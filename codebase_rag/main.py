@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 from prompt_toolkit import prompt
+from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.shortcuts import print_formatted_text
@@ -77,6 +78,7 @@ from .types_defs import (
     ConfirmationToolNames,
     CreateFileArgs,
     GraphData,
+    ModelInfo,
     RawToolArgs,
     ReplaceCodeArgs,
     ShellCommandArgs,
@@ -891,6 +893,17 @@ def get_multiline_input(prompt_text: str = cs.PROMPT_ASK_QUESTION) -> str:
     def keyboard_interrupt(event: KeyPressEvent) -> None:
         event.app.exit(exception=KeyboardInterrupt)
 
+    command_completer = WordCompleter(
+        [
+            cs.MODELS_COMMAND_PREFIX,
+            cs.MODEL_COMMAND_PREFIX,
+            cs.MODE_COMMAND_PREFIX,
+            cs.HELP_COMMAND,
+            cs.COMPRESS_COMMAND_PREFIX,
+        ],
+        ignore_case=True,
+    )
+
     clean_prompt = Text.from_markup(prompt_text).plain
 
     print_formatted_text(
@@ -905,6 +918,7 @@ def get_multiline_input(prompt_text: str = cs.PROMPT_ASK_QUESTION) -> str:
         "",
         multiline=True,
         key_bindings=bindings,
+        completer=command_completer,
         wrap_lines=True,
         style=ORANGE_STYLE,
     )
@@ -912,6 +926,80 @@ def get_multiline_input(prompt_text: str = cs.PROMPT_ASK_QUESTION) -> str:
         raise EOFError
     stripped: str = result.strip()
     return stripped
+
+
+def _handle_models_command(command: str) -> None:
+    """Handle /models command to display available models."""
+    from .models_catalog import MODEL_CATALOG
+
+    parts = command.strip().split(maxsplit=1)
+    arg = parts[1].strip().lower() if len(parts) > 1 else None
+
+    if arg == cs.HELP_ARG:
+        app_context.console.print(cs.UI_MODELS_USAGE)
+        return
+
+    if arg is None:
+        _display_models_table(MODEL_CATALOG)
+        return
+
+    if arg in MODEL_CATALOG:
+        provider_models = {arg: MODEL_CATALOG[arg]}
+        _display_models_table(provider_models)
+    else:
+        valid_providers = ", ".join(MODEL_CATALOG.keys())
+        app_context.console.print(
+            cs.UI_MODELS_INVALID_PROVIDER.format(provider=arg, available=valid_providers)
+        )
+
+
+def _display_models_table(
+    catalog: dict[str, list[ModelInfo]],
+) -> None:
+    """Display formatted model table using Rich Text for safe markup."""
+    from .models_catalog import PROVIDER_DISPLAY_NAMES
+
+    if not catalog:
+        app_context.console.print("No models available.")
+        return
+
+    current_config = settings.active_orchestrator_config
+    current_provider = current_config.provider
+    current_model_id = current_config.model_id
+
+    for provider, models in catalog.items():
+        display_name = PROVIDER_DISPLAY_NAMES.get(provider, provider.title())
+        app_context.console.print(Text(f"  {display_name}", style="bold cyan"))
+
+        for model_info in models:
+            is_current = (
+                provider == current_provider
+                and model_info.model_id == current_model_id
+            )
+            marker = "\u2713" if is_current else "\u2022"
+
+            ctx = model_info.context_window
+            if ctx >= 1_000_000:
+                ctx_str = f"{ctx // 1_000_000}M"
+            elif ctx >= 1_000:
+                ctx_str = f"{ctx // 1_000}K"
+            else:
+                ctx_str = str(ctx)
+
+            line = Text(f"  {marker} ")
+            line.append(model_info.model_id, style="bold")
+            line.append(f" (Context: {ctx_str} tokens) - {model_info.description}")
+            app_context.console.print(line)
+
+        app_context.console.print("")
+
+    current_model_str = f"{current_provider}{cs.CHAR_COLON}{current_model_id}"
+    app_context.console.print(
+        style(f"Current Model: {current_model_str}", cs.Color.CYAN)
+    )
+    app_context.console.print(
+        style("Usage: /model <provider>:<model_id> to switch", cs.Color.YELLOW, cs.StyleModifier.NONE)
+    )
 
 
 def _create_model_from_string(
@@ -1270,6 +1358,10 @@ async def _run_interactive_loop(
                     continue
 
                 command_parts = stripped_lower.split(maxsplit=1)
+                if command_parts[0] == cs.MODELS_COMMAND_PREFIX:
+                    _handle_models_command(stripped_question)
+                    initial_question = None
+                    continue
                 if command_parts[0] == cs.MODEL_COMMAND_PREFIX:
                     model_override, model_override_string, model_override_config = (
                         _handle_model_command(

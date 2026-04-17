@@ -341,6 +341,16 @@ UI_MODEL_SWITCHED = "[bold green]Model switched to: {model}[/bold green]"
 UI_MODEL_CURRENT = "[bold cyan]Current model: {model}[/bold cyan]"
 UI_MODEL_SWITCH_ERROR = "[bold red]Failed to switch model: {error}[/bold red]"
 UI_MODEL_USAGE = "[bold yellow]Usage: /model <provider:model> (e.g., /model google:gemini-3.1-pro-preview)[/bold yellow]"
+UI_MODELS_USAGE = """[bold yellow]Usage: /models [provider]
+  /models          - Show all available models
+  /models google   - Show Google models only
+  /models azure    - Show Azure OpenAI models only
+  /models ollama   - Show Ollama (local) models only
+  /models help     - Show this help[/bold yellow]"""
+UI_MODELS_INVALID_PROVIDER = (
+    "[bold red]Provider '{provider}' not found. "
+    "Available providers: {available}[/bold red]"
+)
 UI_MODE_SWITCHED = "[bold green]Mode switched to: {mode}[/bold green]"
 UI_MODE_CURRENT = "[bold cyan]Current mode: {mode}[/bold cyan]"
 UI_MODE_SWITCH_ERROR = "[bold red]Failed to switch mode: {error}[/bold red]"
@@ -353,10 +363,12 @@ UI_MODE_USAGE = """[bold yellow]Available modes:[/bold yellow]
   /mode doc_vs_code     - Validate docs against code
   /mode                 - Show current mode"""
 UI_HELP_COMMANDS = """[bold cyan]Available commands:[/bold cyan]
+  /models             - View available models by provider
   /model <provider:model> - Switch to a different model
   /model                  - Show current model
   /mode <mode>            - Switch query mode (code_only, document_only, both_merged, etc.)
   /mode                   - Show current mode
+  /compress               - Manually compress conversation context
   /help                   - Show this help
   exit, quit              - Exit the session"""
 UI_TOOL_ARGS_FORMAT = "    Arguments: {args}"
@@ -1061,6 +1073,7 @@ EXIT_COMMANDS = frozenset({"exit", "quit"})
 
 # (H) CLI commands
 MODEL_COMMAND_PREFIX = "/model"
+MODELS_COMMAND_PREFIX = "/models"
 MODE_COMMAND_PREFIX = "/mode"
 COMPRESS_COMMAND_PREFIX = "/compress"
 HELP_COMMAND = "/help"
