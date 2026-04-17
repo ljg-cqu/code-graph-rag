@@ -784,7 +784,6 @@ class AppConfig(BaseSettings):
 
         # Parse from CGR_WORKER_LLMS config
         worker_llms_config = self.CGR_WORKER_LLMS
-        logger.info(f"CGR_WORKER_LLMS raw value type: {type(worker_llms_config)}, value: {repr(worker_llms_config)[:200]}...")
         parsed_llms: list[ModelConfig] = []
 
         if isinstance(worker_llms_config, str):
@@ -792,15 +791,26 @@ class AppConfig(BaseSettings):
             if config_str:
                 # Check if it's a JSON array or object
                 if config_str.startswith("[") or config_str.startswith("{"):
-                    logger.info("Detected JSON format for CGR_WORKER_LLMS")
+                    logger.debug("Detected JSON format for CGR_WORKER_LLMS")
                     try:
                         import json
+                        import re
 
-                        parsed = json.loads(config_str)
-                        logger.info(f"Parsed JSON: {len(parsed) if isinstance(parsed, list) else 'single object'} entries, type={type(parsed)}")
+                        # Strip comments from JSON (lines starting with #)
+                        # Handle both single-line comments and inline comments
+                        lines = config_str.split("\n")
+                        cleaned_lines = []
+                        for line in lines:
+                            # Remove full-line comments and inline comments
+                            # Match # not inside a string
+                            cleaned = re.sub(r'(?<!\")\s*#.*$', '', line)
+                            if cleaned.strip():
+                                cleaned_lines.append(cleaned)
+                        cleaned_json = "\n".join(cleaned_lines)
+
+                        parsed = json.loads(cleaned_json)
                         if isinstance(parsed, list):
-                            for i, entry in enumerate(parsed):
-                                logger.info(f"  Entry {i}: type={type(entry)}, value={repr(entry)[:100]}...")
+                            for entry in parsed:
                                 if isinstance(entry, str):
                                     provider, model = self.parse_model_string(entry)
                                     parsed_llms.append(
@@ -809,13 +819,7 @@ class AppConfig(BaseSettings):
                                         )
                                     )
                                 elif isinstance(entry, dict):
-                                    try:
-                                        parsed_llms.append(_model_config_from_mapping(entry))
-                                        logger.info(f"    -> Added model config for {entry.get('provider')}:{entry.get('model_id')}")
-                                    except ValueError as e:
-                                        logger.warning(f"    -> Failed to create ModelConfig: {e}")
-                                else:
-                                    logger.warning(f"    -> Skipping: entry is not dict or string")
+                                    parsed_llms.append(_model_config_from_mapping(entry))
                         elif isinstance(parsed, dict):
                             # Single object wrapped in braces
                             parsed_llms.append(_model_config_from_mapping(parsed))
@@ -850,22 +854,10 @@ class AppConfig(BaseSettings):
 
         # Validate all parsed LLMs
         valid_llms = []
-        logger.info(f"Validating {len(parsed_llms)} parsed worker LLM configs")
         for llm_config in parsed_llms:
-            has_key = bool(
-                llm_config.api_key
-                and llm_config.api_key.strip()
-                and llm_config.api_key != cs.DEFAULT_API_KEY
-            )
-            logger.info(
-                f"Worker LLM: {llm_config.provider}:{llm_config.model_id} "
-                f"(api_key={'set' if has_key else 'not set'}, "
-                f"endpoint={llm_config.endpoint})"
-            )
             try:
                 llm_config.validate_api_key(role="worker")
                 valid_llms.append(llm_config)
-                logger.info(f"  -> Validated successfully")
             except ValueError as e:
                 logger.warning(f"Skipping invalid worker LLM config: {str(e)}")
 
