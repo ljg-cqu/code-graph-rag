@@ -812,6 +812,9 @@ class AppConfig(BaseSettings):
                                 cleaned_lines.append(cleaned)
                         cleaned_json = "\n".join(cleaned_lines)
 
+                        # Debug: log the cleaned JSON before parsing
+                        logger.debug(f"Cleaned JSON for CGR_WORKER_LLMS: {cleaned_json[:200]}...")
+
                         parsed = json.loads(cleaned_json)
                         if isinstance(parsed, list):
                             for entry in parsed:
@@ -833,6 +836,12 @@ class AppConfig(BaseSettings):
                             f"CGR_WORKER_LLMS JSON parsing failed: {e}. "
                             "Falling back to comma-separated format."
                         )
+                        # Debug: show the problematic JSON around the error position
+                        if e.lineno and e.lineno <= len(cleaned_lines):
+                            start = max(0, e.lineno - 2)
+                            end = min(len(cleaned_lines), e.lineno + 1)
+                            context = "\n".join(f"  {i+1}: {cleaned_lines[i]}" for i in range(start, end))
+                            logger.debug(f"JSON context around line {e.lineno}:\n{context}")
                 else:
                     # Split comma-separated list (e.g., "openai:gpt-4o,anthropic:claude-3")
                     entries = [
