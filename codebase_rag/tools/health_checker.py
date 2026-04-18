@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import os
 import subprocess
+from dataclasses import dataclass
+from enum import Enum, auto
 from pathlib import Path
 
 from loguru import logger
 
 import mgclient
+from ..services.graph_service import MemgraphIngestor
 
 from .. import constants as cs
 from ..config import settings
@@ -878,3 +881,93 @@ class HealthChecker:
                     logger.warning(f"Failed to close Memgraph connection: {e}")
 
         return results
+
+
+    def get_runtime_status(self, ingestor: "MemgraphIngestor") -> RuntimeHealthStatus:
+        """Get current runtime health status for active session.
+
+        Call this periodically during long-running operations or after
+        errors to detect capability degradation.
+        """
+        return get_runtime_status()
+
+
+
+class HealthStatus(Enum):
+    """Runtime health status levels."""
+
+    HEALTHY = auto()
+    DEGRADED = auto()
+    UNHEALTHY = auto()
+
+
+@dataclass
+class RuntimeHealthStatus:
+    """Runtime health status for active query sessions."""
+
+    vector_search: HealthStatus = HealthStatus.HEALTHY
+    graph_traversal: HealthStatus = HealthStatus.HEALTHY
+    procedures: HealthStatus = HealthStatus.HEALTHY
+    last_error: str | None = None
+
+    @property
+    def overall(self) -> HealthStatus:
+        """Determine overall health from individual statuses."""
+        statuses = [self.vector_search, self.graph_traversal, self.procedures]
+        if HealthStatus.UNHEALTHY in statuses:
+            return HealthStatus.UNHEALTHY
+        if HealthStatus.DEGRADED in statuses:
+            return HealthStatus.DEGRADED
+        return HealthStatus.HEALTHY
+
+
+def get_runtime_status() -> RuntimeHealthStatus:
+    """Get current runtime health status for active session.
+
+    Call this periodically during long-running operations or after
+    errors to detect capability degradation.
+    """
+    status = RuntimeHealthStatus()
+
+    try:
+        from ..vector_backend import get_shared_backend
+
+        backend = get_shared_backend()
+        stats = backend.get_stats()
+        if stats.get("total_embeddings", 0) == 0:
+            status.vector_search = HealthStatus.DEGRADED
+    except Exception as e:
+        status.vector_search = HealthStatus.UNHEALTHY
+        status.last_error = str(e)
+
+    try:
+        conn = mgclient.connect(
+            host=settings.MEMGRAPH_HOST,
+            port=settings.MEMGRAPH_PORT,
+        )
+        cursor = conn.cursor()
+        cursor.execute("MATCH (n) RETURN count(n) LIMIT 1")
+        cursor.fetchall()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        status.graph_traversal = HealthStatus.UNHEALTHY
+        status.last_error = str(e)
+
+    try:
+        conn = mgclient.connect(
+            host=settings.MEMGRAPH_HOST,
+            port=settings.MEMGRAPH_PORT,
+        )
+        cursor = conn.cursor()
+        cursor.execute(
+            "CALL pagerank.get() YIELD node, rank "
+            "WITH rank LIMIT 1 RETURN rank"
+        )
+        cursor.fetchall()
+        cursor.close()
+        conn.close()
+    except Exception:
+        status.procedures = HealthStatus.DEGRADED
+
+    return status

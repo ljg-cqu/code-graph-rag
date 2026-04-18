@@ -99,10 +99,11 @@ class QueryRequest:
 
     question: str
     mode: QueryMode
-    validate: bool = False  # Enable cross-validation
-    include_metadata: bool = True  # Include source info
-    top_k: int = 5  # Results per graph
-    scope: str = "all"  # Validation scope: "all", "sections", "claims"
+    validate: bool = False
+    include_metadata: bool = True
+    top_k: int = 5
+    scope: str = "all"
+    use_orchestrator: bool = False
 
 
 @dataclass
@@ -398,8 +399,7 @@ class QueryRouter:
         return "\n".join(lines), sources, []
 
     def _query_code_only(self, request: QueryRequest) -> QueryResponse:
-        """
-        Query CODE graph/vector ONLY.
+        """Query CODE graph/vector ONLY.
 
         CRITICAL: Document graph must NOT be touched.
         """
@@ -411,25 +411,76 @@ class QueryRouter:
                 warnings=["Code graph connection not configured"],
             )
 
-        # Lazy imports for optional dependencies
-        from ..config import settings
-
         logger.info(f"Querying code graph: {request.question}")
 
-        # Query code graph using semantic search if vector backend available
+        if request.use_orchestrator:
+            return self._query_code_with_orchestrator(request)
+
+        return self._query_code_legacy(request)
+
+    def _query_code_with_orchestrator(
+        self,
+        request: QueryRequest,
+    ) -> QueryResponse:
+        """Query code using QueryMethodOrchestrator for multi-method retrieval."""
+        from ..retrieval import QueryMethodOrchestrator
+
+        assert self.code_graph is not None, "code_graph must be available"
+        orchestrator = QueryMethodOrchestrator(
+            code_graph=self.code_graph,
+            code_vector=self.code_vector,
+        )
+
+        combined = orchestrator.execute(
+            query=request.question,
+            top_k=request.top_k,
+            max_methods=3,
+        )
+
+        sources: list[Source] = []
+        answer_parts: list[str] = ["**Code Results (multi-method):**\n"]
+
+        for item in combined.items:
+            sources.append(
+                Source(
+                    type="code",
+                    path=item.get("file_path", "unknown"),
+                    node_type=item.get("type", "Unknown"),
+                    qualified_name=item.get("qualified_name"),
+                    line_range=None,
+                )
+            )
+            score = item.get("combined_score", 0)
+            methods = ", ".join(item.get("found_by_methods", ["unknown"]))
+            answer_parts.append(
+                f"- **{item.get('qualified_name', 'unknown')}** "
+                f"({item.get('type', 'Unknown')}) "
+                f"[Score: {score:.2f}, Methods: {methods}]"
+            )
+
+        return QueryResponse(
+            answer="\n".join(answer_parts),
+            sources=sources,
+            mode=request.mode,
+            warnings=combined.warnings,
+        )
+
+    def _query_code_legacy(self, request: QueryRequest) -> QueryResponse:
+        """Query code using legacy hybrid retrieval + keyword fallback."""
+        assert self.code_graph is not None, "code_graph must be available"
         sources: list[Source] = []
         answer_parts: list[str] = []
         warnings: list[str] = []
 
         if self.code_vector:
-            # Use advanced hybrid retrieval (vector + text + graph) for better results
             try:
-                from ..memgraph_advanced import create_hybrid_retriever, HybridSearchResult
+                from ..memgraph_advanced import (
+                    HybridSearchResult,
+                    create_hybrid_retriever,
+                )
 
-                # Use factory function with shared dependencies
                 retriever = create_hybrid_retriever(self.code_graph)
 
-                # Run hybrid search with automatic reranking
                 results: list[HybridSearchResult] = retriever.search(
                     query=request.question,
                     top_k=request.top_k,
@@ -462,8 +513,6 @@ class QueryRouter:
                 warnings.append(warning_msg)
 
         if not sources and self.code_graph:
-            # Fallback: Query code graph using keyword-based search
-            # Simple text search in function/class names
             keyword_query = """
             MATCH (n)
             WHERE (n:Function OR n:Class OR n:Method OR n:Enum OR n:Type OR n:Union OR n:Interface OR n:Contract OR n:Library)
@@ -473,7 +522,6 @@ class QueryRouter:
                    n.end_line as end_line, labels(n) as labels
             LIMIT $limit
             """
-            # Extract keyword from question using shared utility
             from ..utils.query_utils import extract_best_keyword
 
             keyword = extract_best_keyword(request.question)

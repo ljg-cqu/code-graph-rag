@@ -14,11 +14,11 @@ from loguru import logger
 
 import mgclient
 from codebase_rag.config import settings
-from ..utils.shutdown_manager import shutdown_manager
 from codebase_rag.types_defs import CursorProtocol, ResultValue
 
 from .. import exceptions as ex
 from .. import logs as ls
+from .failure_classifier import classify_memgraph_failure
 from ..constants import (
     ERR_SUBSTR_ALREADY_EXISTS,
     ERR_SUBSTR_CONSTRAINT,
@@ -58,6 +58,7 @@ from ..types_defs import (
     RelBatchRow,
     ResultRow,
 )
+from ..utils.shutdown_manager import shutdown_manager
 
 
 class MemgraphIngestor:
@@ -359,8 +360,9 @@ class MemgraphIngestor:
 
     @classmethod
     def _is_retryable_memgraph_error(cls, error: Exception) -> bool:
-        message = str(error).lower()
-        return any(marker in message for marker in cls._TRANSIENT_ERROR_MARKERS)
+        """Determine if a Memgraph error is retryable using failure classifier."""
+        classification = classify_memgraph_failure(error)
+        return classification.should_retry
 
     def _retry_delay_seconds(self, attempt: int) -> float:
         return settings.MEMGRAPH_RETRY_BASE_DELAY * attempt
@@ -373,7 +375,7 @@ class MemgraphIngestor:
                 current_conn.close()
             except Exception:
                 pass
-        self.conn = self._create_connection_with_timeout()  # <-- CHANGED
+        self.conn = self._create_connection_with_timeout()
 
     def _should_retry_shared_connection_error(
         self,
@@ -381,13 +383,20 @@ class MemgraphIngestor:
         attempt: int,
         max_attempts: int,
     ) -> bool:
-        return attempt < max_attempts and self._is_retryable_memgraph_error(error)
+        from .failure_classifier import classify_memgraph_failure
+
+        classification = classify_memgraph_failure(error)
+        if not classification.should_retry:
+            return False
+        return attempt < min(max_attempts, classification.max_retries + 1)
 
     def _execute_query(
         self,
         query: str,
         params: dict[str, PropertyValue] | None = None,
     ) -> list[ResultRow]:
+        from .failure_classifier import FailureType, classify_memgraph_failure
+
         params = params or {}
         max_attempts = settings.MEMGRAPH_QUERY_MAX_RETRIES + 1
         for attempt in range(1, max_attempts + 1):
@@ -406,7 +415,6 @@ class MemgraphIngestor:
                             continue
                         raise
                 with self._get_cursor() as cursor:
-                    # Validate embedding dimension if present in parameters
                     if "embedding" in params:
                         embedding = params["embedding"]
                         expected_dim = settings.get_effective_vector_dim(
@@ -425,9 +433,36 @@ class MemgraphIngestor:
                     cursor.execute(query, params)
                     return self._cursor_to_results(cursor)
             except Exception as e:
-                if self._should_retry_shared_connection_error(e, attempt, max_attempts):
+                classification = classify_memgraph_failure(e)
+
+                if classification.failure_type == FailureType.SYNTAX_ERROR:
+                    logger.warning(f"Cypher syntax error, not retrying: {e}")
+                    if (
+                        ERR_SUBSTR_ALREADY_EXISTS not in str(e).lower()
+                        and ERR_SUBSTR_CONSTRAINT not in str(e).lower()
+                    ):
+                        logger.error(ls.MG_CYPHER_ERROR.format(error=e))
+                        logger.error(ls.MG_CYPHER_QUERY.format(query=query))
+                        logger.error(ls.MG_CYPHER_PARAMS.format(params=params))
+                    raise
+
+                if classification.failure_type == FailureType.MISSING_PROCEDURE:
+                    logger.warning(f"Procedure not found, not retrying: {e}")
+                    raise
+
+                if classification.failure_type in (
+                    FailureType.AUTHENTICATION_FAILURE,
+                    FailureType.PERMISSION_DENIED,
+                ):
+                    logger.error(f"Authentication/permission failure: {e}")
+                    raise
+
+                if (
+                    classification.should_retry
+                    and attempt < min(max_attempts, classification.max_retries + 1)
+                ):
                     logger.warning(
-                        f"Transient Memgraph query failure (attempt {attempt}/{max_attempts}), reconnecting: {e}"
+                        f"Retryable error (attempt {attempt}/{classification.max_retries}): {e}"
                     )
                     try:
                         self._reset_shared_connection()
@@ -443,6 +478,7 @@ class MemgraphIngestor:
                         raise
                     time.sleep(self._retry_delay_seconds(attempt))
                     continue
+
                 if (
                     ERR_SUBSTR_ALREADY_EXISTS not in str(e).lower()
                     and ERR_SUBSTR_CONSTRAINT not in str(e).lower()
