@@ -13,6 +13,9 @@ FILE_READ_TOOLS = frozenset({
 })
 
 
+_MAX_RECENT_CALLS = 20
+
+
 @dataclass
 class InvestigationState:
     rounds_completed: int = 0
@@ -21,9 +24,20 @@ class InvestigationState:
     graph_queries_run: int = 0
     tool_failures: set[str] = field(default_factory=set)
     _recent_calls: list[tuple[str, str]] = field(default_factory=list, repr=False)
+    _duplicate_counts: dict[tuple[str, str], int] = field(
+        default_factory=dict, repr=False
+    )
 
     def is_duplicate(self, tool_name: str, query_arg: str) -> bool:
         return (tool_name, query_arg) in self._recent_calls
+
+    def duplicate_count(self, tool_name: str, query_arg: str) -> int:
+        return self._duplicate_counts.get((tool_name, query_arg), 0)
+
+    def record_duplicate(self, tool_name: str, query_arg: str) -> int:
+        key = (tool_name, query_arg)
+        self._duplicate_counts[key] = self._duplicate_counts.get(key, 0) + 1
+        return self._duplicate_counts[key]
 
     def record_tool(
         self, tool_name: str, query_arg: str = "", results_count: int = -1
@@ -36,6 +50,8 @@ class InvestigationState:
         # ALWAYS record tool usage, even if it returned 0 results
         self.tools_used.add(tool_name)
         self._recent_calls.append((tool_name, query_arg))
+        if len(self._recent_calls) > _MAX_RECENT_CALLS:
+            self._recent_calls.pop(0)
 
         if tool_name == AgenticToolName.QUERY_GRAPH:
             self.graph_queries_run += 1

@@ -117,7 +117,7 @@ MULTI_ROUND_PROTOCOL = """
 3.  If you try to answer before completing these steps, the system will **reject your response** and inject a correction message forcing you to continue investigating.
 4.  You have a maximum of 3 rejection attempts. After that, your answer will be accepted but flagged as incomplete.
 5.  If a tool returns no results or fails, you may skip it — the gatekeeper detects failures and adapts its requirements accordingly.
-6.  **NEVER repeat the same tool call with identical arguments.** If you already executed a tool and received results, use those results. Repeating the same call will be rejected automatically.
+6.  **NEVER repeat the same tool call with identical arguments.** If you already executed a tool and received results, use those results. Repeating the same call will be rejected automatically. After 3 rejections, the system will forcibly intervene. Do not waste rounds — move forward with the information you have.
 """.strip()
 
 

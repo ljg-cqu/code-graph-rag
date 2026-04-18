@@ -46,6 +46,12 @@ class ShutdownManager:
             else:
                 handler()
 
+    def unregister_handler(self, handler: Callable[[], None]) -> None:
+        with self._lock:
+            self._handlers = [
+                (p, h) for p, h in self._handlers if h is not handler
+            ]
+
     def _signal_handler(self, signum: int, frame: Any) -> None:
         self.initiate_shutdown(signum)
 

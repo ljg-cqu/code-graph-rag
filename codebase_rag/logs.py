@@ -721,6 +721,10 @@ MCP_SERVER_CALLING_TOOL = "[GraphCode MCP] Calling tool: {name}"
 MCP_SERVER_UNKNOWN_TOOL = "[GraphCode MCP] Unknown tool: {name}"
 
 TOOL_DUPLICATE_DETECTED = "Duplicate tool call detected: {tool_name}({query_arg})"
+TOOL_DUPLICATE_ESCALATED = (
+    "Duplicate tool call escalated (attempt {count}): {tool_name}({query_arg})"
+)
+TOOL_DUPLICATE_INJECTED_WARNING = "Injected duplicate-call warning into message history"
 MCP_SERVER_TOOL_ERROR = "[GraphCode MCP] Error executing tool '{name}': {error}"
 MCP_SERVER_STARTING = "[GraphCode MCP] Starting MCP server..."
 MCP_SERVER_CREATED = "[GraphCode MCP] Server created, starting stdio transport..."

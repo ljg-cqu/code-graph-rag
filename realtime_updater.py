@@ -205,6 +205,9 @@ class CodeChangeEventHandler(FileSystemEventHandler):
         if not isinstance(ingestor, QueryProtocol):
             logger.warning(logs.WATCHER_SKIP_NO_QUERY)
             return
+        if getattr(ingestor, "conn", None) is None:
+            logger.warning("Ingestor disconnected, skipping file change processing")
+            return
 
         path = Path(src_path)
         relative_path_str = str(path.relative_to(self.updater.repo_path))
@@ -885,7 +888,23 @@ class UnifiedWatcherManager:
         logger.info(f"Realtime watcher started for {self.repo_path}")
 
     def stop(self) -> None:
-        """Signal the observer to stop."""
+        """Signal the observer to stop and cancel pending debounce timers."""
+        from codebase_rag.utils.shutdown_manager import shutdown_manager
+
+        shutdown_manager.unregister_handler(self.stop)
+
+        # Cancel all pending debounce timers in delegate handlers
+        for handler in (
+            self.event_handler.code_handler,
+            self.event_handler.doc_handler,
+            self.event_handler.json_handler,
+        ):
+            if handler is None:
+                continue
+            for timer in getattr(handler, "timers", {}).values():
+                timer.cancel()
+            getattr(handler, "timers", {}).clear()
+
         if self.observer:
             self.observer.stop()
 

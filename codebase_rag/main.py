@@ -738,6 +738,7 @@ async def _run_agent_response_loop(
         if isinstance(response.output, DeferredToolRequests):
             deferred_results = DeferredToolResults()
             non_duplicate_approvals: list[ToolCallPart] = []
+            injected_warning = False
 
             for call in response.output.approvals:
                 args = call.args_as_dict()
@@ -745,16 +746,44 @@ async def _run_agent_response_loop(
                 query_arg = _extract_tool_query_arg(tool_name, args)
 
                 if state.is_duplicate(tool_name, query_arg):
+                    dup_count = state.record_duplicate(tool_name, query_arg)
                     logger.warning(
-                        ls.TOOL_DUPLICATE_DETECTED.format(
+                        ls.TOOL_DUPLICATE_ESCALATED.format(
+                            tool_name=tool_name, query_arg=query_arg, count=dup_count
+                        )
+                        if dup_count > 1
+                        else ls.TOOL_DUPLICATE_DETECTED.format(
                             tool_name=tool_name, query_arg=query_arg
                         )
                     )
+                    if dup_count >= 2:
+                        denial_msg = te.TOOL_DUPLICATE_CALL_ESCALATED.format(
+                            tool_name=tool_name, query_arg=query_arg, count=dup_count
+                        )
+                    else:
+                        denial_msg = te.TOOL_DUPLICATE_CALL.format(
+                            tool_name=tool_name, query_arg=query_arg
+                        )
                     deferred_results.approvals[call.tool_call_id] = ToolDenied(
-                        te.TOOL_DUPLICATE_CALL.format(
-                            tool_name=tool_name, query_arg=query_arg
-                        )
+                        denial_msg
                     )
+                    if dup_count >= 3 and not injected_warning:
+                        from pydantic_ai.messages import (
+                            ModelRequest,
+                            SystemPromptPart,
+                        )
+
+                        message_history.append(
+                            ModelRequest(
+                                parts=[
+                                    SystemPromptPart(
+                                        te.TOOL_DUPLICATE_GLOBAL_WARNING
+                                    )
+                                ]
+                            )
+                        )
+                        injected_warning = True
+                        logger.warning(ls.TOOL_DUPLICATE_INJECTED_WARNING)
                 else:
                     state.record_tool(tool_name, query_arg)
                     non_duplicate_approvals.append(call)
@@ -2113,15 +2142,10 @@ def connect_both_graphs(
 
     try:
         yield (code_graph, doc_graph)
-    except Exception:
+    finally:
         # Exit both on error with proper exception info
         doc_graph.__exit__(*sys.exc_info())
         code_graph.__exit__(*sys.exc_info())
-        raise
-    else:
-        # Exit both on success
-        doc_graph.__exit__(None, None, None)
-        code_graph.__exit__(None, None, None)
 
 
 def _check_graph_freshness(

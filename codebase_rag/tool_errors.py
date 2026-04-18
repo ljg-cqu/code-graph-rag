@@ -60,8 +60,17 @@ CODE_MISSING_LOCATION = "Graph entry is missing location data."
 
 # (H) Duplicate tool call errors
 TOOL_DUPLICATE_CALL = (
-    "Duplicate tool call rejected: '{tool_name}' with identical arguments was already executed. "
-    "Do not repeat the same tool call. Use the previous results or try a different approach."
+    "STOP: Tool '{tool_name}' with these exact arguments was ALREADY executed. "
+    "Repeating it is pointless. Use the previous result or try a different approach."
+)
+TOOL_DUPLICATE_CALL_ESCALATED = (
+    "CRITICAL: You have repeatedly requested '{tool_name}' with identical arguments. "
+    "This call has been rejected {count} times. You MUST stop repeating it. "
+    "Proceed using information you already have, or try a completely different tool."
+)
+TOOL_DUPLICATE_GLOBAL_WARNING = (
+    "SYSTEM NOTICE: The agent has attempted the same tool call multiple times and been rejected. "
+    "Do not repeat previously executed tool calls. Use existing results or explore alternatives."
 )
 
 # (H) File writer errors

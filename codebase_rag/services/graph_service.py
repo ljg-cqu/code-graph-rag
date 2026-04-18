@@ -244,10 +244,14 @@ class MemgraphIngestor:
                     self.conn.close()
                 except Exception:
                     pass
+                self.conn = None
                 logger.info(ls.MG_DISCONNECTED)
+            shutdown_manager.unregister_handler(self._cleanup_on_shutdown)
 
     def _cleanup_on_shutdown(self) -> None:
         """Cleanup resources on shutdown."""
+        if not self.conn:
+            return
         try:
             self.flush_all()
         except Exception as e:
@@ -260,6 +264,7 @@ class MemgraphIngestor:
                 self.conn.close()
             except Exception:
                 pass
+            self.conn = None
             logger.info(ls.MG_DISCONNECTED)
 
     async def __aenter__(self) -> MemgraphIngestor:

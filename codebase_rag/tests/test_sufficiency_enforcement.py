@@ -176,6 +176,23 @@ class TestInvestigationTracker:
         assert state.is_duplicate(AgenticToolName.READ_FILE, "utils.py")
         assert not state.is_duplicate(AgenticToolName.READ_FILE, "config.py")
 
+    def test_tracker_tracks_duplicate_counts(self) -> None:
+        state = InvestigationState()
+        assert state.duplicate_count("shell_command", "mkdir -p .specs") == 0
+        assert state.record_duplicate("shell_command", "mkdir -p .specs") == 1
+        assert state.record_duplicate("shell_command", "mkdir -p .specs") == 2
+        assert state.duplicate_count("shell_command", "mkdir -p .specs") == 2
+        assert state.record_duplicate("shell_command", "ls -la") == 1
+
+    def test_tracker_recent_calls_limited(self) -> None:
+        state = InvestigationState()
+        for i in range(25):
+            state.record_tool("shell_command", f"cmd_{i}")
+        assert not state.is_duplicate("shell_command", "cmd_0")
+        assert not state.is_duplicate("shell_command", "cmd_4")
+        assert state.is_duplicate("shell_command", "cmd_5")
+        assert state.is_duplicate("shell_command", "cmd_24")
+
 
 class TestParallelWorkerSufficiency:
     def test_parallel_worker_sufficiency_pass(self) -> None:

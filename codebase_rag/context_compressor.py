@@ -5,6 +5,7 @@ import re
 import threading
 import time
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from re import Pattern
@@ -13,7 +14,6 @@ from typing import Any
 from loguru import logger
 
 from .config import settings
-from .parallel_workers import ParallelWorkerPool, get_shared_worker_pool
 from .utils.token_utils import count_tokens
 
 
@@ -126,18 +126,34 @@ class ContextCompressor:
             worker_count or settings.CONTEXT_COMPRESSION_PARALLEL_WORKERS
         )
         self.original_tokens = self._count_context_tokens(context)
-        self._worker_pool: ParallelWorkerPool | None = None
+        self._worker_pool: ThreadPoolExecutor | None = None
 
-    def _get_worker_pool(self) -> ParallelWorkerPool:
+    def _get_worker_pool(self) -> ThreadPoolExecutor:
+        """Get a ThreadPoolExecutor for CPU-bound compression tasks.
+
+        Note: We use ThreadPoolExecutor instead of ParallelWorkerPool because
+        compression strategies are CPU-bound Python operations that don't need
+        database connections. ParallelWorkerPool is designed for Memgraph I/O.
+        """
         if self._worker_pool is None:
-            if self.worker_count == settings.CONTEXT_COMPRESSION_PARALLEL_WORKERS:
-                self._worker_pool = get_shared_worker_pool()
-            else:
-                self._worker_pool = ParallelWorkerPool(num_workers=self.worker_count)
+            self._worker_pool = ThreadPoolExecutor(
+                max_workers=self.worker_count,
+                thread_name_prefix="compression-worker"
+            )
         return self._worker_pool
 
     def _count_context_tokens(self, context: list[dict[str, Any]]) -> int:
-        return count_tokens(json.dumps(context))
+        """Count tokens in message content, excluding JSON structural overhead."""
+        total = 0
+        for msg in context:
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                total += count_tokens(content)
+            else:
+                total += count_tokens(json.dumps(content))
+        # Add overhead per message (role tokens, formatting)
+        total += len(context) * 4  # Approximate overhead: "role", "content", punctuation
+        return total
 
     def _preserve_matching_content(
         self, context: list[dict[str, Any]]
@@ -162,9 +178,44 @@ class ContextCompressor:
         )
         return preserved, compressible
 
+    def _hard_truncate_to_budget(
+        self, context: list[dict[str, Any]], budget: int
+    ) -> list[dict[str, Any]]:
+        """Truncate context to fit within token budget, preserving system messages and recent context."""
+        system_msgs = [m for m in context if m.get("role") == "system"]
+        non_system = [m for m in context if m.get("role") != "system"]
+
+        # Keep system messages
+        result = list(system_msgs)
+        result_tokens = self._count_context_tokens(result)
+
+        # Add recent non-system messages from the end until budget exhausted
+        for msg in reversed(non_system):
+            msg_tokens = self._count_context_tokens([msg])
+            if result_tokens + msg_tokens <= budget:
+                result.insert(len(system_msgs), msg)  # Insert after system messages
+                result_tokens += msg_tokens
+            else:
+                break
+
+        return result
+
     def _calculate_semantic_retention(
         self, original: list[dict[str, Any]], compressed: list[dict[str, Any]]
     ) -> float:
+        # Entity-based score
+        entity_score = self._entity_retention_score(original, compressed)
+
+        # Keyword overlap score for user content
+        keyword_score = self._keyword_overlap_score(original, compressed)
+
+        # Weighted combination
+        return 0.6 * entity_score + 0.4 * keyword_score
+
+    def _entity_retention_score(
+        self, original: list[dict[str, Any]], compressed: list[dict[str, Any]]
+    ) -> float:
+        """Extract and compare code entities (functions, classes, etc.)."""
         def extract_critical_entities(messages: list[dict[str, Any]]) -> set[str]:
             entities = set()
             for msg in messages:
@@ -202,6 +253,33 @@ class ContextCompressor:
             original_entities
         )
         return max(0.0, min(1.0, retention))
+
+    def _keyword_overlap_score(
+        self, original: list[dict[str, Any]], compressed: list[dict[str, Any]]
+    ) -> float:
+        """Calculate keyword overlap between original and compressed content."""
+        def extract_keywords(messages: list[dict[str, Any]]) -> set[str]:
+            keywords = set()
+            for msg in messages:
+                content = (
+                    msg["content"].lower()
+                    if isinstance(msg["content"], str)
+                    else json.dumps(msg["content"]).lower()
+                )
+                # Extract words with length > 3, excluding common stopwords
+                stopwords = {"the", "and", "for", "are", "but", "not", "you", "all", "can", "had", "her", "was", "one", "our", "out", "day", "get", "has", "him", "his", "how", "its", "may", "new", "now", "old", "see", "two", "who", "boy", "did", "she", "use", "her", "way", "many", "oil", "sit", "set", "run", "eat", "far", "sea", "eye", "ago", "off", "too", "any", "say", "man", "try", "ask", "end", "why", "let", "put", "say", "she", "try", "way", "own", "say", "too", "old", "tell", "very", "when", "much", "would", "there", "their", "what", "said", "each", "which", "will", "about", "could", "other", "after", "first", "never", "these", "think", "where", "being", "every", "great", "might", "shall", "still", "those", "while", "this", "that", "with", "have", "from", "they", "know", "want", "been", "good", "over", "think", "also", "back", "after", "use", "two", "how", "our", "work", "first", "well", "way", "even", "new", "want", "because", "any", "these", "give", "day", "most", "us"}
+                words = re.findall(r"\b[a-z]{4,}\b", content)
+                keywords.update(w for w in words if w not in stopwords)
+            return keywords
+
+        original_keywords = extract_keywords(original)
+        compressed_keywords = extract_keywords(compressed)
+
+        if not original_keywords:
+            return 1.0
+
+        overlap = len(original_keywords.intersection(compressed_keywords))
+        return max(0.0, min(1.0, overlap / len(original_keywords)))
 
     def _hierarchical_summarization(
         self, context: list[dict[str, Any]]
@@ -402,7 +480,7 @@ class ContextCompressor:
                 unique_final.append(msg)
         return unique_final
 
-    def _evaluate_strategy(self, worker: object, params: dict[str, Any]) -> StrategyEvaluationResult:
+    def _evaluate_strategy(self, params: dict[str, Any]) -> StrategyEvaluationResult:
         strategy_id = params["strategy_id"]
         strategy_func = params["strategy_func"]
         context = params["context"]
@@ -478,7 +556,8 @@ class ContextCompressor:
             self.context
         )
 
-        if len(compressible_content) < 3:
+        # Always compress if we're over budget, even with few messages
+        if self.original_tokens <= self.max_context and len(compressible_content) < 3:
             return CompressionResult(
                 original_context=self.context,
                 compressed_context=self.context,
@@ -491,45 +570,57 @@ class ContextCompressor:
             )
 
         pool = self._get_worker_pool()
-        task_funcs = [getattr(self, func_name) for (_, func_name, _) in self.STRATEGIES]
-        tasks = [
-            (
-                f"strategy_{strategy_id}",
-                self._evaluate_strategy,
+        try:
+            task_funcs = [getattr(self, func_name) for (_, func_name, _) in self.STRATEGIES]
+            tasks = [
                 {
                     "strategy_id": strategy_id,
                     "strategy_func": func,
                     "context": compressible_content,
-                },
-            )
-            for (strategy_id, _, _), func in zip(self.STRATEGIES, task_funcs)
-        ]
+                }
+                for (strategy_id, _, _), func in zip(self.STRATEGIES, task_funcs)
+            ]
 
-        results = pool.submit_batch(tasks)
-        valid_results = [
-            res.result
-            for res in results
-            if res.success and isinstance(res.result, StrategyEvaluationResult)
-        ]
+            # Submit all strategy evaluations to the thread pool
+            futures = [pool.submit(self._evaluate_strategy, task) for task in tasks]
+            results = [f.result() for f in futures]
 
-        if not valid_results:
-            logger.warning(
-                "No valid compression strategy results, falling back to default hybrid strategy"
-            )
-            best_result = self._evaluate_strategy(
-                None,
-                {
-                    "strategy_id": "S5",
-                    "strategy_func": self._hybrid_summarization_pruning,
-                    "context": compressible_content,
-                },
-            )
-        else:
-            valid_results.sort(reverse=True, key=lambda x: x.total_score)
-            best_result = valid_results[0]
+            valid_results = [
+                res for res in results if isinstance(res, StrategyEvaluationResult)
+            ]
+
+            if not valid_results:
+                logger.warning(
+                    "No valid compression strategy results, falling back to default hybrid strategy"
+                )
+                best_result = self._evaluate_strategy(
+                    {
+                        "strategy_id": "S5",
+                        "strategy_func": self._hybrid_summarization_pruning,
+                        "context": compressible_content,
+                    },
+                )
+            else:
+                valid_results.sort(reverse=True, key=lambda x: x.total_score)
+                best_result = valid_results[0]
+        finally:
+            # Shutdown the thread pool to free resources
+            pool.shutdown(wait=True)
 
         final_compressed = preserved_content + best_result.compressed_context
         final_tokens = self._count_context_tokens(final_compressed)
+
+        # Ensure compressed result fits within max_context budget
+        if final_tokens > self.max_context:
+            logger.warning(
+                f"Best strategy exceeded max_context ({final_tokens} > {self.max_context}), "
+                "applying hard truncation"
+            )
+            final_compressed = self._hard_truncate_to_budget(
+                preserved_content + best_result.compressed_context, self.max_context
+            )
+            final_tokens = self._count_context_tokens(final_compressed)
+
         reduction_pct = (
             (self.original_tokens - final_tokens) / self.original_tokens
             if self.original_tokens > 0
