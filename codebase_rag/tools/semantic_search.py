@@ -83,27 +83,29 @@ def _semantic_search_keyword_fallback(query: str, top_k: int) -> list[SemanticSe
     """
     from ..config import settings
     from ..services.graph_service import MemgraphIngestor
-    from ..utils.query_utils import extract_best_keyword
+    from ..utils.query_utils import extract_keywords
 
     try:
         with MemgraphIngestor(
             host=settings.MEMGRAPH_HOST,
             port=settings.MEMGRAPH_PORT,
         ) as ingestor:
-            keyword = extract_best_keyword(query)
-            if not keyword:
+            keywords = extract_keywords(query, max_keywords=3)
+            if not keywords:
                 return []
 
             cypher = """
-            MATCH (n:Function|Class|Method)
-            WHERE n.name CONTAINS $keyword
-               OR n.qualified_name CONTAINS $keyword
-               OR n.docstring CONTAINS $keyword
+            MATCH (n)
+            WHERE labels(n)[0] IN ['Function', 'Class', 'Method']
+              AND ANY(kw IN $keywords WHERE
+                  n.name CONTAINS kw
+                  OR n.qualified_name CONTAINS kw
+                  OR n.docstring CONTAINS kw)
             RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
                    n.name AS name, labels(n)[0] AS node_type
             LIMIT $limit
             """
-            results = ingestor.fetch_all(cypher, {"keyword": keyword, "limit": top_k})
+            results = ingestor.fetch_all(cypher, {"keywords": keywords, "limit": top_k})
 
             return [
                 SemanticSearchResult(

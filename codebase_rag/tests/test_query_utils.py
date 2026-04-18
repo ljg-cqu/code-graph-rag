@@ -1,6 +1,6 @@
 """Unit tests for query utility functions."""
 
-from codebase_rag.utils.query_utils import extract_best_keyword
+from codebase_rag.utils.query_utils import extract_best_keyword, extract_keywords
 
 
 def test_extract_best_keyword():
@@ -42,3 +42,40 @@ def test_extract_best_keyword():
     # Mixed stopwords and meaningful
     assert extract_best_keyword("the quick brown fox") == "quick"  # "quick" length 5 > "brown" 5? Actually both 5, first max is "quick"
     # Actually "quick" and "brown" same length, max picks first max (quick). That's fine.
+
+
+def test_extract_keywords_basic():
+    """Test multi-keyword extraction returns ranked keywords."""
+    result = extract_keywords("How does authentication work in the login module?")
+    assert len(result) <= 3
+    assert "authentication" in result
+    assert "login" in result
+    assert "module" in result
+
+
+def test_extract_keywords_empty():
+    """Test empty query returns empty list."""
+    assert extract_keywords("") == []
+    assert extract_keywords("   ") == []
+
+
+def test_extract_keywords_stopwords_only():
+    """Test query with only stopwords falls back to longer words."""
+    result = extract_keywords("the is at")
+    assert len(result) > 0
+    assert all(len(w) > 1 for w in result)
+
+
+def test_extract_keywords_ranking():
+    """Test keywords are ranked by length and position."""
+    result = extract_keywords("Find functions that handle database connection errors")
+    # "database" and "connection" are longest; earlier position gives slight boost
+    assert "database" in result
+    assert "connection" in result
+    assert "functions" in result or "handle" in result or "errors" in result
+
+
+def test_extract_keywords_max_limit():
+    """Test max_keywords parameter is respected."""
+    result = extract_keywords("a b c d e f g", max_keywords=3)
+    assert len(result) == 3

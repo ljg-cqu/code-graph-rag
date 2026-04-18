@@ -584,21 +584,23 @@ class QueryRouter:
         if not sources and self.code_graph:
             keyword_query = """
             MATCH (n)
-            WHERE (n:Function OR n:Class OR n:Method OR n:Enum OR n:Type OR n:Union OR n:Interface OR n:Contract OR n:Library)
-              AND (n.name CONTAINS $keyword OR n.qualified_name CONTAINS $keyword)
+            WHERE labels(n)[0] IN ['Function', 'Class', 'Method', 'Enum', 'Type',
+                                    'Union', 'Interface', 'Contract', 'Library']
+              AND ANY(kw IN $keywords WHERE
+                  n.name CONTAINS kw OR n.qualified_name CONTAINS kw)
             RETURN n.name as name, n.qualified_name as qualified_name,
                    n.path as file_path, n.start_line as start_line,
                    n.end_line as end_line, labels(n) as labels
             LIMIT $limit
             """
-            from ..utils.query_utils import extract_best_keyword
+            from ..utils.query_utils import extract_keywords
 
-            keyword = extract_best_keyword(request.question)
+            keywords = extract_keywords(request.question, max_keywords=3)
             try:
                 keyword_results = self.code_graph.fetch_all(
                     keyword_query,
                     {
-                        "keyword": keyword,
+                        "keywords": keywords,
                         "limit": request.top_k,
                     },
                 )

@@ -1,8 +1,12 @@
 """Dynamic graph algorithms for real-time updates."""
 
+from collections.abc import Generator
+from contextlib import contextmanager
+
 from loguru import logger
 
 from ..config import settings
+from ..services import QueryProtocol
 from ..services.graph_service import MemgraphIngestor
 
 
@@ -20,14 +24,21 @@ class DynamicGraphAlgorithms:
             "procedure" in message and "not found" in message
         )
 
-    def __init__(self, use_dynamic: bool | None = None):
+    def __init__(
+        self,
+        use_dynamic: bool | None = None,
+        ingestor: QueryProtocol | None = None,
+    ):
         """
         Initialize dynamic algorithms wrapper.
 
         Args:
             use_dynamic: Explicitly enable/disable dynamic algorithms.
                         If None, auto-detect based on Memgraph edition and config.
+            ingestor: Optional injected Memgraph connection for reuse.
         """
+        self._ingestor = ingestor
+
         if use_dynamic is not None:
             self.use_dynamic = use_dynamic
             return
@@ -38,6 +49,17 @@ class DynamicGraphAlgorithms:
             return
 
         # Auto-detect if not explicitly enabled/disabled
+        if self._ingestor is not None and hasattr(
+            self._ingestor, "dynamic_algorithms_enabled"
+        ):
+            try:
+                self.use_dynamic = self._ingestor.dynamic_algorithms_enabled
+                return
+            except Exception as e:
+                logger.debug(
+                    f"Could not auto-detect Memgraph edition from injected ingestor: {e}"
+                )
+
         try:
             # Create a temporary connection to detect edition
             with MemgraphIngestor(
@@ -52,6 +74,19 @@ class DynamicGraphAlgorithms:
                 f"Could not auto-detect Memgraph edition, falling back to full algorithm runs: {e}"
             )
             self.use_dynamic = False
+
+    @contextmanager
+    def _with_ingestor(self) -> Generator[QueryProtocol, None, None]:
+        if self._ingestor is not None:
+            yield self._ingestor
+        else:
+            with MemgraphIngestor(
+                host=settings.MEMGRAPH_HOST,
+                port=settings.MEMGRAPH_PORT,
+                username=settings.MEMGRAPH_USERNAME,
+                password=settings.MEMGRAPH_PASSWORD,
+            ) as ingestor:
+                yield ingestor
 
     def update_pagerank_dynamic(
         self,
@@ -90,12 +125,7 @@ class DynamicGraphAlgorithms:
                 ],
             }
 
-            with MemgraphIngestor(
-                host=settings.MEMGRAPH_HOST,
-                port=settings.MEMGRAPH_PORT,
-                username=settings.MEMGRAPH_USERNAME,
-                password=settings.MEMGRAPH_PASSWORD,
-            ) as ingestor:
+            with self._with_ingestor() as ingestor:
                 results = ingestor.fetch_all(cypher, params)
                 return {
                     "updated_nodes": results[0]["updated"] if results else 0,
@@ -118,12 +148,7 @@ class DynamicGraphAlgorithms:
         RETURN count(node) AS updated
         """
 
-        with MemgraphIngestor(
-            host=settings.MEMGRAPH_HOST,
-            port=settings.MEMGRAPH_PORT,
-            username=settings.MEMGRAPH_USERNAME,
-            password=settings.MEMGRAPH_PASSWORD,
-        ) as ingestor:
+        with self._with_ingestor() as ingestor:
             results = ingestor.fetch_all(cypher)
             return {
                 "updated_nodes": results[0]["updated"] if results else 0,
@@ -155,12 +180,7 @@ class DynamicGraphAlgorithms:
 
             params = {"changed_nodes": changed_nodes or []}
 
-            with MemgraphIngestor(
-                host=settings.MEMGRAPH_HOST,
-                port=settings.MEMGRAPH_PORT,
-                username=settings.MEMGRAPH_USERNAME,
-                password=settings.MEMGRAPH_PASSWORD,
-            ) as ingestor:
+            with self._with_ingestor() as ingestor:
                 results = ingestor.fetch_all(cypher, params)
                 return {
                     "updated_communities": len(results),
@@ -187,12 +207,7 @@ class DynamicGraphAlgorithms:
         ORDER BY size DESC
         """
 
-        with MemgraphIngestor(
-            host=settings.MEMGRAPH_HOST,
-            port=settings.MEMGRAPH_PORT,
-            username=settings.MEMGRAPH_USERNAME,
-            password=settings.MEMGRAPH_PASSWORD,
-        ) as ingestor:
+        with self._with_ingestor() as ingestor:
             try:
                 results = ingestor.fetch_all(cypher)
                 return {

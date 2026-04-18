@@ -681,18 +681,26 @@ class QueryMethodOrchestrator:
 
         Uses _fetch_all_async() for async-native database access.
         """
-        from ..utils.query_utils import extract_best_keyword
+        from ..utils.query_utils import extract_keywords
 
-        keyword = extract_best_keyword(query)
+        keywords = extract_keywords(query, max_keywords=3)
+        if not keywords:
+            return QueryMethodResult(
+                method=QueryMethod.KEYWORD_SEARCH,
+                items=[],
+                execution_time_ms=(time.time() - start) * 1000,
+            )
+
         # Use WHERE IN clause instead of | union syntax for label filtering.
         # This works correctly even when some labels don't exist in the graph.
         cypher = """
         MATCH (n)
         WHERE labels(n)[0] IN ['Function', 'Class', 'Method', 'Enum', 'Type',
                                 'Union', 'Interface', 'Contract', 'Library']
-          AND (n.name CONTAINS $keyword
-               OR n.qualified_name CONTAINS $keyword
-               OR n.docstring CONTAINS $keyword)
+          AND ANY(kw IN $keywords WHERE
+              n.name CONTAINS kw
+              OR n.qualified_name CONTAINS kw
+              OR n.docstring CONTAINS kw)
         RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
                n.name AS name, labels(n)[0] AS type,
                n.path AS file_path, n.start_line AS start_line,
@@ -700,7 +708,7 @@ class QueryMethodOrchestrator:
         LIMIT $limit
         """
         results = await self._fetch_all_async(
-            cypher, {"keyword": keyword, "limit": top_k}
+            cypher, {"keywords": keywords, "limit": top_k}
         )
         return QueryMethodResult(
             method=QueryMethod.KEYWORD_SEARCH,
@@ -785,10 +793,10 @@ class QueryMethodOrchestrator:
         Uses _fetch_all_async() for async-native database access.
         """
         from ..cypher_queries import CYPHER_FIND_CALLERS, CYPHER_FIND_IMPORTERS
-        from ..utils.query_utils import extract_best_keyword
+        from ..utils.query_utils import extract_keywords
 
-        keyword = extract_best_keyword(query)
-        if not keyword:
+        keywords = extract_keywords(query, max_keywords=3)
+        if not keywords:
             return QueryMethodResult(
                 method=QueryMethod.GRAPH_NAVIGATION,
                 items=[],
@@ -796,12 +804,12 @@ class QueryMethodOrchestrator:
                 error="No keyword extracted from query",
             )
 
-        # First, find nodes matching the keyword
+        # First, find nodes matching any keyword
         # Use WHERE IN clause instead of | union syntax for label filtering
         find_nodes_cypher = """
         MATCH (n)
         WHERE labels(n)[0] IN ['Function', 'Class', 'Method']
-          AND (n.name CONTAINS $keyword OR n.qualified_name CONTAINS $keyword)
+          AND ANY(kw IN $keywords WHERE n.name CONTAINS kw OR n.qualified_name CONTAINS kw)
         RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
                n.name AS name, labels(n)[0] AS type,
                n.path AS file_path
@@ -809,7 +817,7 @@ class QueryMethodOrchestrator:
         """
         try:
             nodes = await self._fetch_all_async(
-                find_nodes_cypher, {"keyword": keyword, "limit": min(top_k, 3)}
+                find_nodes_cypher, {"keywords": keywords, "limit": top_k}
             )
             if not nodes:
                 return QueryMethodResult(
@@ -819,13 +827,15 @@ class QueryMethodOrchestrator:
                 )
 
             items = []
+            per_node_limit = max(3, top_k // len(nodes))
+
             for node in nodes:
                 qn = node.get("qualified_name")
                 # Find callers
                 callers = await self._fetch_all_async(
                     CYPHER_FIND_CALLERS, {"qn": qn}
                 )
-                for caller in callers[:2]:  # Limit per node
+                for caller in callers[:per_node_limit]:
                     items.append(
                         {
                             "node_id": caller.get("node_id", node.get("node_id")),
@@ -841,7 +851,7 @@ class QueryMethodOrchestrator:
                 importers = await self._fetch_all_async(
                     CYPHER_FIND_IMPORTERS, {"qn": qn}
                 )
-                for importer in importers[:2]:
+                for importer in importers[:per_node_limit]:
                     items.append(
                         {
                             "node_id": importer.get("node_id", node.get("node_id")),
@@ -853,7 +863,7 @@ class QueryMethodOrchestrator:
                         }
                     )
 
-                if len(items) >= top_k:
+                if len(items) >= top_k * 2:
                     break
 
             return QueryMethodResult(
@@ -878,29 +888,29 @@ class QueryMethodOrchestrator:
         for async-native execution in MCP server / pydantic-ai contexts.
         """
         from ..graph_algorithms import GraphAlgorithms
-        from ..utils.query_utils import extract_best_keyword
+        from ..utils.query_utils import extract_keywords
 
         try:
-            keyword = extract_best_keyword(query)
-            if not keyword:
+            keywords = extract_keywords(query, max_keywords=3)
+            if not keywords:
                 return QueryMethodResult(
                     method=QueryMethod.GRAPH_ALGORITHMS,
                     items=[],
                     execution_time_ms=(time.time() - start) * 1000,
                 )
 
-            # Find node(s) matching the keyword
+            # Find node(s) matching any keyword
             # Use WHERE IN clause instead of | union syntax for label filtering
             find_cypher = """
             MATCH (n)
             WHERE labels(n)[0] IN ['Function', 'Class', 'Method']
-              AND (n.name CONTAINS $keyword OR n.qualified_name CONTAINS $keyword)
+              AND ANY(kw IN $keywords WHERE n.name CONTAINS kw OR n.qualified_name CONTAINS kw)
             RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
                    n.name AS name, labels(n)[0] AS type,
                    n.path AS file_path
             LIMIT 1
             """
-            nodes = await self._fetch_all_async(find_cypher, {"keyword": keyword})
+            nodes = await self._fetch_all_async(find_cypher, {"keywords": keywords})
             if not nodes:
                 return QueryMethodResult(
                     method=QueryMethod.GRAPH_ALGORITHMS,

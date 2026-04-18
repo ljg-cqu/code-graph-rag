@@ -189,29 +189,6 @@ class MemgraphIngestor:
                 pass
             return False
 
-        try:
-            # Try to use a dynamic algorithm function to check support
-            # This will fail on Community edition with "Function not found" error
-            self._execute_query(
-                """
-                RETURN dynamic_graph_update_is_supported() AS supported
-                LIMIT 1
-                """
-            )
-            return True
-        except Exception:
-            # Fallback: check version string for enterprise
-            try:
-                results = self._execute_query("SHOW VERSION AS version")
-                if (
-                    results
-                    and "enterprise" in str(results[0].get("version", "")).lower()
-                ):
-                    return True
-            except Exception:
-                pass
-            return False
-
     def __enter__(self) -> MemgraphIngestor:
         logger.info(ls.MG_CONNECTING.format(host=self._host, port=self._port))
         self.conn = self._create_connection_with_timeout()  # <-- CHANGED

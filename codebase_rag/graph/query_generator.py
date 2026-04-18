@@ -201,14 +201,18 @@ class MemgraphQueryGenerator:
             capabilities.supports_vector_search
             and not capabilities.supports_vector_search_procedure
         ):
-            try:
-                test_query = f"""
-                    RETURN {capabilities.vector_function_syntax.replace("cosine_similarity", "l2_distance")}([1.0, 2.0], [3.0, 4.0]) AS dist
-                """
-                self._run_query(test_query)
-                capabilities.supports_l2_distance = True
-            except Exception:
-                capabilities.supports_l2_distance = False
+            l2_function_map = {
+                "cosine_similarity": "l2_distance",
+                "vector.cosine_similarity": "vector.l2_distance",
+            }
+            l2_func = l2_function_map.get(capabilities.vector_function_syntax)
+            if l2_func:
+                try:
+                    test_query = f"RETURN {l2_func}([1.0, 2.0], [3.0, 4.0]) AS dist"
+                    self._run_query(test_query)
+                    capabilities.supports_l2_distance = True
+                except Exception:
+                    capabilities.supports_l2_distance = False
 
         # Check IF NOT EXISTS support for index creation
         if capabilities.supports_vector_index:
@@ -393,20 +397,19 @@ class QueryGenerator:
         self._detect_memgraph_capabilities()
 
     def _detect_memgraph_capabilities(self) -> None:
-        import mgclient as _mgclient
-
         from .. import constants as cs
         from ..config import settings
+        from ..services.connection_pool import get_connection_pool
 
-        conn = None
-        cursor = None
+        pool = get_connection_pool(
+            host=settings.MEMGRAPH_HOST,
+            port=settings.MEMGRAPH_PORT,
+            username=settings.MEMGRAPH_USERNAME,
+            password=settings.MEMGRAPH_PASSWORD,
+        )
+        conn = pool.get_connection()
         try:
-            conn = _mgclient.connect(
-                host=settings.MEMGRAPH_HOST,
-                port=settings.MEMGRAPH_PORT,
-            )
             cursor = conn.cursor()
-
             cursor.execute(cs.QUERY_GEN_SHOW_VERSION)
             row = cursor.fetchone()
             if row:
@@ -419,20 +422,12 @@ class QueryGenerator:
                 self._has_enterprise_license = (
                     cs.QUERY_GEN_ENTERPRISE_KEYWORD in str(row[0]).lower()
                 )
+            cursor.close()
         except Exception:
             self._memgraph_version = cs.QUERY_GEN_FALLBACK_VERSION
             self._has_enterprise_license = False
         finally:
-            if cursor is not None:
-                try:
-                    cursor.close()
-                except Exception:
-                    pass
-            if conn is not None:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
+            pool.return_connection(conn)
 
     def get_disconnected_nodes_query(self) -> str:
         """Return a Cypher query for disconnected production nodes compatible with detected Memgraph capabilities."""

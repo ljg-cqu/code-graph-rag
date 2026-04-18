@@ -18,8 +18,9 @@ DETACH DELETE p, container, defined, json_root, json_content
 # EXAMPLE QUERIES FOR DEMONSTRATION
 # ─────────────────────────────────────────────────────────
 
-CYPHER_EXAMPLE_DECORATED_FUNCTIONS = f"""MATCH (n:Function|Method)
-WHERE ANY(d IN n.decorators WHERE toLower(d) IN ['flow', 'task'])
+CYPHER_EXAMPLE_DECORATED_FUNCTIONS = f"""MATCH (n)
+WHERE labels(n)[0] IN ['Function', 'Method']
+  AND ANY(d IN n.decorators WHERE toLower(d) IN ['flow', 'task'])
 RETURN n.name AS name, n.qualified_name AS qualified_name, labels(n) AS type
 LIMIT {CYPHER_DEFAULT_LIMIT}"""
 
@@ -46,8 +47,9 @@ WHERE f.extension = '.py'
 RETURN f.path AS path, f.name AS name, labels(f) AS type
 LIMIT {CYPHER_DEFAULT_LIMIT}"""
 
-CYPHER_EXAMPLE_TASKS = f"""MATCH (n:Function|Method)
-WHERE 'task' IN n.decorators
+CYPHER_EXAMPLE_TASKS = f"""MATCH (n)
+WHERE labels(n)[0] IN ['Function', 'Method']
+  AND 'task' IN n.decorators
 RETURN n.qualified_name AS qualified_name, n.name AS name, labels(n) AS type
 LIMIT {CYPHER_DEFAULT_LIMIT}"""
 
@@ -92,8 +94,9 @@ LIMIT 1
 
 # (H) Graph navigation queries
 CYPHER_FIND_CALLERS = """
-MATCH (caller:Function|Method)-[:CALLS]->(target)
+MATCH (caller)-[:CALLS]->(target)
 WHERE target.qualified_name = $qn
+  AND labels(caller)[0] IN ['Function', 'Method', 'Class']
 OPTIONAL MATCH (m:Module)-[:DEFINES]->(caller)
 RETURN caller.qualified_name AS qualified_name, caller.name AS name,
        labels(caller) AS type, m.path AS path, caller.start_line AS start_line
@@ -160,8 +163,10 @@ CYPHER_QUERY_TEMPLATES: dict[str, tuple[str, dict[str, type]]] = {
     ),
     "find_dependencies": (
         """
-        MATCH (n:Function|Class|Method)-[:CALLS]->(m)
-        WHERE n.qualified_name CONTAINS $keyword
+        MATCH (n)-[:CALLS]->(m)
+        WHERE labels(n)[0] IN ['Function', 'Class', 'Method', 'Enum', 'Type',
+                                'Union', 'Interface', 'Contract', 'Library']
+          AND n.qualified_name CONTAINS $keyword
         RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
                n.name AS name, labels(n)[0] AS type, n.path AS file_path,
                id(m) AS target_id, m.qualified_name AS target_name

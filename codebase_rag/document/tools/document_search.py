@@ -138,10 +138,15 @@ def _search_memgraph_native(
     - Document-[:CONTAINS_CHUNK]->Chunk
     - Chunk-[:BELONGS_TO_SECTION]->Section (optional)
     """
+    from ...config import settings
+
+    index_name = settings.DOC_MEMGRAPH_VECTOR_INDEX_NAME
+    overfetch = limit * 3
+
     query = """
     CALL vector_search.search(
-        'doc_embeddings',
-        $limit,
+        $index_name,
+        $overfetch,
         $embedding
     ) YIELD node, distance, similarity
     WITH node, distance, similarity
@@ -160,15 +165,18 @@ def _search_memgraph_native(
         d.path as document_path,
         similarity
     ORDER BY similarity DESC
+    LIMIT $limit
     """
 
     return ingestor.fetch_all(
         query,
         params={
+            "index_name": index_name,
             "embedding": embedding,
             "workspace": workspace,
-            "limit": limit,
+            "overfetch": overfetch,
             "min_similarity": min_similarity,
+            "limit": limit,
         },
     )
 

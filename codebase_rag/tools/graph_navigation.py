@@ -121,8 +121,9 @@ class GraphNavigator:
                 # (e.g., [:CALLS*1..$depth] causes "Property map matching" error).
                 # Use string interpolation with validated integer to prevent injection.
                 callers_query = f"""
-                MATCH path = (caller:Function|Method)-[:CALLS*1..{depth}]->(target)
+                MATCH path = (caller)-[:CALLS*1..{depth}]->(target)
                 WHERE target.qualified_name = $qn
+                  AND labels(caller)[0] IN ['Function', 'Method', 'Class']
                 RETURN DISTINCT
                     caller.qualified_name AS qualified_name,
                     caller.name AS name,
@@ -160,8 +161,9 @@ class GraphNavigator:
                 # (e.g., [:CALLS*1..$depth] causes "Property map matching" error).
                 # Use string interpolation with validated integer to prevent injection.
                 callees_query = f"""
-                MATCH path = (target)-[:CALLS*1..{depth}]->(callee:Function|Method)
+                MATCH path = (target)-[:CALLS*1..{depth}]->(callee)
                 WHERE target.qualified_name = $qn
+                  AND labels(callee)[0] IN ['Function', 'Method', 'Class']
                 RETURN DISTINCT
                     callee.qualified_name AS qualified_name,
                     callee.name AS name,

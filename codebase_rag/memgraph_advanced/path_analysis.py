@@ -1,9 +1,12 @@
 """Advanced path analysis for code relationships."""
 
+from collections.abc import Generator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
 
 from ..config import settings
+from ..services import QueryProtocol
 from ..services.graph_service import MemgraphIngestor
 
 # Safety caps to prevent exponential path explosion
@@ -32,6 +35,22 @@ class PathAnalysis:
 
 class PathAnalyzer:
     """Analyze paths between code entities."""
+
+    def __init__(self, ingestor: QueryProtocol | None = None) -> None:
+        self._ingestor = ingestor
+
+    @contextmanager
+    def _with_ingestor(self) -> Generator[QueryProtocol, None, None]:
+        if self._ingestor is not None:
+            yield self._ingestor
+        else:
+            with MemgraphIngestor(
+                host=settings.MEMGRAPH_HOST,
+                port=settings.MEMGRAPH_PORT,
+                username=settings.MEMGRAPH_USERNAME,
+                password=settings.MEMGRAPH_PASSWORD,
+            ) as ingestor:
+                yield ingestor
 
     def analyze_call_chain(
         self, start_qn: str, end_qn: str, max_paths: int = 3, max_path_length: int = 10
@@ -87,12 +106,7 @@ class PathAnalyzer:
             "max_length": safe_max_length,
         }
 
-        with MemgraphIngestor(
-            host=settings.MEMGRAPH_HOST,
-            port=settings.MEMGRAPH_PORT,
-            username=settings.MEMGRAPH_USERNAME,
-            password=settings.MEMGRAPH_PASSWORD,
-        ) as ingestor:
+        with self._with_ingestor() as ingestor:
             results = ingestor.fetch_all(cypher, params)
             record = results[0] if results else None
 
@@ -163,12 +177,7 @@ class PathAnalyzer:
 
         params = {"threshold": threshold, "function_qn": function_qn}
 
-        with MemgraphIngestor(
-            host=settings.MEMGRAPH_HOST,
-            port=settings.MEMGRAPH_PORT,
-            username=settings.MEMGRAPH_USERNAME,
-            password=settings.MEMGRAPH_PASSWORD,
-        ) as ingestor:
+        with self._with_ingestor() as ingestor:
             records = ingestor.fetch_all(base_cypher, params)
 
         return records
@@ -207,10 +216,5 @@ class PathAnalyzer:
             "limit": limit,
         }
 
-        with MemgraphIngestor(
-            host=settings.MEMGRAPH_HOST,
-            port=settings.MEMGRAPH_PORT,
-            username=settings.MEMGRAPH_USERNAME,
-            password=settings.MEMGRAPH_PASSWORD,
-        ) as ingestor:
+        with self._with_ingestor() as ingestor:
             return ingestor.fetch_all(cypher, params)

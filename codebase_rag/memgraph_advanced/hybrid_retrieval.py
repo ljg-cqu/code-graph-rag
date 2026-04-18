@@ -117,6 +117,7 @@ class HybridSearchResult:
     community_score: float
     graph_score: float
     combined_score: float
+    context: list[dict] | None = None
 
 
 class HybridRetriever:
@@ -177,19 +178,128 @@ class HybridRetriever:
             self._is_healthy = False
             return False
 
-    def search(self, query: str, top_k: int = 10) -> list[HybridSearchResult]:
-        # Check health if not yet validated
-        if self._is_healthy is None or not self._is_healthy:
-            if not self._validate():
-                logger.warning("Skipping search due to unhealthy dependencies")
-                return []
+    def _search_atomic(
+        self,
+        query: str,
+        query_embedding: list[float],
+        query_keywords: list[str],
+        top_k: int,
+        cfg: "HybridRetrievalConfig",
+    ) -> list[HybridSearchResult] | None:
+        """Atomic query: vector search + metadata + text match + scoring in one Cypher."""
+        atomic_cypher = """
+        CALL vector_search.search($index_name, $overfetch, $embedding)
+        YIELD node AS seed, similarity AS vec_sim
+        WHERE vec_sim >= $min_similarity
 
-        from ..config import HybridRetrievalConfig
+        OPTIONAL MATCH path = (seed)-[:CALLS|:DEFINES|:IMPORTS *BFS 1 TO $max_depth]-(context_node)
+        WHERE context_node:Function OR context_node:Class OR context_node:Method OR context_node:Module
 
-        cfg = self.config or HybridRetrievalConfig()
-        query_embedding = self.embedding_provider.embed(query)
+        WITH seed, vec_sim, context_node,
+             CASE WHEN context_node IS NOT NULL THEN length(path) END AS path_depth
 
-        # Fetch more results than needed for filtering
+        WITH seed, vec_sim,
+             collect(DISTINCT CASE WHEN context_node IS NOT NULL THEN {
+                 qn: context_node.qualified_name,
+                 name: context_node.name,
+                 type: labels(context_node)[0],
+                 depth: path_depth
+             } END) AS context,
+             COALESCE(seed.pagerank_score, 0.1) AS pr_score,
+             COALESCE(seed.community_importance, 0.0) AS ci_score,
+             CASE WHEN ANY(kw IN $keywords WHERE
+                 toLower(seed.name) CONTAINS kw
+                 OR toLower(seed.qualified_name) CONTAINS kw
+                 OR toLower(COALESCE(seed.docstring, '')) CONTAINS kw
+             ) THEN 1.0 ELSE 0.0 END AS text_match
+
+        WITH seed, vec_sim, context, pr_score, ci_score, text_match,
+             (vec_sim * $vector_weight + pr_score * $pagerank_weight
+              + ci_score * $community_weight + text_match * $text_weight) AS combined
+
+        ORDER BY combined DESC
+        LIMIT $top_k
+
+        RETURN id(seed) AS node_id,
+               seed.name AS name,
+               seed.qualified_name AS qualified_name,
+               labels(seed)[0] AS node_type,
+               seed.path AS file_path,
+               seed.start_line AS start_line,
+               seed.end_line AS end_line,
+               vec_sim AS vector_score,
+               text_match AS text_score,
+               pr_score AS pagerank_score,
+               ci_score AS community_score,
+               combined AS combined_score,
+               [c IN context WHERE c IS NOT NULL] AS context
+        """
+
+        params = {
+            "index_name": settings.MEMGRAPH_VECTOR_INDEX_NAME,
+            "embedding": query_embedding,
+            "overfetch": top_k * 3,
+            "min_similarity": cfg.min_similarity_threshold,
+            "max_depth": cfg.max_context_depth,
+            "keywords": [kw.lower() for kw in query_keywords],
+            "top_k": top_k,
+            "vector_weight": cfg.vector_weight,
+            "pagerank_weight": cfg.pagerank_weight,
+            "community_weight": cfg.community_weight,
+            "text_weight": cfg.text_weight,
+        }
+
+        try:
+            records = self.graph_ingestor.fetch_all(atomic_cypher, params)
+        except Exception as e:
+            logger.debug(f"Atomic hybrid query failed: {e}")
+            return None
+
+        results: list[HybridSearchResult] = []
+        graph_weight = cfg.pagerank_weight + cfg.community_weight
+        for record in records:
+            context = record.get("context")
+            pagerank_score = _coerce_float(record.get("pagerank_score"), 0.1)
+            community_score = _coerce_float(record.get("community_score"), 0.0)
+            graph_score = (
+                (
+                    pagerank_score * cfg.pagerank_weight
+                    + community_score * cfg.community_weight
+                )
+                / graph_weight
+                if graph_weight > 0
+                else pagerank_score
+            )
+            results.append(
+                HybridSearchResult(
+                    node_id=_coerce_int(record.get("node_id"), 0),
+                    name=_coerce_str(record.get("name")),
+                    qualified_name=_coerce_str(record.get("qualified_name")),
+                    node_type=_coerce_str(record.get("node_type")),
+                    file_path=_coerce_str(record.get("file_path")),
+                    start_line=_coerce_int(record.get("start_line"), 0),
+                    end_line=_coerce_int(record.get("end_line"), 0),
+                    vector_score=_coerce_float(record.get("vector_score"), 0.0),
+                    text_score=_coerce_float(record.get("text_score"), 0.0),
+                    pagerank_score=pagerank_score,
+                    community_score=community_score,
+                    graph_score=graph_score,
+                    combined_score=_coerce_float(record.get("combined_score"), 0.0),
+                    context=context if isinstance(context, list) else None,
+                )
+            )
+
+        return results
+
+    def _search_separate(
+        self,
+        query: str,
+        query_embedding: list[float],
+        query_keywords: list[str],
+        top_k: int,
+        cfg: "HybridRetrievalConfig",
+    ) -> list[HybridSearchResult]:
+        """Fallback: vector search and metadata fetch as separate queries."""
         vector_pairs: list[tuple[int, float]] = self.vector_backend.search(
             query_embedding, top_k=top_k * 3
         )
@@ -197,12 +307,11 @@ class HybridRetriever:
         if not vector_pairs:
             return []
 
-        # Early filter based on minimum similarity threshold
         min_similarity = cfg.min_similarity_threshold
         filtered_pairs = [
             pair for pair in vector_pairs
             if pair[1] >= min_similarity
-        ][:top_k * 2]  # Limit after filtering
+        ][:top_k * 2]
 
         if not filtered_pairs:
             logger.debug(
@@ -224,10 +333,18 @@ class HybridRetriever:
                n.start_line AS start_line,
                n.end_line AS end_line,
                COALESCE(n.pagerank_score, 0.1) AS pagerank_score,
-               COALESCE(n.community_importance, 0.0) AS community_score
+               COALESCE(n.community_importance, 0.0) AS community_score,
+               CASE WHEN ANY(kw IN $keywords WHERE
+                   toLower(n.name) CONTAINS kw
+                   OR toLower(n.qualified_name) CONTAINS kw
+                   OR toLower(COALESCE(n.docstring, '')) CONTAINS kw
+               ) THEN 1.0 ELSE 0.0 END AS text_match
         """
 
-        records = self.graph_ingestor.fetch_all(metadata_cypher, {"node_ids": node_ids})
+        records = self.graph_ingestor.fetch_all(
+            metadata_cypher,
+            {"node_ids": node_ids, "keywords": [kw.lower() for kw in query_keywords]},
+        )
         results: list[HybridSearchResult] = []
         graph_weight = cfg.pagerank_weight + cfg.community_weight
 
@@ -236,6 +353,7 @@ class HybridRetriever:
             vector_score = similarity_map.get(node_id, 0.0)
             pagerank_score = _coerce_float(record.get("pagerank_score"), 0.1)
             community_score = _coerce_float(record.get("community_score"), 0.0)
+            text_score = _coerce_float(record.get("text_match"), 0.0)
             graph_score = (
                 (
                     pagerank_score * cfg.pagerank_weight
@@ -246,7 +364,9 @@ class HybridRetriever:
                 else pagerank_score
             )
             combined_score = (
-                vector_score * cfg.vector_weight + graph_score * graph_weight
+                vector_score * cfg.vector_weight
+                + text_score * cfg.text_weight
+                + graph_score * graph_weight
             )
             results.append(
                 HybridSearchResult(
@@ -258,7 +378,7 @@ class HybridRetriever:
                     start_line=_coerce_int(record.get("start_line"), 0),
                     end_line=_coerce_int(record.get("end_line"), 0),
                     vector_score=vector_score,
-                    text_score=0.0,
+                    text_score=text_score,
                     pagerank_score=pagerank_score,
                     community_score=community_score,
                     graph_score=graph_score,
@@ -267,6 +387,36 @@ class HybridRetriever:
             )
 
         results.sort(key=lambda r: r.combined_score, reverse=True)
+        return results
+
+    def search(self, query: str, top_k: int = 10) -> list[HybridSearchResult]:
+        # Check health if not yet validated
+        if self._is_healthy is None or not self._is_healthy:
+            if not self._validate():
+                logger.warning("Skipping search due to unhealthy dependencies")
+                return []
+
+        from ..config import HybridRetrievalConfig
+        from ..utils.query_utils import extract_keywords
+
+        cfg = self.config or HybridRetrievalConfig()
+        query_embedding = self.embedding_provider.embed(query)
+        query_keywords = extract_keywords(query, max_keywords=3)
+
+        # Try atomic query first (single round-trip)
+        atomic_results = self._search_atomic(
+            query, query_embedding, query_keywords, top_k, cfg
+        )
+        if atomic_results:
+            logger.debug(
+                f"Atomic hybrid search returned {len(atomic_results)} results for query: {query[:50]!r}"
+            )
+            return atomic_results[:top_k]
+
+        # Fallback to separate vector + metadata queries
+        results = self._search_separate(
+            query, query_embedding, query_keywords, top_k, cfg
+        )
         logger.debug(
             f"Hybrid search returned {len(results)} results for query: {query[:50]!r}"
         )
