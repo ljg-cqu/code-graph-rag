@@ -7,10 +7,10 @@ from __future__ import annotations
 
 import asyncio
 import io
-import signal
 import time
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from codebase_rag.utils.thread_management import ManagedThreadPoolExecutor
 from typing import Any
 
 from loguru import logger
@@ -18,7 +18,10 @@ from pydantic_ai import Agent, Tool
 from rich.console import Console
 
 from codebase_rag.config import ModelConfig, settings
-from codebase_rag.services.graph_service import MemgraphIngestor
+from codebase_rag.services.connection_pool import (
+    PooledMemgraphProxy,
+    get_connection_pool,
+)
 from codebase_rag.services.llm import (
     CypherGenerator,
     create_rag_orchestrator_with_config,
@@ -48,6 +51,8 @@ from codebase_rag.tools.semantic_search import (
     create_get_function_source_tool,
     create_semantic_search_tool,
 )
+from codebase_rag.utils.atomic import AtomicBoolean
+from codebase_rag.utils.shutdown_manager import shutdown_manager
 
 from .dynamic_concurrency_controller import DynamicConcurrencyController
 from .investigation_tracker import InvestigationState
@@ -89,8 +94,8 @@ class ReadOnlySubAgent:
         self.doc_workspace = doc_workspace
         self._worker_index = worker_index
         self.agent: Agent | None = None
-        self.code_graph: MemgraphIngestor | None = None
-        self.doc_graph: MemgraphIngestor | None = None
+        self.code_graph: PooledMemgraphProxy | None = None
+        self.doc_graph: PooledMemgraphProxy | None = None
         self.query_router: QueryRouter | None = None
         self.cypher_generator: CypherGenerator | None = None
         self.console = Console(file=io.StringIO(), width=120, force_terminal=False)
@@ -100,24 +105,24 @@ class ReadOnlySubAgent:
             return
 
         try:
-            self.code_graph = MemgraphIngestor(
+            code_pool = get_connection_pool(
                 host=settings.MEMGRAPH_HOST,
                 port=settings.MEMGRAPH_PORT,
-                batch_size=1,
                 username=settings.MEMGRAPH_USERNAME,
                 password=settings.MEMGRAPH_PASSWORD,
+                max_connections=5,
             )
-            self.code_graph.__enter__()
+            self.code_graph = PooledMemgraphProxy(code_pool)
 
             if self.enable_document_graph:
-                self.doc_graph = MemgraphIngestor(
+                doc_pool = get_connection_pool(
                     host=settings.DOC_MEMGRAPH_HOST,
                     port=settings.DOC_MEMGRAPH_PORT,
-                    batch_size=1,
                     username=settings.DOC_MEMGRAPH_USERNAME,
                     password=settings.DOC_MEMGRAPH_PASSWORD,
+                    max_connections=3,
                 )
-                self.doc_graph.__enter__()
+                self.doc_graph = PooledMemgraphProxy(doc_pool)
                 self.query_router = QueryRouter(
                     code_graph=self.code_graph,
                     doc_graph=self.doc_graph,
@@ -221,12 +226,8 @@ class ReadOnlySubAgent:
             self.query_router.current_mode = self.query_mode
 
     def shutdown(self) -> None:
-        if self.doc_graph is not None:
-            self.doc_graph.__exit__(None, None, None)
-            self.doc_graph = None
-        if self.code_graph is not None:
-            self.code_graph.__exit__(None, None, None)
-            self.code_graph = None
+        self.code_graph = None
+        self.doc_graph = None
         self.query_router = None
         self.cypher_generator = None
         self.agent = None
@@ -298,8 +299,8 @@ class SubAgentOrchestrator:
         self.doc_workspace = doc_workspace
         self.agent_factory = agent_factory or self._default_agent_factory
         self.workers: list[SubAgentWorker] = []
-        self.running = False
-        self._shutdown_called = False
+        self.running = AtomicBoolean(False)
+        self._shutdown_called = AtomicBoolean(False)
         self._llm_assignment_index = 0
 
         valid_strategies = {"fifo", "round-robin"}
@@ -310,11 +311,7 @@ class SubAgentOrchestrator:
             )
         self.scheduling_strategy = scheduling_strategy
 
-        for sig in [signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT]:
-            try:
-                signal.signal(sig, self._handle_shutdown)
-            except ValueError:
-                pass
+        shutdown_manager.register_handler(self.shutdown, priority=5)
 
     def _default_agent_factory(
         self, llm_config: ModelConfig | None = None, worker_index: int = 0
@@ -417,9 +414,12 @@ class SubAgentOrchestrator:
             )
             return result_aggregator
 
+        if self._shutdown_called.get():
+            raise RuntimeError("Orchestrator is shutting down")
+
         self.initialize_agents()
 
-        self.running = True
+        self.running.set(True)
         start_time = time.time()
         logger.info(
             f"Starting parallel execution of {len(subtasks)} subtasks with {self.worker_count} workers (scheduling: {self.scheduling_strategy})"
@@ -430,11 +430,15 @@ class SubAgentOrchestrator:
         active_futures: dict[Any, tuple[dict[str, Any], SubAgentWorker, float]] = {}
 
         try:
-            with ThreadPoolExecutor(max_workers=self.worker_count) as executor:
+            with ManagedThreadPoolExecutor(
+                max_workers=self.worker_count,
+                thread_name_prefix=f"subagent-{id(self)}",
+                shutdown_timeout=30.0,
+            ) as executor:
                 while (
                     (remaining_tasks or active_futures)
-                    and self.running
-                    and not self._shutdown_called
+                    and self.running.get()
+                    and not self._shutdown_called.get()
                 ):
                     while remaining_tasks:
                         worker = self._get_available_worker()
@@ -501,7 +505,7 @@ class SubAgentOrchestrator:
                                 )
 
         finally:
-            self.running = False
+            self.running.set(False)
             total_time = time.time() - start_time
             result_aggregator.set_total_execution_time(total_time)
             logger.info(f"Parallel execution completed in {total_time:.2f}s")
@@ -523,36 +527,36 @@ class SubAgentOrchestrator:
         """
         start_time = time.time()
         timeout = settings.CGR_SUBAGENT_TIMEOUT
-        task_executor = ThreadPoolExecutor(max_workers=1)
-        future = task_executor.submit(worker.execute, subtask)
 
-        try:
-            result, _ = future.result(timeout=timeout)
-            execution_time = time.time() - start_time
-            return result, execution_time
+        # Use standard ThreadPoolExecutor for subtask timeout (simpler than ManagedThreadPoolExecutor for this use case)
+        with ThreadPoolExecutor(max_workers=1) as task_executor:
+            future = task_executor.submit(worker.execute, subtask)
 
-        except TimeoutError as e:
-            future.cancel()
-            raise TimeoutError(f"Subtask exceeded timeout of {timeout}s") from e
-        finally:
-            task_executor.shutdown(wait=False, cancel_futures=True)
+            try:
+                result, _ = future.result(timeout=timeout)
+                execution_time = time.time() - start_time
+                return result, execution_time
 
-    def _handle_shutdown(self, signum, frame):
+            except TimeoutError as e:
+                future.cancel()
+                raise TimeoutError(f"Subtask exceeded timeout of {timeout}s") from e
+
+    def _handle_shutdown(self, signum: int, frame: Any) -> None:
         """Handle shutdown signals to gracefully terminate all workers."""
         logger.warning(f"Received signal {signum}, initiating graceful shutdown")
-        self._shutdown_called = True
-        self.running = False
+        if self._shutdown_called.compare_and_set(False, True):
+            self.running.set(False)
 
-    def shutdown(self):
+    def shutdown(self) -> None:
         """Shutdown the orchestrator and cleanup all resources."""
-        logger.info("Shutting down sub-agent orchestrator")
-        self._shutdown_called = True
-        self.running = False
+        if self._shutdown_called.compare_and_set(False, True):
+            logger.info("Shutting down sub-agent orchestrator")
+            self.running.set(False)
 
-        for worker in self.workers:
-            worker.shutdown()
-        self.workers = []
-        logger.info("Sub-agent orchestrator shutdown complete")
+            for worker in self.workers:
+                worker.shutdown()
+            self.workers = []
+            logger.info("Sub-agent orchestrator shutdown complete")
 
     def get_current_progress(self) -> dict[str, Any]:
         """Get current execution progress."""
