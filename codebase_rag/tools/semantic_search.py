@@ -6,8 +6,74 @@ from pydantic_ai import Tool
 from .. import constants as cs
 from .. import logs as ls
 from ..cypher_queries import CYPHER_GET_FUNCTION_SOURCE_LOCATION
+from ..services import QueryProtocol
 from ..types_defs import SemanticSearchResult
 from . import tool_descriptions as td
+
+
+def enrich_with_graph_context(
+    results: list[SemanticSearchResult],
+    ingestor: QueryProtocol,
+    max_relations: int = 5,
+) -> list[SemanticSearchResult]:
+    """Enrich semantic search results with graph relationship context.
+
+    Adds callers, callees, and parent information to each result by
+    querying the graph for relationships.
+
+    Args:
+        results: List of semantic search results to enrich
+        ingestor: Graph ingestor for executing queries
+        max_relations: Maximum number of relations to fetch per category
+
+    Returns:
+        Enriched results with graph context
+    """
+    if not results:
+        return results
+
+    node_ids = [r["node_id"] for r in results]
+
+    cypher = """
+    MATCH (n)
+    WHERE id(n) IN $node_ids
+
+    OPTIONAL MATCH (caller)-[:CALLS]->(n)
+    WITH n, caller
+
+    OPTIONAL MATCH (n)-[:CALLS]->(callee)
+    WITH n, caller, callee
+
+    OPTIONAL MATCH (n)<-[:DEFINES]-(parent)
+    WHERE parent:Class OR parent:Module
+
+    RETURN id(n) AS node_id,
+           collect(DISTINCT caller.qualified_name)[0..$max] AS callers,
+           collect(DISTINCT callee.qualified_name)[0..$max] AS callees,
+           collect(DISTINCT parent.qualified_name)[0..2] AS parents
+    """
+
+    params = {"node_ids": node_ids, "max": max_relations}
+    context_rows = ingestor.fetch_all(cypher, params)
+    context_map = {row["node_id"]: row for row in context_rows}
+
+    enriched = []
+    for result in results:
+        ctx = context_map.get(result["node_id"], {})
+        enriched.append(
+            SemanticSearchResult(
+                node_id=result["node_id"],
+                qualified_name=result["qualified_name"],
+                name=result["name"],
+                type=result["type"],
+                similarity=result["similarity"],
+                callers=ctx.get("callers", []),
+                callees=ctx.get("callees", []),
+                parents=ctx.get("parents", []),
+            )
+        )
+
+    return enriched
 
 
 def _semantic_search_keyword_fallback(query: str, top_k: int) -> list[SemanticSearchResult]:
@@ -17,20 +83,16 @@ def _semantic_search_keyword_fallback(query: str, top_k: int) -> list[SemanticSe
     """
     from ..config import settings
     from ..services.graph_service import MemgraphIngestor
+    from ..utils.query_utils import extract_best_keyword
 
     try:
         with MemgraphIngestor(
             host=settings.MEMGRAPH_HOST,
             port=settings.MEMGRAPH_PORT,
         ) as ingestor:
-            # Extract meaningful keywords (filter out stopwords)
-            stopwords = {'the', 'is', 'at', 'which', 'on', 'a', 'an', 'and', 'or', 'but', 'in', 'with', 'to', 'for', 'of'}
-            keywords = [w.lower() for w in query.split() if len(w) > 2 and w.lower() not in stopwords]
-            if not keywords:
+            keyword = extract_best_keyword(query)
+            if not keyword:
                 return []
-
-            # Use most specific keyword (longest)
-            keyword = max(keywords, key=len)
 
             cypher = """
             MATCH (n:Function|Class|Method)
@@ -50,6 +112,9 @@ def _semantic_search_keyword_fallback(query: str, top_k: int) -> list[SemanticSe
                     name=r["name"],
                     type=r["node_type"],
                     similarity=0.5,  # Neutral score for keyword matches
+                    callers=[],
+                    callees=[],
+                    parents=[],
                 )
                 for r in results
             ]
@@ -86,6 +151,9 @@ def _search_with_hybrid_retriever(query: str, top_k: int) -> list[SemanticSearch
                 name=result.name,
                 type=result.node_type,
                 similarity=round(result.combined_score, 3),
+                callers=[],
+                callees=[],
+                parents=[],
             )
             for result in hybrid_results
         ]
@@ -135,6 +203,9 @@ def _search_direct_vector(query: str, top_k: int) -> list[SemanticSearchResult]:
                 name=metadata_map.get(nid, {}).get("name", "?"),
                 type=metadata_map.get(nid, {}).get("node_type", "?"),
                 similarity=round(score, 3),
+                callers=[],
+                callees=[],
+                parents=[],
             )
             for nid, score in vector_results
         ]
@@ -247,11 +318,32 @@ def create_semantic_search_tool() -> Tool:
         if not results:
             return cs.MSG_SEMANTIC_NO_RESULTS.format(query=query)
 
+        # Enrich results with graph context (callers, callees, parents)
+        from ..config import settings
+        from ..services.graph_service import MemgraphIngestor
+
+        try:
+            with MemgraphIngestor(
+                host=settings.MEMGRAPH_HOST,
+                port=settings.MEMGRAPH_PORT,
+            ) as ingestor:
+                results = enrich_with_graph_context(results, ingestor)
+        except Exception as e:
+            logger.warning(f"Failed to enrich results with graph context: {e}")
+
         formatted_results = []
         for i, result in enumerate(results, 1):
-            formatted_results.append(
-                f"{i}. {result['qualified_name']} (type: {result['type']}, similarity: {result['similarity']})"
-            )
+            line = f"{i}. {result['qualified_name']} (type: {result['type']}, similarity: {result['similarity']})"
+            callers = result.get('callers', [])
+            callees = result.get('callees', [])
+            parents = result.get('parents', [])
+            if callers:
+                line += f"\n   <- Called by: {', '.join(callers[:3])}"
+            if callees:
+                line += f"\n   -> Calls: {', '.join(callees[:3])}"
+            if parents:
+                line += f"\n   In: {', '.join(parents)}"
+            formatted_results.append(line)
 
         response = cs.MSG_SEMANTIC_RESULT_HEADER.format(count=len(results), query=query)
         response += "\n".join(formatted_results)

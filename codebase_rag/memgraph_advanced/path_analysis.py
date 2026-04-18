@@ -6,6 +6,10 @@ from enum import Enum
 from ..config import settings
 from ..services.graph_service import MemgraphIngestor
 
+# Safety caps to prevent exponential path explosion
+_MAX_TRAVERSAL_DEPTH = 8  # Absolute maximum for KSHORTEST
+_MAX_UNBOUNDED_DEPTH = 5  # Maximum for previously unbounded patterns
+
 
 class PathType(Enum):
     CALL_CHAIN = "call_chain"
@@ -37,12 +41,15 @@ class PathAnalyzer:
 
         Uses k-shortest paths to find multiple call chains.
         """
+        # Apply safety cap to prevent exponential path explosion
+        safe_max_length = min(max_path_length, _MAX_TRAVERSAL_DEPTH)
+
         cypher = """
         MATCH (start:Function {qualified_name: $start_qn}),
               (end:Function {qualified_name: $end_qn})
 
         // Find k shortest paths using CALLS relationship
-        MATCH path = (start)-[:CALLS *KSHORTEST $max_paths ..$max_length]->(end)
+        MATCH path = (start)-[:CALLS *KSHORTEST $max_paths 1 TO $max_length]->(end)
 
         WITH path,
              length(path) AS path_length,
@@ -77,7 +84,7 @@ class PathAnalyzer:
             "start_qn": start_qn,
             "end_qn": end_qn,
             "max_paths": max_paths,
-            "max_length": max_path_length,
+            "max_length": safe_max_length,
         }
 
         with MemgraphIngestor(
@@ -120,17 +127,23 @@ class PathAnalyzer:
         Uses betweenness centrality to identify critical functions that
         control flow between different parts of the codebase.
         """
-        cypher = """
+        base_cypher = """
         // Use betweenness centrality to find bottlenecks
         CALL betweenness_centrality.get("CALLS", "BOTH")
         YIELD node, betweenness
 
         WHERE node:Function AND betweenness > $threshold
-        {% if function_qn %}
-        AND (node)-[:CALLS*]->(:Function {qualified_name: $function_qn})
-        OR (:Function {qualified_name: $function_qn})-[:CALLS*]->(node)
-        {% endif %}
+        """
 
+        if function_qn:
+            base_cypher += f"""
+        AND (
+            (node)-[:CALLS*1..{_MAX_UNBOUNDED_DEPTH}]->(:Function {{qualified_name: $function_qn}})
+            OR (:Function {{qualified_name: $function_qn}})-[:CALLS*1..{_MAX_UNBOUNDED_DEPTH}]->(node)
+        )
+        """
+
+        base_cypher += """
         // Get additional context
         OPTIONAL MATCH (node)-[:CALLS]->(callee)
         WITH node, betweenness, count(callee) AS out_degree
@@ -156,7 +169,7 @@ class PathAnalyzer:
             username=settings.MEMGRAPH_USERNAME,
             password=settings.MEMGRAPH_PASSWORD,
         ) as ingestor:
-            records = ingestor.fetch_all(cypher, params)
+            records = ingestor.fetch_all(base_cypher, params)
 
         return records
 

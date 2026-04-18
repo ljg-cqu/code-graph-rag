@@ -154,10 +154,12 @@ class TestGenerateSemanticEmbeddings:
         query_arg = query_ingestor.fetch_all.call_args[0][0]
         assert query_arg == cs.CYPHER_QUERY_EMBEDDINGS
 
+    @patch("codebase_rag.graph_updater.has_embedding_provider", return_value=False)
     @patch("codebase_rag.graph_updater.has_semantic_dependencies", return_value=False)
     def test_skips_when_no_semantic_dependencies(
         self,
         _mock_deps: MagicMock,
+        _mock_provider: MagicMock,
         updater_with_query: GraphUpdater,
         query_ingestor: MagicMock,
     ) -> None:

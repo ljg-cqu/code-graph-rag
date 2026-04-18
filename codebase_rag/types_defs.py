@@ -244,6 +244,9 @@ class SemanticSearchResult(TypedDict):
     name: str
     type: str
     similarity: float
+    callers: list[str]  # Functions that call this node
+    callees: list[str]  # Functions this node calls
+    parents: list[str]  # Parent classes/modules
 
 
 class JavaClassInfo(TypedDict):

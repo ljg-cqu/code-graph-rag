@@ -425,7 +425,7 @@ class MemgraphBackend(VectorBackend):
                         YIELD node AS start_node, similarity AS sim
                         WHERE ($project_prefix IS NULL OR start_node.qualified_name STARTS WITH $project_prefix)
 
-                        MATCH path = (start_node)-[:CALLS|:DEFINES|:IMPORTS *BFS (1..max_depth)]-(related)
+                        MATCH path = (start_node)-[:CALLS|:DEFINES|:IMPORTS *BFS 1 TO max_depth]-(related)
                         WHERE related:Function OR related:Class OR related:Module
 
                         WITH
@@ -498,7 +498,7 @@ class MemgraphBackend(VectorBackend):
                         ORDER BY sim DESC
                         LIMIT top_k * 3
 
-                        MATCH path = (start_node)-[:CALLS|:DEFINES|:IMPORTS *BFS (1..max_depth)]-(related)
+                        MATCH path = (start_node)-[:CALLS|:DEFINES|:IMPORTS *BFS 1 TO max_depth]-(related)
                         WHERE related:Function OR related:Class OR related:Module
 
                         WITH

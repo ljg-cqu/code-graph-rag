@@ -4186,5 +4186,19 @@ HEALTH_CHECK_JSON_SCHEMA_IO_ERROR_MSG = "Cannot read schema or data file: {error
 HEALTH_CHECK_JSON_SCHEMA_FILE = "ingestion_schema.json"
 HEALTH_CHECK_JSON_SAMPLE_FILE = "sample_json_ingest.json"
 
+# Vector index health checks
+HEALTH_CHECK_VECTOR_INDEX_PASS = "Vector indexes exist"
+HEALTH_CHECK_VECTOR_INDEX_FAIL = "Vector indexes missing"
+HEALTH_CHECK_VECTOR_INDEX_PASS_MSG = "Vector indexes are created for embeddable node types"
+HEALTH_CHECK_VECTOR_INDEX_FAIL_MSG = "{missing_count} vector indexes are missing"
+HEALTH_CHECK_VECTOR_INDEX_ERROR_MSG = "Vector index check failed: {error}"
+
+HEALTH_CHECK_VECTOR_SEARCH_PASS = "Vector search functional"
+HEALTH_CHECK_VECTOR_SEARCH_FAIL = "Vector search not functional"
+HEALTH_CHECK_VECTOR_SEARCH_PASS_MSG = "Vector search returns results ({count} embeddings indexed)"
+HEALTH_CHECK_VECTOR_SEARCH_FAIL_MSG = "Vector search failed: {error}"
+HEALTH_CHECK_VECTOR_SEARCH_NO_EMBEDDINGS_MSG = "No embeddings found in the graph - run indexing first"
+HEALTH_CHECK_VECTOR_SEARCH_ERROR_MSG = "Vector search check failed: {error}"
+
 SHELL_CMD_WHERE = "where"
 SHELL_CMD_WHICH = "which"

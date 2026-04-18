@@ -212,15 +212,29 @@ class QueryRouter:
         code_vector: VectorBackend | None = None,
         doc_vector: VectorBackend | None = None,
     ):
-        # Lazy import to avoid circular dependencies
-        from ..vector_backend import get_shared_backend, get_shared_backend_for_documents
-
         self.code_graph = code_graph
         self.doc_graph = doc_graph
-        # Use shared singletons instead of creating new instances
-        self.code_vector = code_vector or get_shared_backend()
-        self.doc_vector = doc_vector or get_shared_backend_for_documents()
+        self._code_vector = code_vector
+        self._doc_vector = doc_vector
         self.current_mode: QueryMode = QueryMode.CODE_ONLY  # For in-chat mode switching
+
+    @property
+    def code_vector(self) -> VectorBackend | None:
+        """Lazy initialization of code vector backend."""
+        if self._code_vector is None:
+            from ..vector_backend import get_shared_backend
+
+            self._code_vector = get_shared_backend()
+        return self._code_vector
+
+    @property
+    def doc_vector(self) -> VectorBackend | None:
+        """Lazy initialization of document vector backend - only when doc_graph is available."""
+        if self._doc_vector is None and self.doc_graph is not None:
+            from ..vector_backend import get_shared_backend_for_documents
+
+            self._doc_vector = get_shared_backend_for_documents()
+        return self._doc_vector
 
     def query(self, request: QueryRequest) -> QueryResponse:
         """Route query based on EXPLICIT mode."""
@@ -399,8 +413,6 @@ class QueryRouter:
 
         # Lazy imports for optional dependencies
         from ..config import settings
-        from ..embeddings import get_embedding_provider
-        from ..memgraph_advanced import HybridRetriever, HybridSearchResult
 
         logger.info(f"Querying code graph: {request.question}")
 
@@ -412,19 +424,10 @@ class QueryRouter:
         if self.code_vector:
             # Use advanced hybrid retrieval (vector + text + graph) for better results
             try:
-                config = settings.active_embedding_config
-                provider = get_embedding_provider(
-                    provider=config.provider,
-                    model_id=config.model_id,
-                )
+                from ..memgraph_advanced import create_hybrid_retriever, HybridSearchResult
 
-                # Initialize hybrid retriever with weighted scoring
-                retriever = HybridRetriever(
-                    graph_ingestor=self.code_graph,
-                    vector_backend=self.code_vector,
-                    embedding_provider=provider,
-                    config=settings.hybrid_retrieval_config,
-                )
+                # Use factory function with shared dependencies
+                retriever = create_hybrid_retriever(self.code_graph)
 
                 # Run hybrid search with automatic reranking
                 results: list[HybridSearchResult] = retriever.search(
@@ -470,8 +473,10 @@ class QueryRouter:
                    n.end_line as end_line, labels(n) as labels
             LIMIT $limit
             """
-            # Extract keyword from question (simple approach)
-            keyword = request.question.split()[0] if request.question else ""
+            # Extract keyword from question using shared utility
+            from ..utils.query_utils import extract_best_keyword
+
+            keyword = extract_best_keyword(request.question)
             try:
                 keyword_results = self.code_graph.fetch_all(
                     keyword_query,

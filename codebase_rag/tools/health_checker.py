@@ -214,6 +214,8 @@ class HealthChecker:
         self.results.append(self.check_disconnected_nodes())
         self.results.append(self.check_required_properties())
         self.results.append(self.check_embedding_correlation())
+        self.results.append(self.check_vector_indexes())
+        self.results.append(self.check_vector_search())
         self.results.append(self.check_file_layer())
         self.results.append(self.check_large_document_chunk_coverage())
         self.results.append(self.check_log_directory())
@@ -523,6 +525,121 @@ class HealthChecker:
             passed=True,
             message="File logging is disabled, all logs go to terminal"
         )
+
+    def check_vector_indexes(self) -> HealthCheckResult:
+        """Check if vector indexes exist for embeddable node types."""
+        from ..vector_store_memgraph import MemgraphBackend
+
+        conn = None
+        cursor = None
+        try:
+            conn = mgclient.connect(
+                host=settings.MEMGRAPH_HOST,
+                port=settings.MEMGRAPH_PORT,
+            )
+            cursor = conn.cursor()
+
+            # Get existing vector indexes
+            cursor.execute("SHOW VECTOR INDEX INFO;")
+            existing_indexes = {row[0] for row in cursor.fetchall()}
+
+            # Check which expected indexes are missing
+            expected_labels = MemgraphBackend.LABELS_TO_INDEX
+            missing_indexes = []
+            for label in expected_labels:
+                index_name = f"{label.lower()}_embedding_index"
+                if index_name not in existing_indexes:
+                    missing_indexes.append(index_name)
+
+            if not missing_indexes:
+                return HealthCheckResult(
+                    name=cs.HEALTH_CHECK_VECTOR_INDEX_PASS,
+                    passed=True,
+                    message=cs.HEALTH_CHECK_VECTOR_INDEX_PASS_MSG,
+                )
+
+            return HealthCheckResult(
+                name=cs.HEALTH_CHECK_VECTOR_INDEX_FAIL,
+                passed=False,
+                message=cs.HEALTH_CHECK_VECTOR_INDEX_FAIL_MSG.format(
+                    missing_count=len(missing_indexes)
+                ),
+                error=f"Missing indexes: {', '.join(missing_indexes)}",
+            )
+        except Exception as e:
+            return HealthCheckResult(
+                name=cs.HEALTH_CHECK_VECTOR_INDEX_FAIL,
+                passed=False,
+                message=cs.HEALTH_CHECK_VECTOR_INDEX_FAIL,
+                error=cs.HEALTH_CHECK_VECTOR_INDEX_ERROR_MSG.format(error=str(e)),
+            )
+        finally:
+            if cursor is not None:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    def check_vector_search(self) -> HealthCheckResult:
+        """Check if vector search is functional and has embeddings."""
+        from ..embeddings import get_embedding_provider
+        from ..vector_backend import get_shared_backend
+
+        try:
+            # Get embedding provider
+            config = settings.active_embedding_config
+            provider = get_embedding_provider(
+                provider=config.provider,
+                model_id=config.model_id,
+            )
+
+            # Generate test embedding
+            test_embedding = provider.embed("test query")
+
+            # Get vector backend and search
+            backend = get_shared_backend()
+            results = backend.search(test_embedding, top_k=3)
+
+            if not results:
+                # Check if any embeddings exist
+                stats = backend.get_stats()
+                total_embeddings = stats.get("total_embeddings", 0)
+
+                if total_embeddings == 0:
+                    return HealthCheckResult(
+                        name=cs.HEALTH_CHECK_VECTOR_SEARCH_FAIL,
+                        passed=False,
+                        message=cs.HEALTH_CHECK_VECTOR_SEARCH_NO_EMBEDDINGS_MSG,
+                        error="No embeddings stored - run 'cgr start --index-code' to index your codebase",
+                    )
+
+                return HealthCheckResult(
+                    name=cs.HEALTH_CHECK_VECTOR_SEARCH_PASS,
+                    passed=True,
+                    message=cs.HEALTH_CHECK_VECTOR_SEARCH_PASS_MSG.format(count=total_embeddings),
+                )
+
+            # Get total embeddings for message
+            stats = backend.get_stats()
+            total_embeddings = stats.get("total_embeddings", 0)
+
+            return HealthCheckResult(
+                name=cs.HEALTH_CHECK_VECTOR_SEARCH_PASS,
+                passed=True,
+                message=cs.HEALTH_CHECK_VECTOR_SEARCH_PASS_MSG.format(count=total_embeddings),
+            )
+        except Exception as e:
+            return HealthCheckResult(
+                name=cs.HEALTH_CHECK_VECTOR_SEARCH_FAIL,
+                passed=False,
+                message=cs.HEALTH_CHECK_VECTOR_SEARCH_FAIL,
+                error=cs.HEALTH_CHECK_VECTOR_SEARCH_ERROR_MSG.format(error=str(e)),
+            )
 
     def validate_ingestion_quality(
         self,

@@ -49,7 +49,9 @@ def reset_shared_embedding_provider() -> None:
         _SHARED_EMBEDDING_PROVIDER = None
 
 
-def create_hybrid_retriever(graph_ingestor: QueryProtocol) -> HybridRetriever:
+def create_hybrid_retriever(
+    graph_ingestor: QueryProtocol, strict_validation: bool = False
+) -> HybridRetriever:
     """Factory function that creates HybridRetriever with shared dependencies.
 
     This is the recommended way to create HybridRetriever instances.
@@ -59,6 +61,8 @@ def create_hybrid_retriever(graph_ingestor: QueryProtocol) -> HybridRetriever:
 
     Args:
         graph_ingestor: MemgraphIngestor instance (use as context manager)
+        strict_validation: If True, raise on validation failures. If False (default),
+            log warnings and allow graceful fallbacks.
 
     Returns:
         HybridRetriever configured with shared dependencies
@@ -76,6 +80,7 @@ def create_hybrid_retriever(graph_ingestor: QueryProtocol) -> HybridRetriever:
         vector_backend=get_shared_backend(),
         embedding_provider=get_shared_embedding_provider(),
         config=settings.hybrid_retrieval_config,
+        strict_validation=strict_validation,
     )
 
 
@@ -123,6 +128,7 @@ class HybridRetriever:
         vector_backend: VectorBackend | None = None,
         embedding_provider: EmbeddingProviderProtocol | None = None,
         config: HybridRetrievalConfig | None = None,
+        strict_validation: bool = True,
     ) -> None:
         # Validate required dependencies
         if graph_ingestor is None:
@@ -132,24 +138,52 @@ class HybridRetriever:
         if embedding_provider is None:
             raise ValueError("embedding_provider is required for HybridRetriever")
 
-        # Validate vector backend health
-        if not vector_backend.health_check():
-            raise RuntimeError("Vector backend health check failed - connection not ready")
-
-        # Validate embedding provider
-        try:
-            test_embedding = embedding_provider.embed("test")
-            if not isinstance(test_embedding, list) or len(test_embedding) == 0:
-                raise ValueError("Embedding provider returned invalid embedding")
-        except Exception as e:
-            raise ValueError(f"Embedding provider validation failed: {e}")
-
         self.graph_ingestor = graph_ingestor
         self.vector_backend = vector_backend
         self.embedding_provider = embedding_provider
         self.config = config
+        self._is_healthy: bool | None = None
+
+        if strict_validation:
+            self._validate()
+
+    def _validate(self) -> bool:
+        """Validate dependencies. Returns True if healthy, False otherwise."""
+        try:
+            if not self.vector_backend.health_check():
+                logger.warning("Vector backend health check failed")
+                self._is_healthy = False
+                return False
+
+            test_embedding = self.embedding_provider.embed("test")
+            if not isinstance(test_embedding, list) or len(test_embedding) == 0:
+                logger.warning("Embedding provider returned invalid embedding")
+                self._is_healthy = False
+                return False
+
+            # Test actual vector search to catch empty indexes or dimension mismatch
+            try:
+                test_results = self.vector_backend.search(test_embedding, top_k=1)
+                logger.debug(f"Vector search test returned {len(test_results)} results")
+            except Exception as e:
+                logger.warning(f"Vector search test failed: {e}")
+                self._is_healthy = False
+                return False
+
+            self._is_healthy = True
+            return True
+        except Exception as e:
+            logger.warning(f"HybridRetriever validation failed: {e}")
+            self._is_healthy = False
+            return False
 
     def search(self, query: str, top_k: int = 10) -> list[HybridSearchResult]:
+        # Check health if not yet validated
+        if self._is_healthy is None or not self._is_healthy:
+            if not self._validate():
+                logger.warning("Skipping search due to unhealthy dependencies")
+                return []
+
         from ..config import HybridRetrievalConfig
 
         cfg = self.config or HybridRetrievalConfig()

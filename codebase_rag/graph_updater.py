@@ -32,7 +32,7 @@ from .types_defs import (
     SimpleNameLookup,
     TrieNode,
 )
-from .utils.dependencies import has_semantic_dependencies
+from .utils.dependencies import has_embedding_provider, has_semantic_dependencies
 from .utils.fqn_resolver import find_function_source_by_fqn
 from .utils.path_utils import should_skip_path
 from .utils.source_extraction import extract_source_lines
@@ -972,7 +972,7 @@ class GraphUpdater:
             logger.warning(f"Legacy Function parent relationship repair failed: {e}")
 
     def _generate_semantic_embeddings(self) -> None:
-        if not has_semantic_dependencies():
+        if not has_semantic_dependencies() and not has_embedding_provider():
             logger.info(ls.SEMANTIC_NOT_AVAILABLE)
             return
 

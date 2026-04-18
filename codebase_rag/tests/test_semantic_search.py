@@ -111,7 +111,55 @@ def mock_ingestor() -> MagicMock:
             "type": ["Function"],
         },
     ]
+    # For graph context enrichment queries
+    mock.fetch_all.return_value = [
+        {
+            "node_id": 1,
+            "callers": ["project.module.caller1"],
+            "callees": ["project.module.callee1"],
+            "parents": ["project.module"],
+        },
+        {
+            "node_id": 2,
+            "callers": [],
+            "callees": [],
+            "parents": ["project.module.Class1"],
+        },
+        {
+            "node_id": 3,
+            "callers": ["project.module.caller2", "project.module.caller3"],
+            "callees": ["project.module.callee2"],
+            "parents": [],
+        },
+    ]
     return mock
+
+
+@pytest.fixture
+def sample_search_results() -> list[dict]:
+    """Sample semantic search results for testing enrichment."""
+    return [
+        {
+            "node_id": 1,
+            "qualified_name": "project.module.func1",
+            "name": "func1",
+            "type": "Function",
+            "similarity": 0.95,
+            "callers": [],
+            "callees": [],
+            "parents": [],
+        },
+        {
+            "node_id": 2,
+            "qualified_name": "project.module.func2",
+            "name": "func2",
+            "type": "Method",
+            "similarity": 0.85,
+            "callers": [],
+            "callees": [],
+            "parents": [],
+        },
+    ]
 
 
 def test_semantic_code_search_returns_empty_without_dependencies() -> None:
@@ -581,3 +629,106 @@ async def test_get_function_source_tool_handles_not_found(
         result = await tool.function(999)
 
     assert "Could not retrieve source code" in result
+
+
+@pytest.mark.skipif(
+    not has_semantic_dependencies(), reason="semantic dependencies not installed"
+)
+def test_enrich_with_graph_context_adds_relationships(
+    mock_ingestor: MagicMock,
+    sample_search_results: list[dict],
+) -> None:
+    from codebase_rag.tools.semantic_search import enrich_with_graph_context
+
+    mock_ingestor.fetch_all.return_value = [
+        {
+            "node_id": 1,
+            "callers": ["project.module.caller1"],
+            "callees": ["project.module.callee1"],
+            "parents": ["project.module"],
+        },
+        {
+            "node_id": 2,
+            "callers": [],
+            "callees": [],
+            "parents": ["project.module.Class1"],
+        },
+    ]
+
+    result = enrich_with_graph_context(sample_search_results, mock_ingestor)
+
+    assert len(result) == 2
+    assert result[0]["callers"] == ["project.module.caller1"]
+    assert result[0]["callees"] == ["project.module.callee1"]
+    assert result[0]["parents"] == ["project.module"]
+    assert result[1]["callers"] == []
+    assert result[1]["callees"] == []
+    assert result[1]["parents"] == ["project.module.Class1"]
+
+
+@pytest.mark.skipif(
+    not has_semantic_dependencies(), reason="semantic dependencies not installed"
+)
+def test_enrich_with_graph_context_handles_empty_results(
+    mock_ingestor: MagicMock,
+) -> None:
+    from codebase_rag.tools.semantic_search import enrich_with_graph_context
+
+    result = enrich_with_graph_context([], mock_ingestor)
+
+    assert result == []
+    mock_ingestor.fetch_all.assert_not_called()
+
+
+@pytest.mark.skipif(
+    not has_semantic_dependencies(), reason="semantic dependencies not installed"
+)
+def test_enrich_with_graph_context_respects_max_relations(
+    mock_ingestor: MagicMock,
+    sample_search_results: list[dict],
+) -> None:
+    from codebase_rag.tools.semantic_search import enrich_with_graph_context
+
+    mock_ingestor.fetch_all.return_value = [
+        {
+            "node_id": 1,
+            "callers": ["caller1", "caller2", "caller3", "caller4", "caller5", "caller6"],
+            "callees": ["callee1", "callee2", "callee3", "callee4", "callee5", "callee6"],
+            "parents": ["parent1", "parent2", "parent3", "parent4"],
+        },
+    ]
+
+    result = enrich_with_graph_context(sample_search_results[:1], mock_ingestor, max_relations=3)
+
+    # Verify max_relations is passed to query
+    call_args = mock_ingestor.fetch_all.call_args
+    assert call_args[1]["params"]["max"] == 3
+
+
+@pytest.mark.skipif(
+    not has_semantic_dependencies(), reason="semantic dependencies not installed"
+)
+def test_semantic_search_returns_results_with_graph_context(
+    mock_hybrid_retriever: MagicMock,
+    mock_ingestor: MagicMock,
+) -> None:
+    from codebase_rag.tools.semantic_search import semantic_code_search
+
+    with (
+        patch(
+            "codebase_rag.services.graph_service.MemgraphIngestor",
+            return_value=mock_ingestor,
+        ),
+        patch(
+            "codebase_rag.memgraph_advanced.HybridRetriever",
+            return_value=mock_hybrid_retriever,
+        ),
+    ):
+        results = semantic_code_search("find authentication code", top_k=3)
+
+    assert len(results) == 3
+    # Verify all results have the new graph context fields
+    for result in results:
+        assert "callers" in result
+        assert "callees" in result
+        assert "parents" in result

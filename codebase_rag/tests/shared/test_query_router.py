@@ -296,6 +296,27 @@ class TestQueryRouter:
         response = router.query(request)
         assert "requires both" in response.answer.lower()
 
+    def test_query_router_lazy_doc_backend(self):
+        """Verify document vector backend is NOT initialized in code-only mode."""
+        from codebase_rag.vector_backend import get_shared_backend_for_documents
+        with patch('codebase_rag.vector_backend.get_shared_backend_for_documents') as mock_doc:
+            router = QueryRouter(
+                code_graph=Mock(),
+                doc_graph=None,
+            )
+            mock_doc.assert_not_called()
+            assert router.doc_vector is None
+            mock_doc.assert_not_called()
+
+    def test_query_router_uses_hybrid_factory(self):
+        """Verify QueryRouter uses create_hybrid_retriever factory."""
+        from codebase_rag.memgraph_advanced import create_hybrid_retriever
+        with patch('codebase_rag.shared.query_router.create_hybrid_retriever') as mock_factory:
+            router = QueryRouter(code_graph=Mock())
+            request = QueryRequest(question="test", mode=QueryMode.CODE_ONLY)
+            router.query(request)
+            mock_factory.assert_called_once()
+
 
 class TestQueryRouterIsolation:
     """Tests for graph isolation guarantees."""
