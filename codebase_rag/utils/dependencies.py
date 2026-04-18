@@ -31,6 +31,29 @@ def has_semantic_dependencies() -> bool:
     return has_torch() and has_transformers()
 
 
+def has_embedding_provider() -> bool:
+    """Check if an embedding provider is configured and available.
+
+    This is separate from has_semantic_dependencies() which checks for
+    local embedding generation capabilities (torch/transformers).
+    Query-time retrieval can work with pre-indexed embeddings without torch.
+    """
+    try:
+        from ..config import settings
+        from ..embeddings import get_embedding_provider
+
+        config = settings.active_embedding_config
+        provider = get_embedding_provider(
+            provider=config.provider,
+            model_id=config.model_id,
+        )
+        # Test with simple embedding
+        provider.embed("test")
+        return True
+    except Exception:
+        return False
+
+
 def check_dependencies(required_modules: Sequence[str]) -> bool:
     return all(_check_dependency(module) for module in required_modules)
 

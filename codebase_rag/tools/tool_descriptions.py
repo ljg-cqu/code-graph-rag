@@ -28,6 +28,12 @@ class AgenticToolName(StrEnum):
     # Document GraphRAG tools
     QUERY_DOCUMENT_GRAPH = "query_document_graph"
     QUERY_BOTH_GRAPHS = "query_both_graphs"
+    # Advanced graph algorithm tools
+    COMMUNITY_SUMMARY = "community_summary"
+    ANALYZE_PATH = "analyze_path"
+    FIND_SIMILAR_FUNCTIONS = "find_similar_functions"
+    FIND_BOTTLENECKS = "find_bottlenecks"
+    EXPAND_CONTEXT = "expand_context"
 
 
 ANALYZE_DOCUMENT = (
@@ -293,6 +299,35 @@ MCP_FIND_IMPLEMENTATIONS = FIND_IMPLEMENTATIONS
 MCP_GET_PROJECT_STRUCTURE = GET_PROJECT_STRUCTURE
 MCP_GET_IMPORT_DEPENDENCIES = GET_IMPORT_DEPENDENCIES
 
+# Advanced graph algorithm tool descriptions
+MCP_COMMUNITY_SUMMARY = (
+    "Generate query-focused summary using community detection. "
+    "Identifies code communities and summarizes the most relevant ones "
+    "for a given question. Best for understanding large codebases."
+)
+
+MCP_ANALYZE_PATH = (
+    "Analyze call paths between two functions. "
+    "Finds k-shortest paths, identifies critical nodes and bottlenecks. "
+    "Example: 'Analyze path from main() to database.connect()'"
+)
+
+MCP_FIND_SIMILAR_FUNCTIONS = (
+    "Find functions similar to a given function based on call patterns "
+    "using Jaccard similarity. Returns similarity scores."
+)
+
+MCP_FIND_BOTTLENECKS = (
+    "Find functions that are bottlenecks (high betweenness centrality). "
+    "Identifies critical functions that control flow between different "
+    "parts of the codebase."
+)
+
+MCP_EXPAND_CONTEXT = (
+    "Expand context around a code entity using BFS traversal. "
+    "Returns related functions, classes, and modules ordered by importance."
+)
+
 
 MCP_TOOLS: dict[MCPToolName, str] = {
     MCPToolName.LIST_PROJECTS: MCP_LIST_PROJECTS,
@@ -323,6 +358,12 @@ MCP_TOOLS: dict[MCPToolName, str] = {
     MCPToolName.FIND_IMPLEMENTATIONS: MCP_FIND_IMPLEMENTATIONS,
     MCPToolName.GET_PROJECT_STRUCTURE: MCP_GET_PROJECT_STRUCTURE,
     MCPToolName.GET_IMPORT_DEPENDENCIES: MCP_GET_IMPORT_DEPENDENCIES,
+    # Advanced graph algorithm tools
+    MCPToolName.COMMUNITY_SUMMARY: MCP_COMMUNITY_SUMMARY,
+    MCPToolName.ANALYZE_PATH: MCP_ANALYZE_PATH,
+    MCPToolName.FIND_SIMILAR_FUNCTIONS: MCP_FIND_SIMILAR_FUNCTIONS,
+    MCPToolName.FIND_BOTTLENECKS: MCP_FIND_BOTTLENECKS,
+    MCPToolName.EXPAND_CONTEXT: MCP_EXPAND_CONTEXT,
 }
 
 AGENTIC_TOOLS: dict[AgenticToolName, str] = {
@@ -348,4 +389,10 @@ AGENTIC_TOOLS: dict[AgenticToolName, str] = {
     # Document GraphRAG tools
     AgenticToolName.QUERY_DOCUMENT_GRAPH: QUERY_DOCUMENT_GRAPH,
     AgenticToolName.QUERY_BOTH_GRAPHS: QUERY_BOTH_GRAPHS,
+    # Advanced graph algorithm tools
+    AgenticToolName.COMMUNITY_SUMMARY: MCP_COMMUNITY_SUMMARY,
+    AgenticToolName.ANALYZE_PATH: MCP_ANALYZE_PATH,
+    AgenticToolName.FIND_SIMILAR_FUNCTIONS: MCP_FIND_SIMILAR_FUNCTIONS,
+    AgenticToolName.FIND_BOTTLENECKS: MCP_FIND_BOTTLENECKS,
+    AgenticToolName.EXPAND_CONTEXT: MCP_EXPAND_CONTEXT,
 }

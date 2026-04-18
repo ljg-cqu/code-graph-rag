@@ -24,6 +24,12 @@ class InvestigationState:
     def record_tool(
         self, tool_name: str, query_arg: str = "", results_count: int = -1
     ) -> None:
+        """Record tool usage and track failures separately from usage.
+
+        Tools that return empty results are still counted as "used" for
+        sufficiency purposes, but are also tracked as failures for diagnostics.
+        """
+        # ALWAYS record tool usage, even if it returned 0 results
         self.tools_used.add(tool_name)
 
         if tool_name == AgenticToolName.QUERY_GRAPH:
@@ -32,13 +38,14 @@ class InvestigationState:
         if tool_name in FILE_READ_TOOLS and query_arg:
             self.files_read.append(query_arg)
 
+        # Track failures separately, but don't exclude from usage
         if results_count == 0 and tool_name in {
             AgenticToolName.SEMANTIC_SEARCH,
             AgenticToolName.QUERY_GRAPH,
         }:
             self.tool_failures.add(tool_name)
             logger.debug(
-                f"Tool {tool_name} returned empty results — will be excluded from sufficiency checks"
+                f"Tool {tool_name} returned empty results — tracked as failure but still counts as usage"
             )
 
     @classmethod

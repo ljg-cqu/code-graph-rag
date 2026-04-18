@@ -221,12 +221,16 @@ class EmbeddingConfig:
 
 @dataclass
 class HybridRetrievalConfig:
-    """Configuration for hybrid retrieval."""
+    """Configuration for hybrid retrieval.
 
-    vector_weight: float = 0.6
-    text_weight: float = 0.2
-    pagerank_weight: float = 0.15
-    community_weight: float = 0.05
+    Note: text_weight was removed as Memgraph text indexing is not currently
+    implemented. The weight redistribution preserves relative importance of
+    remaining signals.
+    """
+
+    vector_weight: float = 0.7
+    pagerank_weight: float = 0.2
+    community_weight: float = 0.1
     top_k: int = 10
     max_context_depth: int = 2
     min_similarity_threshold: float = 0.1
@@ -235,20 +239,19 @@ class HybridRetrievalConfig:
         """Validate that weights are in valid range and sum approximately to 1.0."""
         weights = [
             self.vector_weight,
-            self.text_weight,
             self.pagerank_weight,
             self.community_weight,
         ]
+        weight_names = ["vector_weight", "pagerank_weight", "community_weight"]
         for i, w in enumerate(weights):
             if not 0.0 <= w <= 1.0:
-                weight_names = ["vector_weight", "text_weight", "pagerank_weight", "community_weight"]
                 raise ValueError(f"{weight_names[i]} must be between 0 and 1, got {w}")
 
         total = sum(weights)
         if not 0.99 <= total <= 1.01:
             raise ValueError(
                 f"Hybrid weights must sum to 1.0, got {total:.3f} "
-                f"(vector={self.vector_weight}, text={self.text_weight}, "
+                f"(vector={self.vector_weight}, "
                 f"pagerank={self.pagerank_weight}, community={self.community_weight})"
             )
 

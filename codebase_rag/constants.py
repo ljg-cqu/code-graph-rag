@@ -3457,6 +3457,12 @@ class MCPToolName(StrEnum):
     # Project understanding
     GET_PROJECT_STRUCTURE = "get_project_structure"
     GET_IMPORT_DEPENDENCIES = "get_import_dependencies"
+    # Advanced graph algorithms
+    COMMUNITY_SUMMARY = "community_summary"
+    ANALYZE_PATH = "analyze_path"
+    FIND_SIMILAR_FUNCTIONS = "find_similar_functions"
+    FIND_BOTTLENECKS = "find_bottlenecks"
+    EXPAND_CONTEXT = "expand_context"
 
 
 # (H) MCP transport selection

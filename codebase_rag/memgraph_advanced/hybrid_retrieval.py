@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -12,6 +13,70 @@ if TYPE_CHECKING:
     from ..embeddings.protocols import EmbeddingProviderProtocol
     from ..services import QueryProtocol
     from ..vector_backend import VectorBackend
+
+# Module-level shared dependencies (NOT the retriever itself)
+_SHARED_EMBEDDING_PROVIDER: EmbeddingProviderProtocol | None = None
+_PROVIDER_LOCK = threading.Lock()
+
+
+def get_shared_embedding_provider() -> EmbeddingProviderProtocol:
+    """Get or create shared embedding provider instance.
+
+    This avoids redundant provider initialization (API key validation,
+    model loading, etc.) across multiple HybridRetriever instances.
+    """
+    global _SHARED_EMBEDDING_PROVIDER
+
+    if _SHARED_EMBEDDING_PROVIDER is None:
+        with _PROVIDER_LOCK:
+            if _SHARED_EMBEDDING_PROVIDER is None:
+                from ..config import settings
+                from ..embeddings import get_embedding_provider
+
+                config = settings.active_embedding_config
+                _SHARED_EMBEDDING_PROVIDER = get_embedding_provider(
+                    provider=config.provider,
+                    model_id=config.model_id,
+                )
+
+    return _SHARED_EMBEDDING_PROVIDER
+
+
+def reset_shared_embedding_provider() -> None:
+    """Reset shared provider (e.g., when configuration changes)."""
+    global _SHARED_EMBEDDING_PROVIDER
+    with _PROVIDER_LOCK:
+        _SHARED_EMBEDDING_PROVIDER = None
+
+
+def create_hybrid_retriever(graph_ingestor: QueryProtocol) -> HybridRetriever:
+    """Factory function that creates HybridRetriever with shared dependencies.
+
+    This is the recommended way to create HybridRetriever instances.
+    Shares vector_backend and embedding_provider across all instances,
+    avoiding redundant initialization while allowing proper context manager
+    usage for graph_ingestor.
+
+    Args:
+        graph_ingestor: MemgraphIngestor instance (use as context manager)
+
+    Returns:
+        HybridRetriever configured with shared dependencies
+
+    Example:
+        with MemgraphIngestor(...) as ingestor:
+            retriever = create_hybrid_retriever(ingestor)
+            results = retriever.search("query")
+    """
+    from ..config import settings
+    from ..vector_backend import get_shared_backend
+
+    return HybridRetriever(
+        graph_ingestor=graph_ingestor,
+        vector_backend=get_shared_backend(),
+        embedding_provider=get_shared_embedding_provider(),
+        config=settings.hybrid_retrieval_config,
+    )
 
 
 def _coerce_str(value: object, default: str = "") -> str:

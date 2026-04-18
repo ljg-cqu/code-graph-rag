@@ -55,7 +55,7 @@ from codebase_rag.types_defs import (
     MCPToolSchema,
     QueryResultDict,
 )
-from codebase_rag.utils.dependencies import has_semantic_dependencies
+from codebase_rag.utils.dependencies import has_embedding_provider
 from codebase_rag.vector_store import delete_project_embeddings
 
 type ValidationScope = Literal["all", "sections", "claims"]
@@ -116,18 +116,20 @@ class MCPToolsRegistry:
 
         self._rag_agent: Agent | None = None
 
-        self._semantic_search_tool = None
-        self._semantic_search_available = False
+        # Semantic search is now always available with fallback chain
+        # (HybridRetriever -> Direct vector -> Keyword fallback)
+        from codebase_rag.tools.semantic_search import create_semantic_search_tool
 
-        if has_semantic_dependencies():
-            from codebase_rag.tools.semantic_search import (
-                create_semantic_search_tool,
-            )
+        self._semantic_search_tool = create_semantic_search_tool()
+        self._semantic_search_available = True
 
-            self._semantic_search_tool = create_semantic_search_tool()
-            self._semantic_search_available = True
+        # Log which embedding mode is available
+        if has_embedding_provider():
+            logger.info("Semantic search initialized with embedding provider")
         else:
-            logger.info(lg.MCP_SEMANTIC_NOT_AVAILABLE)
+            logger.info(
+                "Semantic search initialized with keyword fallback (no embedding provider)"
+            )
 
         self._tools: dict[str, ToolMetadata] = {
             cs.MCPToolName.LIST_PROJECTS: ToolMetadata(
@@ -533,6 +535,136 @@ class MCPToolsRegistry:
             ),
             handler=self.index_documents,
             returns_json=True,
+        )
+
+        # Advanced graph algorithm tools
+        self._tools[cs.MCPToolName.COMMUNITY_SUMMARY] = ToolMetadata(
+            name=cs.MCPToolName.COMMUNITY_SUMMARY,
+            description=td.MCP_TOOLS[cs.MCPToolName.COMMUNITY_SUMMARY],
+            input_schema=MCPInputSchema(
+                type=cs.MCPSchemaType.OBJECT,
+                properties={
+                    cs.MCPToolName.QUESTION: MCPInputSchemaProperty(
+                        type=cs.MCPSchemaType.STRING,
+                        description="Question to answer using community summaries",
+                    ),
+                    cs.MCPToolName.TOP_K: MCPInputSchemaProperty(
+                        type=cs.MCPSchemaType.INTEGER,
+                        description="Number of top communities to consider",
+                        default=3,
+                    ),
+                },
+                required=["question"],
+            ),
+            handler=self.community_summary,
+            returns_json=False,
+        )
+
+        self._tools[cs.MCPToolName.ANALYZE_PATH] = ToolMetadata(
+            name=cs.MCPToolName.ANALYZE_PATH,
+            description=td.MCP_TOOLS[cs.MCPToolName.ANALYZE_PATH],
+            input_schema=MCPInputSchema(
+                type=cs.MCPSchemaType.OBJECT,
+                properties={
+                    "source": MCPInputSchemaProperty(
+                        type=cs.MCPSchemaType.STRING,
+                        description="Source function qualified name (e.g., 'main')",
+                    ),
+                    "target": MCPInputSchemaProperty(
+                        type=cs.MCPSchemaType.STRING,
+                        description="Target function qualified name (e.g., 'database.connect')",
+                    ),
+                    "max_paths": MCPInputSchemaProperty(
+                        type=cs.MCPSchemaType.INTEGER,
+                        description="Maximum number of paths to find",
+                        default=3,
+                    ),
+                    "max_length": MCPInputSchemaProperty(
+                        type=cs.MCPSchemaType.INTEGER,
+                        description="Maximum path length",
+                        default=10,
+                    ),
+                },
+                required=["source", "target"],
+            ),
+            handler=self.analyze_path,
+            returns_json=False,
+        )
+
+        self._tools[cs.MCPToolName.FIND_SIMILAR_FUNCTIONS] = ToolMetadata(
+            name=cs.MCPToolName.FIND_SIMILAR_FUNCTIONS,
+            description=td.MCP_TOOLS[cs.MCPToolName.FIND_SIMILAR_FUNCTIONS],
+            input_schema=MCPInputSchema(
+                type=cs.MCPSchemaType.OBJECT,
+                properties={
+                    "function_name": MCPInputSchemaProperty(
+                        type=cs.MCPSchemaType.STRING,
+                        description="Qualified name of the function to find similar ones for",
+                    ),
+                    "min_similarity": MCPInputSchemaProperty(
+                        type=cs.MCPSchemaType.NUMBER,
+                        description="Minimum Jaccard similarity threshold",
+                        default=0.3,
+                    ),
+                    "limit": MCPInputSchemaProperty(
+                        type=cs.MCPSchemaType.INTEGER,
+                        description="Maximum number of results",
+                        default=10,
+                    ),
+                },
+                required=["function_name"],
+            ),
+            handler=self.find_similar_functions,
+            returns_json=False,
+        )
+
+        self._tools[cs.MCPToolName.FIND_BOTTLENECKS] = ToolMetadata(
+            name=cs.MCPToolName.FIND_BOTTLENECKS,
+            description=td.MCP_TOOLS[cs.MCPToolName.FIND_BOTTLENECKS],
+            input_schema=MCPInputSchema(
+                type=cs.MCPSchemaType.OBJECT,
+                properties={
+                    "function_qn": MCPInputSchemaProperty(
+                        type=cs.MCPSchemaType.STRING,
+                        description="Optional: restrict to bottlenecks related to this function",
+                    ),
+                    "threshold": MCPInputSchemaProperty(
+                        type=cs.MCPSchemaType.NUMBER,
+                        description="Betweenness centrality threshold",
+                        default=0.01,
+                    ),
+                    "limit": MCPInputSchemaProperty(
+                        type=cs.MCPSchemaType.INTEGER,
+                        description="Maximum number of results",
+                        default=20,
+                    ),
+                },
+                required=[],
+            ),
+            handler=self.find_bottlenecks,
+            returns_json=False,
+        )
+
+        self._tools[cs.MCPToolName.EXPAND_CONTEXT] = ToolMetadata(
+            name=cs.MCPToolName.EXPAND_CONTEXT,
+            description=td.MCP_TOOLS[cs.MCPToolName.EXPAND_CONTEXT],
+            input_schema=MCPInputSchema(
+                type=cs.MCPSchemaType.OBJECT,
+                properties={
+                    "node_id": MCPInputSchemaProperty(
+                        type=cs.MCPSchemaType.INTEGER,
+                        description="Node ID to expand context from",
+                    ),
+                    "max_depth": MCPInputSchemaProperty(
+                        type=cs.MCPSchemaType.INTEGER,
+                        description="Maximum BFS traversal depth",
+                        default=3,
+                    ),
+                },
+                required=["node_id"],
+            ),
+            handler=self.expand_context,
+            returns_json=False,
         )
 
     @property
@@ -1075,6 +1207,52 @@ class MCPToolsRegistry:
         except Exception as e:
             logger.error(f"Document indexing failed: {e}")
             return {"success": False, "error": str(e)}
+
+    # Advanced graph algorithm handlers
+    async def community_summary(self, question: str, top_k: int = 3) -> str:
+        """Generate query-focused summary using community detection."""
+        from codebase_rag.tools.graph_algorithms_tools import community_summary
+
+        return await community_summary(question=question, top_communities=top_k)
+
+    async def analyze_path(
+        self, source: str, target: str, max_paths: int = 3, max_length: int = 10
+    ) -> str:
+        """Analyze call paths between two functions."""
+        from codebase_rag.tools.graph_algorithms_tools import analyze_path
+
+        return await analyze_path(
+            source=source, target=target, max_paths=max_paths, max_length=max_length
+        )
+
+    async def find_similar_functions(
+        self, function_name: str, min_similarity: float = 0.3, limit: int = 10
+    ) -> str:
+        """Find functions similar to a given function."""
+        from codebase_rag.tools.graph_algorithms_tools import find_similar_functions
+
+        return await find_similar_functions(
+            function_name=function_name, min_similarity=min_similarity, limit=limit
+        )
+
+    async def find_bottlenecks(
+        self,
+        function_qn: str | None = None,
+        threshold: float = 0.01,
+        limit: int = 20,
+    ) -> str:
+        """Find bottleneck functions using betweenness centrality."""
+        from codebase_rag.tools.graph_algorithms_tools import find_bottlenecks
+
+        return await find_bottlenecks(
+            function_qn=function_qn, threshold=threshold, limit=limit
+        )
+
+    async def expand_context(self, node_id: int, max_depth: int = 3) -> str:
+        """Expand context around a node using BFS traversal."""
+        from codebase_rag.tools.graph_algorithms_tools import expand_context
+
+        return await expand_context(node_id=node_id, max_depth=max_depth)
 
     def get_tool_schemas(self) -> list[MCPToolSchema]:
         return [

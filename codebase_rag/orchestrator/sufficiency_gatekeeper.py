@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import TypedDict
 
+from loguru import logger
+
 from codebase_rag.tools.tool_descriptions import AgenticToolName
 
 from .investigation_tracker import InvestigationState
@@ -37,20 +39,35 @@ def evaluate_sufficiency(
         )
 
     if reqs.requires_vector:
-        if AgenticToolName.SEMANTIC_SEARCH not in state.tool_failures:
-            if AgenticToolName.SEMANTIC_SEARCH not in state.tools_used:
-                return False, (
-                    "CRITICAL: You must use `semantic_search` first to find relevant candidates by intent. "
-                    "This is the recommended entry point for functional and structural queries."
-                )
+        # ENHANCED: Require semantic_search usage regardless of whether it failed
+        # Empty results still count as satisfying the requirement
+        if AgenticToolName.SEMANTIC_SEARCH not in state.tools_used:
+            return False, (
+                "CRITICAL: You must use `semantic_search` first to find relevant candidates by intent. "
+                "This is the recommended entry point for functional and structural queries."
+            )
+
+        # If it was used but returned 0 results, warn but don't block
+        if AgenticToolName.SEMANTIC_SEARCH in state.tool_failures:
+            logger.warning(
+                "semantic_search returned empty results. "
+                "Consider trying a different query or using fallback methods."
+            )
 
     if reqs.requires_graph:
-        if AgenticToolName.QUERY_GRAPH not in state.tool_failures:
-            if AgenticToolName.QUERY_GRAPH not in state.tools_used:
-                return False, (
-                    "CRITICAL: You must use `query_graph` to understand structural relationships "
-                    "between code elements."
-                )
+        # ENHANCED: Require query_graph usage regardless of whether it failed
+        if AgenticToolName.QUERY_GRAPH not in state.tools_used:
+            return False, (
+                "CRITICAL: You must use `query_graph` to understand structural relationships "
+                "between code elements."
+            )
+
+        # If it was used but returned 0 results, warn but don't block
+        if AgenticToolName.QUERY_GRAPH in state.tool_failures:
+            logger.warning(
+                "query_graph returned empty results. "
+                "The graph may not contain the expected relationships."
+            )
 
     if reqs.requires_file_read:
         all_file_tools_failed = (

@@ -155,8 +155,9 @@ def get_vector_backend(is_document: bool = False) -> VectorBackend:
     return MemgraphBackend(is_document=is_document)
 
 
-# Global backend instance (lazy initialization)
+# Global backend instances (lazy initialization)
 _BACKEND_INSTANCE: VectorBackend | None = None
+_DOC_BACKEND_INSTANCE: VectorBackend | None = None
 
 
 def get_shared_backend() -> VectorBackend:
@@ -175,9 +176,27 @@ def get_shared_backend() -> VectorBackend:
     return _BACKEND_INSTANCE
 
 
+def get_shared_backend_for_documents() -> VectorBackend:
+    """Get shared document backend instance.
+
+    Creates document backend on first call, reuses on subsequent calls.
+
+    Returns:
+        Shared VectorBackend instance for documents
+    """
+    global _DOC_BACKEND_INSTANCE
+    if _DOC_BACKEND_INSTANCE is None:
+        _DOC_BACKEND_INSTANCE = get_vector_backend(is_document=True)
+        _DOC_BACKEND_INSTANCE.initialize()
+    return _DOC_BACKEND_INSTANCE
+
+
 def close_shared_backend() -> None:
     """Close and cleanup the shared backend instance."""
-    global _BACKEND_INSTANCE
+    global _BACKEND_INSTANCE, _DOC_BACKEND_INSTANCE
     if _BACKEND_INSTANCE is not None:
         _BACKEND_INSTANCE.close()
         _BACKEND_INSTANCE = None
+    if _DOC_BACKEND_INSTANCE is not None:
+        _DOC_BACKEND_INSTANCE.close()
+        _DOC_BACKEND_INSTANCE = None

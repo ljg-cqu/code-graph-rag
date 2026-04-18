@@ -116,46 +116,74 @@ class GraphNavigator:
             lines = [f"Call hierarchy for '{qualified_name}' (depth={depth}):"]
 
             if direction in ("callers", "both"):
-                callers_query = (
-                    "MATCH path = (caller:Function|Method)-[:CALLS*1..$depth]->(target) "
-                    "WHERE target.qualified_name = $qn "
-                    "RETURN DISTINCT caller.qualified_name AS qualified_name, "
-                    "caller.name AS name, length(path) AS depth "
-                    "ORDER BY depth, caller.qualified_name"
-                )
+                # ENHANCED: Query with PageRank and community scoring for relevance ranking
+                callers_query = """
+                MATCH path = (caller:Function|Method)-[:CALLS*1..$depth]->(target)
+                WHERE target.qualified_name = $qn
+                RETURN DISTINCT
+                    caller.qualified_name AS qualified_name,
+                    caller.name AS name,
+                    length(path) AS depth,
+                    COALESCE(caller.pagerank_score, 0.1) AS pagerank,
+                    COALESCE(caller.community_importance, 0.0) AS community_importance,
+                    caller.docstring AS docstring
+                ORDER BY (pagerank * 0.7 + community_importance * 0.3) DESC, depth ASC
+                LIMIT 50
+                """
                 callers = await asyncio.to_thread(
                     self.ingestor.fetch_all,
                     callers_query,
                     {"qn": qualified_name, "depth": depth},
                 )
-                lines.append(f"\nCallers ({len(callers)}):")
+                lines.append(f"\nCallers ({len(callers)}, ranked by importance):")
                 if callers:
                     for row in callers:
                         d = row.get("depth", "?")
                         qn = row.get("qualified_name", "unknown")
-                        lines.append(f"  {'  ' * (d - 1)}[depth {d}] {qn}")
+                        pr = row.get("pagerank", 0)
+                        ci = row.get("community_importance", 0)
+                        importance = pr * 0.7 + ci * 0.3
+                        ds = row.get("docstring", "")
+                        docstring_preview = f" - {ds[:60]}..." if ds else ""
+                        lines.append(
+                            f"  {'  ' * (d - 1)}[depth {d}, importance: {importance:.3f}] {qn}{docstring_preview}"
+                        )
                 else:
                     lines.append("  (none)")
 
             if direction in ("callees", "both"):
-                callees_query = (
-                    "MATCH path = (target)-[:CALLS*1..$depth]->(callee:Function|Method) "
-                    "WHERE target.qualified_name = $qn "
-                    "RETURN DISTINCT callee.qualified_name AS qualified_name, "
-                    "callee.name AS name, length(path) AS depth "
-                    "ORDER BY depth, callee.qualified_name"
-                )
+                # ENHANCED: Query with PageRank and community scoring for relevance ranking
+                callees_query = """
+                MATCH path = (target)-[:CALLS*1..$depth]->(callee:Function|Method)
+                WHERE target.qualified_name = $qn
+                RETURN DISTINCT
+                    callee.qualified_name AS qualified_name,
+                    callee.name AS name,
+                    length(path) AS depth,
+                    COALESCE(callee.pagerank_score, 0.1) AS pagerank,
+                    COALESCE(callee.community_importance, 0.0) AS community_importance,
+                    callee.docstring AS docstring
+                ORDER BY (pagerank * 0.7 + community_importance * 0.3) DESC, depth ASC
+                LIMIT 50
+                """
                 callees = await asyncio.to_thread(
                     self.ingestor.fetch_all,
                     callees_query,
                     {"qn": qualified_name, "depth": depth},
                 )
-                lines.append(f"\nCallees ({len(callees)}):")
+                lines.append(f"\nCallees ({len(callees)}, ranked by importance):")
                 if callees:
                     for row in callees:
                         d = row.get("depth", "?")
                         qn = row.get("qualified_name", "unknown")
-                        lines.append(f"  {'  ' * (d - 1)}[depth {d}] {qn}")
+                        pr = row.get("pagerank", 0)
+                        ci = row.get("community_importance", 0)
+                        importance = pr * 0.7 + ci * 0.3
+                        ds = row.get("docstring", "")
+                        docstring_preview = f" - {ds[:60]}..." if ds else ""
+                        lines.append(
+                            f"  {'  ' * (d - 1)}[depth {d}, importance: {importance:.3f}] {qn}{docstring_preview}"
+                        )
                 else:
                     lines.append("  (none)")
 
