@@ -30,8 +30,8 @@ from codebase_rag.constants import (
     SupportedLanguage,
 )
 from codebase_rag.graph_updater import GraphUpdater
-from codebase_rag.language_spec import get_language_spec
 from codebase_rag.json_ingestion import handle_json_update_event
+from codebase_rag.language_spec import get_language_spec
 from codebase_rag.parser_loader import load_parsers
 from codebase_rag.services import QueryProtocol
 from codebase_rag.services.graph_service import MemgraphIngestor
@@ -876,9 +876,12 @@ class UnifiedWatcherManager:
 
     def start(self) -> None:
         """Start the background file system observer."""
+        from codebase_rag.utils.shutdown_manager import shutdown_manager
+
         self.observer = Observer()
         self.observer.schedule(self.event_handler, str(self.repo_path), recursive=True)
         self.observer.start()
+        shutdown_manager.register_handler(self.stop, priority=5)
         logger.info(f"Realtime watcher started for {self.repo_path}")
 
     def stop(self) -> None:

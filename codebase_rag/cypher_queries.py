@@ -122,7 +122,6 @@ RETURN d.name AS dir_name, d.path AS dir_path,
        count(DISTINCT f) AS file_count,
        count(DISTINCT func) AS function_count,
        count(DISTINCT cls) AS class_count
-ORDER BY d.path
 """
 
 

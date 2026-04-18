@@ -34,6 +34,7 @@ from . import constants as cs
 from . import exceptions as ex
 from . import logs as ls
 from .config import ModelConfig, load_cgrignore_patterns, settings
+from .utils.shutdown_manager import shutdown_manager
 from .context_compressor import ContextCompressor
 from .models import AppContext
 from .orchestrator import (
@@ -964,6 +965,10 @@ def _handle_models_command(
 
     catalog = build_dynamic_model_catalog()
 
+    if arg == "debug":
+        _display_models_debug(catalog, current_model_config)
+        return
+
     if arg is None:
         _display_models_table(catalog, current_model_config)
         return
@@ -1059,6 +1064,84 @@ def _display_models_table(
     app_context.console.print(
         style("Usage: /model <provider>:<model_id> to switch", cs.Color.YELLOW, cs.StyleModifier.NONE)
     )
+
+
+def _display_models_debug(
+    catalog: dict[str, list[DynamicModelInfo]],
+    current_model_config: ModelConfig | None = None,
+) -> None:
+    """Display debugging information about model discovery and configuration."""
+    from .providers.base import PROVIDER_REGISTRY
+    from .config import API_KEY_INFO, LOCAL_PROVIDERS
+    import os
+
+    console = app_context.console
+    console.print("[bold yellow]Model Debugging Information[/bold yellow]")
+    console.print()
+
+    # Provider registry
+    console.print("[bold cyan]Provider Registry:[/bold cyan]")
+    for provider, cls in PROVIDER_REGISTRY.items():
+        console.print(f"  {provider}: {cls.__name__}")
+    console.print()
+
+    # API key info
+    console.print("[bold cyan]API Key Environment Variables:[/bold cyan]")
+    for provider, info in API_KEY_INFO.items():
+        env_var = info['env_var']
+        has_key = os.environ.get(env_var) is not None
+        console.print(f"  {provider}: {env_var} {'✅' if has_key else '❌'}")
+    console.print()
+
+    # Local providers
+    console.print(f"[bold cyan]Local Providers:[/bold cyan] {', '.join(LOCAL_PROVIDERS)}")
+    console.print()
+
+    # Environment variables for custom providers
+    console.print("[bold cyan]Custom Provider API Keys:[/bold cyan]")
+    custom_keys = []
+    for key in os.environ:
+        if key.endswith('_API_KEY') and key not in {info['env_var'] for info in API_KEY_INFO.values()}:
+            custom_keys.append(key)
+    if custom_keys:
+        for key in sorted(custom_keys):
+            # Hide actual key values
+            value = os.environ[key]
+            masked = '****' + value[-4:] if len(value) > 4 else '****'
+            console.print(f"  {key}: {masked}")
+    else:
+        console.print("  None")
+    console.print()
+
+    # Catalog statistics
+    console.print("[bold cyan]Catalog Statistics:[/bold cyan]")
+    total_models = sum(len(models) for models in catalog.values())
+    console.print(f"  Total providers: {len(catalog)}")
+    console.print(f"  Total models: {total_models}")
+    configured = sum(1 for models in catalog.values() for m in models if m.is_configured)
+    console.print(f"  Configured models: {configured}")
+    console.print()
+
+    # Current model configuration
+    current_config = current_model_config or settings.active_orchestrator_config
+    console.print(f"[bold cyan]Current Model Config:[/bold cyan]")
+    console.print(f"  Provider: {current_config.provider}")
+    console.print(f"  Model ID: {current_config.model_id}")
+    console.print(f"  Endpoint: {current_config.endpoint or '(default)'}")
+    console.print(f"  API Key present: {'✅' if current_config.api_key and current_config.api_key != cs.DEFAULT_API_KEY else '❌'}")
+    console.print()
+
+    # Detailed model list
+    console.print("[bold cyan]Detailed Model List:[/bold cyan]")
+    for provider, models in catalog.items():
+        console.print(f"  [bold]{provider}[/bold]:")
+        for model in models:
+            status = '✅' if model.is_configured else '❌'
+            source = model.source
+            ctx = model.context_window
+            endpoint = model.endpoint or '(default)'
+            console.print(f"    {status} {model.model_id} (ctx={ctx}, source={source}, endpoint={endpoint})")
+        console.print()
 
 
 def _create_model_from_string(
@@ -1410,20 +1493,16 @@ async def _run_interactive_loop(
     _shutdown_requested = False
     _current_processing_task: asyncio.Task | None = None
 
-    def _handle_interrupt() -> None:
+    def _handle_sigint() -> None:
         """Handle SIGINT by cancelling current processing or exiting."""
         nonlocal _shutdown_requested
 
         if _shutdown_requested:
-            # Second interrupt - force exit regardless of state
+            # Second interrupt - force exit with cleanup
             app_context.console.print(f"\n{style(cs.MSG_FORCE_EXIT, cs.Color.RED)}")
-            try:
-                loop.remove_signal_handler(signal.SIGINT)
-                loop.remove_signal_handler(signal.SIGTERM)
-            except (NotImplementedError, RuntimeError):
-                pass
-            sys.exit(1)
-
+            shutdown_manager.initiate_shutdown(signal.SIGINT)
+            # initiate_shutdown will call sys.exit, but just in case:
+            return
         _shutdown_requested = True
 
         # Cancel processing task if active
@@ -1436,10 +1515,14 @@ async def _run_interactive_loop(
         # binding handle the first interrupt, but track that shutdown was
         # requested so second Ctrl+C forces exit
 
+    def _handle_sigterm() -> None:
+        """Handle SIGTERM by initiating graceful shutdown."""
+        shutdown_manager.initiate_shutdown(signal.SIGTERM)
+
     # Install signal handlers
     try:
-        loop.add_signal_handler(signal.SIGINT, _handle_interrupt)
-        loop.add_signal_handler(signal.SIGTERM, _handle_interrupt)
+        loop.add_signal_handler(signal.SIGINT, _handle_sigint)
+        loop.add_signal_handler(signal.SIGTERM, _handle_sigterm)
     except (NotImplementedError, RuntimeError):
         # Windows or loop already closed
         pass

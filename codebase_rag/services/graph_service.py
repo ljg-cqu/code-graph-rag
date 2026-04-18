@@ -14,6 +14,7 @@ from loguru import logger
 
 import mgclient
 from codebase_rag.config import settings
+from ..utils.shutdown_manager import shutdown_manager
 from codebase_rag.types_defs import CursorProtocol, ResultValue
 
 from .. import exceptions as ex
@@ -232,6 +233,8 @@ class MemgraphIngestor:
             )
 
         logger.info(ls.MG_CONNECTED)
+        # Register cleanup handler for graceful shutdown
+        shutdown_manager.register_handler(self._cleanup_on_shutdown, priority=20)
         return self
 
     def __exit__(
@@ -264,6 +267,22 @@ class MemgraphIngestor:
                 except Exception:
                     pass
                 logger.info(ls.MG_DISCONNECTED)
+
+    def _cleanup_on_shutdown(self) -> None:
+        """Cleanup resources on shutdown."""
+        try:
+            self.flush_all()
+        except Exception as e:
+            logger.error(f"Failed to flush during shutdown: {e}")
+        if self._executor:
+            self._executor.shutdown(wait=False, cancel_futures=True)
+            self._executor = None
+        if self.conn:
+            try:
+                self.conn.close()
+            except Exception:
+                pass
+            logger.info(ls.MG_DISCONNECTED)
 
     async def __aenter__(self) -> MemgraphIngestor:
         import asyncio

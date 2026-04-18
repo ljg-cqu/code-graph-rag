@@ -20,7 +20,7 @@ from ..config import settings
 from . import tool_descriptions as td
 
 if TYPE_CHECKING:
-    from ..services.graph_service import MemgraphIngestor
+    from ..services import QueryProtocol
 
 
 class _NotSupportedClient:
@@ -38,7 +38,7 @@ class DocumentAnalyzer:
     def __init__(
         self,
         project_root: str,
-        doc_graph: MemgraphIngestor | None = None,
+        doc_graph: QueryProtocol | None = None,
     ) -> None:
         """Initialize document analyzer.
 

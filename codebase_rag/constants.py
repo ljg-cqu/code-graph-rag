@@ -347,6 +347,7 @@ UI_MODELS_USAGE = """[bold yellow]Usage: /models [provider]
   /models google   - Show Google models only
   /models azure    - Show Azure OpenAI models only
   /models ollama   - Show Ollama (local) models only
+  /models debug    - Show debugging information
   /models help     - Show this help[/bold yellow]"""
 UI_MODELS_INVALID_PROVIDER = (
     "[bold red]Provider '{provider}' not found. "

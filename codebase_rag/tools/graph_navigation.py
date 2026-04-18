@@ -236,7 +236,9 @@ class GraphNavigator:
             total_classes = 0
             if results:
                 lines.append("\nGraph metadata:")
-                for row in results:
+                # Sort by directory path for consistent output
+                sorted_results = sorted(results, key=lambda row: row.get("dir_path") or "")
+                for row in sorted_results:
                     dir_path = row.get("dir_path") or "(root)"
                     fc = row.get("file_count", 0)
                     func_c = row.get("function_count", 0)
