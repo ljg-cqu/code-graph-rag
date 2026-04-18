@@ -59,32 +59,60 @@ class HybridRetriever:
         embedding_provider: EmbeddingProviderProtocol | None = None,
         config: HybridRetrievalConfig | None = None,
     ) -> None:
+        # Validate required dependencies
+        if graph_ingestor is None:
+            raise ValueError("graph_ingestor is required for HybridRetriever")
+        if vector_backend is None:
+            raise ValueError("vector_backend is required for HybridRetriever")
+        if embedding_provider is None:
+            raise ValueError("embedding_provider is required for HybridRetriever")
+
+        # Validate vector backend health
+        if not vector_backend.health_check():
+            raise RuntimeError("Vector backend health check failed - connection not ready")
+
+        # Validate embedding provider
+        try:
+            test_embedding = embedding_provider.embed("test")
+            if not isinstance(test_embedding, list) or len(test_embedding) == 0:
+                raise ValueError("Embedding provider returned invalid embedding")
+        except Exception as e:
+            raise ValueError(f"Embedding provider validation failed: {e}")
+
         self.graph_ingestor = graph_ingestor
         self.vector_backend = vector_backend
         self.embedding_provider = embedding_provider
         self.config = config
 
     def search(self, query: str, top_k: int = 10) -> list[HybridSearchResult]:
-        if (
-            not self.vector_backend
-            or not self.embedding_provider
-            or not self.graph_ingestor
-        ):
-            return []
-
         from ..config import HybridRetrievalConfig
 
         cfg = self.config or HybridRetrievalConfig()
         query_embedding = self.embedding_provider.embed(query)
+
+        # Fetch more results than needed for filtering
         vector_pairs: list[tuple[int, float]] = self.vector_backend.search(
-            query_embedding, top_k=top_k * 2
+            query_embedding, top_k=top_k * 3
         )
 
         if not vector_pairs:
             return []
 
-        node_ids = [pair[0] for pair in vector_pairs]
-        similarity_map = {pair[0]: pair[1] for pair in vector_pairs}
+        # Early filter based on minimum similarity threshold
+        min_similarity = cfg.min_similarity_threshold
+        filtered_pairs = [
+            pair for pair in vector_pairs
+            if pair[1] >= min_similarity
+        ][:top_k * 2]  # Limit after filtering
+
+        if not filtered_pairs:
+            logger.debug(
+                f"All vector results below min_similarity_threshold={min_similarity}"
+            )
+            return []
+
+        node_ids = [pair[0] for pair in filtered_pairs]
+        similarity_map = {pair[0]: pair[1] for pair in filtered_pairs}
 
         metadata_cypher = """
         MATCH (n)

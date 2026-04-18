@@ -1,10 +1,30 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from codebase_rag.utils.dependencies import has_semantic_dependencies
+
+
+@dataclass
+class MockHybridSearchResult:
+    """Mock result matching HybridSearchResult interface."""
+
+    node_id: int
+    name: str
+    qualified_name: str
+    node_type: str
+    file_path: str
+    start_line: int
+    end_line: int
+    vector_score: float
+    text_score: float
+    pagerank_score: float
+    community_score: float
+    graph_score: float
+    combined_score: float
 
 
 @pytest.fixture(params=["asyncio"])
@@ -13,16 +33,56 @@ def anyio_backend(request: pytest.FixtureRequest) -> str:
 
 
 @pytest.fixture
-def mock_embed_code() -> MagicMock:
+def mock_hybrid_retriever() -> MagicMock:
+    """Create a mock HybridRetriever that returns sample results."""
     mock = MagicMock()
-    mock.return_value = [0.1] * 768
-    return mock
-
-
-@pytest.fixture
-def mock_search_embeddings() -> MagicMock:
-    mock = MagicMock()
-    mock.return_value = [(1, 0.95), (2, 0.85), (3, 0.75)]
+    mock.search.return_value = [
+        MockHybridSearchResult(
+            node_id=1,
+            name="func1",
+            qualified_name="project.module.func1",
+            node_type="Function",
+            file_path="project/module.py",
+            start_line=10,
+            end_line=20,
+            vector_score=0.95,
+            text_score=0.0,
+            pagerank_score=0.1,
+            community_score=0.0,
+            graph_score=0.1,
+            combined_score=0.95,
+        ),
+        MockHybridSearchResult(
+            node_id=2,
+            name="func2",
+            qualified_name="project.module.func2",
+            node_type="Method",
+            file_path="project/module.py",
+            start_line=25,
+            end_line=35,
+            vector_score=0.85,
+            text_score=0.0,
+            pagerank_score=0.1,
+            community_score=0.0,
+            graph_score=0.1,
+            combined_score=0.85,
+        ),
+        MockHybridSearchResult(
+            node_id=3,
+            name="func3",
+            qualified_name="project.module.func3",
+            node_type="Function",
+            file_path="project/module.py",
+            start_line=40,
+            end_line=50,
+            vector_score=0.75,
+            text_score=0.0,
+            pagerank_score=0.1,
+            community_score=0.0,
+            graph_score=0.1,
+            combined_score=0.75,
+        ),
+    ]
     return mock
 
 
@@ -68,18 +128,19 @@ def test_semantic_code_search_returns_empty_without_dependencies() -> None:
     not has_semantic_dependencies(), reason="semantic dependencies not installed"
 )
 def test_semantic_code_search_returns_formatted_results(
-    mock_embed_code: MagicMock,
-    mock_search_embeddings: MagicMock,
+    mock_hybrid_retriever: MagicMock,
     mock_ingestor: MagicMock,
 ) -> None:
     from codebase_rag.tools.semantic_search import semantic_code_search
 
     with (
-        patch("codebase_rag.embedder.embed_code", mock_embed_code),
-        patch("codebase_rag.vector_store.search_embeddings", mock_search_embeddings),
         patch(
             "codebase_rag.services.graph_service.MemgraphIngestor",
             return_value=mock_ingestor,
+        ),
+        patch(
+            "codebase_rag.memgraph_advanced.HybridRetriever",
+            return_value=mock_hybrid_retriever,
         ),
     ):
         results = semantic_code_search("find authentication code", top_k=3)
@@ -94,62 +155,71 @@ def test_semantic_code_search_returns_formatted_results(
 @pytest.mark.skipif(
     not has_semantic_dependencies(), reason="semantic dependencies not installed"
 )
-def test_semantic_code_search_calls_embed_code_with_query(
-    mock_embed_code: MagicMock,
-    mock_search_embeddings: MagicMock,
+def test_semantic_code_search_calls_retriever_with_query(
+    mock_hybrid_retriever: MagicMock,
     mock_ingestor: MagicMock,
 ) -> None:
     from codebase_rag.tools.semantic_search import semantic_code_search
 
     with (
-        patch("codebase_rag.embedder.embed_code", mock_embed_code),
-        patch("codebase_rag.vector_store.search_embeddings", mock_search_embeddings),
         patch(
             "codebase_rag.services.graph_service.MemgraphIngestor",
             return_value=mock_ingestor,
         ),
+        patch(
+            "codebase_rag.memgraph_advanced.HybridRetriever",
+            return_value=mock_hybrid_retriever,
+        ),
     ):
         semantic_code_search("database operations")
 
-    mock_embed_code.assert_called_once_with("database operations")
+    mock_hybrid_retriever.search.assert_called_once_with("database operations", top_k=5)
 
 
 @pytest.mark.skipif(
     not has_semantic_dependencies(), reason="semantic dependencies not installed"
 )
 def test_semantic_code_search_passes_top_k_to_search(
-    mock_embed_code: MagicMock,
-    mock_search_embeddings: MagicMock,
+    mock_hybrid_retriever: MagicMock,
     mock_ingestor: MagicMock,
 ) -> None:
     from codebase_rag.tools.semantic_search import semantic_code_search
 
     with (
-        patch("codebase_rag.embedder.embed_code", mock_embed_code),
-        patch("codebase_rag.vector_store.search_embeddings", mock_search_embeddings),
         patch(
             "codebase_rag.services.graph_service.MemgraphIngestor",
             return_value=mock_ingestor,
         ),
+        patch(
+            "codebase_rag.memgraph_advanced.HybridRetriever",
+            return_value=mock_hybrid_retriever,
+        ),
     ):
         semantic_code_search("file handling", top_k=10)
 
-    mock_search_embeddings.assert_called_once_with([0.1] * 768, top_k=10)
+    mock_hybrid_retriever.search.assert_called_once_with("file handling", top_k=10)
 
 
 @pytest.mark.skipif(
     not has_semantic_dependencies(), reason="semantic dependencies not installed"
 )
 def test_semantic_code_search_returns_empty_when_no_matches(
-    mock_embed_code: MagicMock,
+    mock_ingestor: MagicMock,
 ) -> None:
     from codebase_rag.tools.semantic_search import semantic_code_search
 
-    mock_search_empty = MagicMock(return_value=[])
+    mock_retriever_empty = MagicMock()
+    mock_retriever_empty.search.return_value = []
 
     with (
-        patch("codebase_rag.embedder.embed_code", mock_embed_code),
-        patch("codebase_rag.vector_store.search_embeddings", mock_search_empty),
+        patch(
+            "codebase_rag.services.graph_service.MemgraphIngestor",
+            return_value=mock_ingestor,
+        ),
+        patch(
+            "codebase_rag.memgraph_advanced.HybridRetriever",
+            return_value=mock_retriever_empty,
+        ),
     ):
         results = semantic_code_search("nonexistent functionality")
 
@@ -159,12 +229,22 @@ def test_semantic_code_search_returns_empty_when_no_matches(
 @pytest.mark.skipif(
     not has_semantic_dependencies(), reason="semantic dependencies not installed"
 )
-def test_semantic_code_search_handles_exception(mock_embed_code: MagicMock) -> None:
+def test_semantic_code_search_handles_exception(mock_ingestor: MagicMock) -> None:
     from codebase_rag.tools.semantic_search import semantic_code_search
 
-    mock_embed_code.side_effect = Exception("Embedding failed")
+    mock_retriever_error = MagicMock()
+    mock_retriever_error.search.side_effect = Exception("Search failed")
 
-    with patch("codebase_rag.embedder.embed_code", mock_embed_code):
+    with (
+        patch(
+            "codebase_rag.services.graph_service.MemgraphIngestor",
+            return_value=mock_ingestor,
+        ),
+        patch(
+            "codebase_rag.memgraph_advanced.HybridRetriever",
+            return_value=mock_retriever_error,
+        ),
+    ):
         results = semantic_code_search("some query")
 
     assert results == []
@@ -174,19 +254,67 @@ def test_semantic_code_search_handles_exception(mock_embed_code: MagicMock) -> N
     not has_semantic_dependencies(), reason="semantic dependencies not installed"
 )
 def test_semantic_code_search_preserves_score_order(
-    mock_embed_code: MagicMock,
     mock_ingestor: MagicMock,
 ) -> None:
     from codebase_rag.tools.semantic_search import semantic_code_search
 
-    mock_search = MagicMock(return_value=[(3, 0.99), (1, 0.80), (2, 0.70)])
+    mock_retriever = MagicMock()
+    mock_retriever.search.return_value = [
+        MockHybridSearchResult(
+            node_id=3,
+            name="func3",
+            qualified_name="project.module.func3",
+            node_type="Function",
+            file_path="project/module.py",
+            start_line=40,
+            end_line=50,
+            vector_score=0.99,
+            text_score=0.0,
+            pagerank_score=0.1,
+            community_score=0.0,
+            graph_score=0.1,
+            combined_score=0.99,
+        ),
+        MockHybridSearchResult(
+            node_id=1,
+            name="func1",
+            qualified_name="project.module.func1",
+            node_type="Function",
+            file_path="project/module.py",
+            start_line=10,
+            end_line=20,
+            vector_score=0.80,
+            text_score=0.0,
+            pagerank_score=0.1,
+            community_score=0.0,
+            graph_score=0.1,
+            combined_score=0.80,
+        ),
+        MockHybridSearchResult(
+            node_id=2,
+            name="func2",
+            qualified_name="project.module.func2",
+            node_type="Method",
+            file_path="project/module.py",
+            start_line=25,
+            end_line=35,
+            vector_score=0.70,
+            text_score=0.0,
+            pagerank_score=0.1,
+            community_score=0.0,
+            graph_score=0.1,
+            combined_score=0.70,
+        ),
+    ]
 
     with (
-        patch("codebase_rag.embedder.embed_code", mock_embed_code),
-        patch("codebase_rag.vector_store.search_embeddings", mock_search),
         patch(
             "codebase_rag.services.graph_service.MemgraphIngestor",
             return_value=mock_ingestor,
+        ),
+        patch(
+            "codebase_rag.memgraph_advanced.HybridRetriever",
+            return_value=mock_retriever,
         ),
     ):
         results = semantic_code_search("test query")
@@ -338,8 +466,7 @@ def test_create_get_function_source_tool_returns_tool() -> None:
 )
 @pytest.mark.anyio
 async def test_semantic_search_tool_formats_results(
-    mock_embed_code: MagicMock,
-    mock_search_embeddings: MagicMock,
+    mock_hybrid_retriever: MagicMock,
     mock_ingestor: MagicMock,
 ) -> None:
     from codebase_rag.tools.semantic_search import create_semantic_search_tool
@@ -347,11 +474,13 @@ async def test_semantic_search_tool_formats_results(
     tool = create_semantic_search_tool()
 
     with (
-        patch("codebase_rag.embedder.embed_code", mock_embed_code),
-        patch("codebase_rag.vector_store.search_embeddings", mock_search_embeddings),
         patch(
             "codebase_rag.services.graph_service.MemgraphIngestor",
             return_value=mock_ingestor,
+        ),
+        patch(
+            "codebase_rag.memgraph_advanced.HybridRetriever",
+            return_value=mock_hybrid_retriever,
         ),
     ):
         result = await tool.function("find handlers")
@@ -367,16 +496,23 @@ async def test_semantic_search_tool_formats_results(
 )
 @pytest.mark.anyio
 async def test_semantic_search_tool_handles_no_results(
-    mock_embed_code: MagicMock,
+    mock_ingestor: MagicMock,
 ) -> None:
     from codebase_rag.tools.semantic_search import create_semantic_search_tool
 
-    mock_search_empty = MagicMock(return_value=[])
+    mock_retriever_empty = MagicMock()
+    mock_retriever_empty.search.return_value = []
     tool = create_semantic_search_tool()
 
     with (
-        patch("codebase_rag.embedder.embed_code", mock_embed_code),
-        patch("codebase_rag.vector_store.search_embeddings", mock_search_empty),
+        patch(
+            "codebase_rag.services.graph_service.MemgraphIngestor",
+            return_value=mock_ingestor,
+        ),
+        patch(
+            "codebase_rag.memgraph_advanced.HybridRetriever",
+            return_value=mock_retriever_empty,
+        ),
     ):
         result = await tool.function("nonexistent")
 

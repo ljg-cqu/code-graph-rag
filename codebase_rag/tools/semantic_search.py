@@ -6,10 +6,7 @@ from pydantic_ai import Tool
 from .. import constants as cs
 from .. import exceptions as ex
 from .. import logs as ls
-from ..cypher_queries import (
-    CYPHER_GET_FUNCTION_SOURCE_LOCATION,
-    build_nodes_by_ids_query,
-)
+from ..cypher_queries import CYPHER_GET_FUNCTION_SOURCE_LOCATION
 from ..types_defs import SemanticSearchResult
 from ..utils.dependencies import has_semantic_dependencies
 from . import tool_descriptions as td
@@ -22,52 +19,44 @@ def semantic_code_search(query: str, top_k: int = 5) -> list[SemanticSearchResul
 
     try:
         from ..config import settings
-        from ..embedder import embed_code
+        from ..embeddings import get_embedding_provider
+        from ..memgraph_advanced import HybridRetriever
         from ..services.graph_service import MemgraphIngestor
-        from ..vector_store import search_embeddings
+        from ..vector_backend import get_shared_backend
 
-        query_embedding = embed_code(query)
-
-        # Use unified top_k setting if not specified
         effective_top_k = top_k if top_k > 0 else settings.VECTOR_SEARCH_TOP_K
-        search_results = search_embeddings(query_embedding, top_k=effective_top_k)
 
-        if not search_results:
-            logger.info(ls.SEMANTIC_NO_MATCH.format(query=query))
-            return []
-
-        node_ids = [node_id for node_id, _ in search_results]
+        config = settings.active_embedding_config
+        provider = get_embedding_provider(
+            provider=config.provider,
+            model_id=config.model_id,
+        )
 
         with MemgraphIngestor(
             host=settings.MEMGRAPH_HOST,
             port=settings.MEMGRAPH_PORT,
             batch_size=cs.SEMANTIC_BATCH_SIZE,
         ) as ingestor:
-            cypher_query = build_nodes_by_ids_query(node_ids)
-            params = {str(i): node_id for i, node_id in enumerate(node_ids)}
-            results = ingestor._execute_query(cypher_query, params)
+            retriever = HybridRetriever(
+                graph_ingestor=ingestor,
+                vector_backend=get_shared_backend(),
+                embedding_provider=provider,
+                config=settings.hybrid_retrieval_config,
+            )
 
-            results_map = {res["node_id"]: res for res in results}
+            hybrid_results = retriever.search(query, top_k=effective_top_k)
 
             formatted_results: list[SemanticSearchResult] = []
-            for node_id, score in search_results:
-                if node_id in results_map:
-                    result = results_map[node_id]
-                    result_type = result["type"]
-                    type_str = (
-                        result_type[0]
-                        if isinstance(result_type, list) and result_type
-                        else cs.SEMANTIC_TYPE_UNKNOWN
+            for result in hybrid_results:
+                formatted_results.append(
+                    SemanticSearchResult(
+                        node_id=result.node_id,
+                        qualified_name=result.qualified_name,
+                        name=result.name,
+                        type=result.node_type,
+                        similarity=round(result.combined_score, 3),
                     )
-                    formatted_results.append(
-                        SemanticSearchResult(
-                            node_id=node_id,
-                            qualified_name=str(result["qualified_name"]),
-                            name=str(result["name"]),
-                            type=type_str,
-                            similarity=round(score, 3),
-                        )
-                    )
+                )
 
             logger.info(
                 ls.SEMANTIC_FOUND.format(count=len(formatted_results), query=query)

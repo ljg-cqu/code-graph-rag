@@ -229,6 +229,28 @@ class HybridRetrievalConfig:
     community_weight: float = 0.05
     top_k: int = 10
     max_context_depth: int = 2
+    min_similarity_threshold: float = 0.1
+
+    def __post_init__(self) -> None:
+        """Validate that weights are in valid range and sum approximately to 1.0."""
+        weights = [
+            self.vector_weight,
+            self.text_weight,
+            self.pagerank_weight,
+            self.community_weight,
+        ]
+        for i, w in enumerate(weights):
+            if not 0.0 <= w <= 1.0:
+                weight_names = ["vector_weight", "text_weight", "pagerank_weight", "community_weight"]
+                raise ValueError(f"{weight_names[i]} must be between 0 and 1, got {w}")
+
+        total = sum(weights)
+        if not 0.99 <= total <= 1.01:
+            raise ValueError(
+                f"Hybrid weights must sum to 1.0, got {total:.3f} "
+                f"(vector={self.vector_weight}, text={self.text_weight}, "
+                f"pagerank={self.pagerank_weight}, community={self.community_weight})"
+            )
 
 
 @dataclass
@@ -296,9 +318,9 @@ class AppConfig(BaseSettings):
 
     @property
     def hybrid_retrieval_config(self) -> HybridRetrievalConfig:
-        """Get hybrid retrieval configuration instance."""
+        """Get hybrid retrieval configuration instance aligned with VECTOR_SEARCH_TOP_K."""
         if not self._hybrid_retrieval_config:
-            self._hybrid_retrieval_config = HybridRetrievalConfig()
+            self._hybrid_retrieval_config = HybridRetrievalConfig(top_k=self.VECTOR_SEARCH_TOP_K)
         return self._hybrid_retrieval_config
 
     @property
