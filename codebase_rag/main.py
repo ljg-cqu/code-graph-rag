@@ -30,6 +30,7 @@ from pydantic_ai import (
     ToolCallPart,
     ToolDenied,
 )
+from pydantic_ai.usage import UsageLimits
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
@@ -42,7 +43,9 @@ from . import logs as ls
 from . import tool_errors as te
 from .config import ModelConfig, load_cgrignore_patterns, settings
 from .context_compressor import ContextCompressor
+from .graph_updater import GraphUpdater
 from .models import AppContext
+from .models_dynamic import DynamicModelInfo
 from .orchestrator import (
     ConcurrencyEligibilityClassifier,
     SubAgentOrchestrator,
@@ -97,7 +100,6 @@ from .types_defs import (
     ConfirmationToolNames,
     CreateFileArgs,
     GraphData,
-    ModelInfo,
     RawToolArgs,
     ReplaceCodeArgs,
     ShellCommandArgs,
@@ -560,6 +562,26 @@ async def run_optimization_loop(
     )
 
 
+def _cleanup_unprocessed_tool_calls(message_history: list) -> None:
+    """Remove unprocessed tool call parts from message history.
+
+    When a user cancels mid-execution, tool calls may be in the history
+    without corresponding results. Pydantic-ai rejects new prompts in
+    this state, so we must clean up before the next interaction.
+    """
+    from pydantic_ai.messages import ModelRequest, ToolCallPart
+
+    cleaned = []
+    for msg in message_history:
+        if isinstance(msg, ModelRequest):
+            parts = [p for p in msg.parts if not isinstance(p, ToolCallPart)]
+            if parts:
+                cleaned.append(ModelRequest(parts=parts))
+        else:
+            cleaned.append(msg)
+    message_history[:] = cleaned
+
+
 async def run_with_cancellation[T](
     coro: Coroutine[None, None, T], timeout: float | None = None
 ) -> T | CancelledResult:
@@ -727,10 +749,14 @@ async def _run_agent_response_loop(
                     message_history=message_history,
                     deferred_tool_results=deferred_results,
                     model=model_override,
+                    usage_limits=UsageLimits(request_limit=settings.AGENT_REQUEST_LIMIT),
                 ),
             )
 
         if isinstance(response, CancelledResult):
+            # Clean up any unprocessed tool calls from message history
+            # to allow the next prompt to work correctly
+            _cleanup_unprocessed_tool_calls(message_history)
             log_session_event(config.cancelled_log)
             app_context.session.cancelled = True
             break
@@ -1110,7 +1136,7 @@ def _display_models_table(
             # Source attribution for env-configured models
             if model_info.source != "static":
                 line.append(
-                    f" - Configured from .env", style="green"
+                    " - Configured from .env", style="green"
                 )
 
             if is_current:
@@ -1189,7 +1215,7 @@ def _display_models_debug(
 
     # Current model configuration
     current_config = current_model_config or settings.active_orchestrator_config
-    console.print(f"[bold cyan]Current Model Config:[/bold cyan]")
+    console.print("[bold cyan]Current Model Config:[/bold cyan]")
     console.print(f"  Provider: {current_config.provider}")
     console.print(f"  Model ID: {current_config.model_id}")
     console.print(f"  Endpoint: {current_config.endpoint or '(default)'}")
@@ -1265,7 +1291,7 @@ def _get_dynamic_model_info(provider: str, model_id: str) -> DynamicModelInfo | 
 
     Returns the DynamicModelInfo if found in catalog, or None.
     """
-    from .models_dynamic import DynamicModelInfo, build_dynamic_model_catalog
+    from .models_dynamic import build_dynamic_model_catalog
 
     catalog = build_dynamic_model_catalog()
     models = catalog.get(provider, [])
@@ -1846,10 +1872,10 @@ async def _run_interactive_loop(
                             dry_run=normalized_parallel_config.dry_run,
                         )
                         parallel_result = aggregator.consolidate()
-                        
+
                         # RECORD: Successful forced parallel execution
                         concurrency_classifier.record_execution_result(task_type, success=True)
-                        
+
                         summary_label = (
                             "plan generated"
                             if normalized_parallel_config.dry_run
@@ -1936,10 +1962,10 @@ async def _run_interactive_loop(
                             dry_run=normalized_parallel_config.dry_run,
                         )
                         parallel_result = aggregator.consolidate()
-                        
+
                         # RECORD: Successful classifier-approved parallel execution
                         concurrency_classifier.record_execution_result(task_type, success=True)
-                        
+
                         summary_label = (
                             "plan generated"
                             if normalized_parallel_config.dry_run
@@ -2616,7 +2642,13 @@ def main_single_query(repo_path: str, batch_size: int, question: str) -> None:
 
     with connect_memgraph(batch_size) as ingestor:
         rag_agent, _, _ = _initialize_services_and_agent(repo_path, ingestor)
-        response = asyncio.run(rag_agent.run(question, message_history=[]))
+        response = asyncio.run(
+            rag_agent.run(
+                question,
+                message_history=[],
+                usage_limits=UsageLimits(request_limit=settings.AGENT_REQUEST_LIMIT),
+            )
+        )
         print(response.output)  # noqa: T201
 
 

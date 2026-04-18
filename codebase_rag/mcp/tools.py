@@ -6,6 +6,7 @@ from typing import Literal, cast
 
 from loguru import logger
 from pydantic_ai import Agent
+from pydantic_ai.usage import UsageLimits
 from rich.console import Console
 
 from codebase_rag import constants as cs
@@ -544,11 +545,11 @@ class MCPToolsRegistry:
             input_schema=MCPInputSchema(
                 type=cs.MCPSchemaType.OBJECT,
                 properties={
-                    cs.MCPToolName.QUESTION: MCPInputSchemaProperty(
+                    cs.MCPParamName.QUESTION: MCPInputSchemaProperty(
                         type=cs.MCPSchemaType.STRING,
                         description="Question to answer using community summaries",
                     ),
-                    cs.MCPToolName.TOP_K: MCPInputSchemaProperty(
+                    cs.MCPParamName.TOP_K: MCPInputSchemaProperty(
                         type=cs.MCPSchemaType.INTEGER,
                         description="Number of top communities to consider",
                         default=3,
@@ -834,7 +835,11 @@ class MCPToolsRegistry:
     async def ask_agent(self, question: str) -> dict[str, str]:
         logger.info(lg.MCP_ASK_AGENT.format(question=question))
         try:
-            response = await self.rag_agent.run(question, message_history=[])
+            response = await self.rag_agent.run(
+                question,
+                message_history=[],
+                usage_limits=UsageLimits(request_limit=settings.AGENT_REQUEST_LIMIT),
+            )
             return {"output": str(response.output)}
         except Exception as e:
             logger.error(lg.MCP_ASK_AGENT_ERROR.format(error=e))

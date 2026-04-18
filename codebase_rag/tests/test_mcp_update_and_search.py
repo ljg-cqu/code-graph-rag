@@ -2,8 +2,10 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic_ai.usage import UsageLimits
 
 from codebase_rag import constants as cs
+from codebase_rag.config import settings
 from codebase_rag.mcp.client import query_mcp_server
 from codebase_rag.mcp.tools import MCPToolsRegistry
 
@@ -78,65 +80,28 @@ class TestUpdateRepository:
 
 
 class TestSemanticSearchRegistration:
-    def test_semantic_search_not_registered_without_deps(
-        self, temp_project_root: Path
-    ) -> None:
+    def test_semantic_search_always_registered(self, temp_project_root: Path) -> None:
+        """Semantic search is always registered with fallback chain."""
+        mock_ingestor = MagicMock()
+        mock_cypher_gen = MagicMock()
+
+        registry = MCPToolsRegistry(
+            project_root=str(temp_project_root),
+            ingestor=mock_ingestor,
+            cypher_gen=mock_cypher_gen,
+        )
+
+        assert cs.MCPToolName.SEMANTIC_SEARCH in registry._tools
+        assert registry._semantic_search_available is True
+
+    async def test_semantic_search_calls_tool(self, temp_project_root: Path) -> None:
+        """Semantic search tool can be called."""
         mock_ingestor = MagicMock()
         mock_cypher_gen = MagicMock()
 
         with patch(
-            "codebase_rag.mcp.tools.has_semantic_dependencies",
-            return_value=False,
-        ):
-            registry = MCPToolsRegistry(
-                project_root=str(temp_project_root),
-                ingestor=mock_ingestor,
-                cypher_gen=mock_cypher_gen,
-            )
-
-        assert cs.MCPToolName.SEMANTIC_SEARCH not in registry._tools
-        assert registry._semantic_search_available is False
-
-    def test_semantic_search_registered_with_deps(
-        self, temp_project_root: Path
-    ) -> None:
-        mock_ingestor = MagicMock()
-        mock_cypher_gen = MagicMock()
-
-        with (
-            patch(
-                "codebase_rag.mcp.tools.has_semantic_dependencies",
-                return_value=True,
-            ),
-            patch(
-                "codebase_rag.tools.semantic_search.create_semantic_search_tool"
-            ) as mock_create,
-        ):
-            mock_tool = MagicMock()
-            mock_create.return_value = mock_tool
-
-            registry = MCPToolsRegistry(
-                project_root=str(temp_project_root),
-                ingestor=mock_ingestor,
-                cypher_gen=mock_cypher_gen,
-            )
-
-            assert cs.MCPToolName.SEMANTIC_SEARCH in registry._tools
-            assert registry._semantic_search_available is True
-
-    async def test_semantic_search_calls_tool(self, temp_project_root: Path) -> None:
-        mock_ingestor = MagicMock()
-        mock_cypher_gen = MagicMock()
-
-        with (
-            patch(
-                "codebase_rag.mcp.tools.has_semantic_dependencies",
-                return_value=True,
-            ),
-            patch(
-                "codebase_rag.tools.semantic_search.create_semantic_search_tool"
-            ) as mock_create,
-        ):
+            "codebase_rag.tools.semantic_search.create_semantic_search_tool"
+        ) as mock_create:
             mock_tool = MagicMock()
             mock_tool.function = AsyncMock(return_value="result1, result2")
             mock_create.return_value = mock_tool
@@ -170,7 +135,9 @@ class TestAskAgent:
 
         assert result["output"] == "The auth module uses JWT tokens."
         mock_agent.run.assert_called_once_with(
-            "How is auth implemented?", message_history=[]
+            "How is auth implemented?",
+            message_history=[],
+            usage_limits=UsageLimits(request_limit=settings.AGENT_REQUEST_LIMIT),
         )
 
     async def test_ask_agent_error(self, mcp_registry: MCPToolsRegistry) -> None:
@@ -216,15 +183,11 @@ class TestRagAgentProperty:
         mock_ingestor = MagicMock()
         mock_cypher_gen = MagicMock()
 
-        with patch(
-            "codebase_rag.mcp.tools.has_semantic_dependencies",
-            return_value=False,
-        ):
-            registry = MCPToolsRegistry(
-                project_root=str(temp_project_root),
-                ingestor=mock_ingestor,
-                cypher_gen=mock_cypher_gen,
-            )
+        registry = MCPToolsRegistry(
+            project_root=str(temp_project_root),
+            ingestor=mock_ingestor,
+            cypher_gen=mock_cypher_gen,
+        )
 
         assert registry._rag_agent is None
 
@@ -243,15 +206,11 @@ class TestRagAgentProperty:
         mock_ingestor = MagicMock()
         mock_cypher_gen = MagicMock()
 
-        with patch(
-            "codebase_rag.mcp.tools.has_semantic_dependencies",
-            return_value=False,
-        ):
-            registry = MCPToolsRegistry(
-                project_root=str(temp_project_root),
-                ingestor=mock_ingestor,
-                cypher_gen=mock_cypher_gen,
-            )
+        registry = MCPToolsRegistry(
+            project_root=str(temp_project_root),
+            ingestor=mock_ingestor,
+            cypher_gen=mock_cypher_gen,
+        )
 
         with (
             patch("codebase_rag.mcp.tools.create_rag_orchestrator") as mock_create,
@@ -268,21 +227,14 @@ class TestRagAgentProperty:
             tools_arg = mock_create.call_args[1]["tools"]
             assert mock_tool in tools_arg
 
-    def test_rag_agent_includes_semantic_search_when_available(
-        self, temp_project_root: Path
-    ) -> None:
+    def test_rag_agent_includes_semantic_search(self, temp_project_root: Path) -> None:
+        """Semantic search is always included in rag_agent tools."""
         mock_ingestor = MagicMock()
         mock_cypher_gen = MagicMock()
 
-        with (
-            patch(
-                "codebase_rag.mcp.tools.has_semantic_dependencies",
-                return_value=True,
-            ),
-            patch(
-                "codebase_rag.tools.semantic_search.create_semantic_search_tool"
-            ) as mock_ss,
-        ):
+        with patch(
+            "codebase_rag.tools.semantic_search.create_semantic_search_tool"
+        ) as mock_ss:
             mock_ss_tool = MagicMock()
             mock_ss.return_value = mock_ss_tool
 
@@ -306,15 +258,11 @@ class TestRagAgentProperty:
         mock_ingestor = MagicMock()
         mock_cypher_gen = MagicMock()
 
-        with patch(
-            "codebase_rag.mcp.tools.has_semantic_dependencies",
-            return_value=False,
-        ):
-            registry = MCPToolsRegistry(
-                project_root=str(temp_project_root),
-                ingestor=mock_ingestor,
-                cypher_gen=mock_cypher_gen,
-            )
+        registry = MCPToolsRegistry(
+            project_root=str(temp_project_root),
+            ingestor=mock_ingestor,
+            cypher_gen=mock_cypher_gen,
+        )
 
         with (
             patch("codebase_rag.mcp.tools.create_rag_orchestrator") as mock_create,
@@ -345,7 +293,7 @@ class TestMainSingleQuery:
             patch("codebase_rag.main._setup_common_initialization"),
         ):
             mock_agent = MagicMock()
-            mock_init.return_value = (mock_agent, [])
+            mock_init.return_value = (mock_agent, [], None)
             mock_asyncio.run.return_value = mock_response
             mock_conn.return_value.__enter__ = MagicMock(return_value=MagicMock())
             mock_conn.return_value.__exit__ = MagicMock(return_value=False)
@@ -369,7 +317,7 @@ class TestMainSingleQuery:
             patch("codebase_rag.main.logger") as mock_logger,
         ):
             mock_agent = MagicMock()
-            mock_init.return_value = (mock_agent, [])
+            mock_init.return_value = (mock_agent, [], None)
             mock_asyncio.run.return_value = mock_response
             mock_conn.return_value.__enter__ = MagicMock(return_value=MagicMock())
             mock_conn.return_value.__exit__ = MagicMock(return_value=False)
