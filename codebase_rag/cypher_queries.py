@@ -14,6 +14,10 @@ OPTIONAL MATCH (json_root)-[:HAS_FIELD|HAS_VALUE|HAS_ELEMENT*]->(json_content)
 DETACH DELETE p, container, defined, json_root, json_content
 """
 
+# ─────────────────────────────────────────────────────────
+# EXAMPLE QUERIES FOR DEMONSTRATION
+# ─────────────────────────────────────────────────────────
+
 CYPHER_EXAMPLE_DECORATED_FUNCTIONS = f"""MATCH (n:Function|Method)
 WHERE ANY(d IN n.decorators WHERE toLower(d) IN ['flow', 'task'])
 RETURN n.name AS name, n.qualified_name AS qualified_name, labels(n) AS type
@@ -111,6 +115,85 @@ RETURN DISTINCT impl.qualified_name AS qualified_name, impl.name AS name,
        type(r[0]) AS relationship_type, m.path AS path, impl.start_line AS start_line
 ORDER BY impl.qualified_name
 """
+
+# ─────────────────────────────────────────────────────────
+# CYPHER QUERY TEMPLATES FOR FALLBACK GENERATION
+# ─────────────────────────────────────────────────────────
+# Pre-built parameterized Cypher queries for common patterns.
+# Used by QueryMethodOrchestrator when LLM-based generation fails.
+#
+# NOTE: All templates use WHERE IN clause for label filtering instead of
+# `|` union syntax (e.g., `Function|Class|Method`) because the WHERE IN
+# approach works correctly even when some labels don't exist in the graph.
+# Memgraph simply returns no nodes for non-existent labels.
+#
+# The three labels that always exist (Function, Class, Method) are listed
+# first for optimal query planning.
+
+CYPHER_QUERY_TEMPLATES: dict[str, tuple[str, dict[str, type]]] = {
+    "find_by_name": (
+        """
+        MATCH (n)
+        WHERE labels(n)[0] IN ['Function', 'Class', 'Method', 'Enum', 'Type',
+                                'Union', 'Interface', 'Contract', 'Library']
+          AND (n.name CONTAINS $keyword OR n.qualified_name CONTAINS $keyword)
+        RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
+               n.name AS name, labels(n)[0] AS type,
+               n.path AS file_path, n.start_line AS start_line,
+               n.end_line AS end_line
+        LIMIT $limit
+        """,
+        {"keyword": str, "limit": int},
+    ),
+    "find_by_docstring": (
+        """
+        MATCH (n)
+        WHERE labels(n)[0] IN ['Function', 'Class', 'Method']
+          AND n.docstring IS NOT NULL
+          AND n.docstring CONTAINS $keyword
+        RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
+               n.name AS name, labels(n)[0] AS type,
+               n.path AS file_path, n.docstring AS docstring
+        LIMIT $limit
+        """,
+        {"keyword": str, "limit": int},
+    ),
+    "find_dependencies": (
+        """
+        MATCH (n:Function|Class|Method)-[:CALLS]->(m)
+        WHERE n.qualified_name CONTAINS $keyword
+        RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
+               n.name AS name, labels(n)[0] AS type, n.path AS file_path,
+               id(m) AS target_id, m.qualified_name AS target_name
+        LIMIT $limit
+        """,
+        {"keyword": str, "limit": int},
+    ),
+    # find_callers_of and find_importers_of reference the existing constants
+    # which are parameterized queries (require $qn parameter)
+    "find_callers_of": (
+        CYPHER_FIND_CALLERS,
+        {"qn": str},
+    ),
+    "find_importers_of": (
+        CYPHER_FIND_IMPORTERS,
+        {"qn": str},
+    ),
+    # find_by_type uses {label} placeholder interpolated at runtime with NodeLabel validation
+    # Cypher doesn't support parameterized node labels, so string interpolation is required
+    "find_by_type": (
+        """
+        MATCH (n:{label})
+        WHERE n.project_name = $project
+        RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
+               n.name AS name, labels(n)[0] AS type, n.path AS file_path
+        LIMIT $limit
+        """,
+        # Note: {label} is interpolated at runtime, NOT via Cypher parameters
+        # Validated against NodeLabel enum before interpolation to prevent injection
+        {"label": str, "project": str, "limit": int},
+    ),
+}
 
 CYPHER_PROJECT_STRUCTURE = """
 MATCH (p:Project {name: $project_name})

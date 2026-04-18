@@ -422,7 +422,13 @@ class QueryRouter:
         self,
         request: QueryRequest,
     ) -> QueryResponse:
-        """Query code using QueryMethodOrchestrator for multi-method retrieval."""
+        """Query code using QueryMethodOrchestrator for multi-method retrieval.
+
+        Uses the synchronous wrapper for backward compatibility.
+        For async contexts, use query_async() instead.
+        """
+        import asyncio
+
         from ..retrieval import QueryMethodOrchestrator
 
         assert self.code_graph is not None, "code_graph must be available"
@@ -431,23 +437,80 @@ class QueryRouter:
             code_vector=self.code_vector,
         )
 
-        combined = orchestrator.execute(
+        # Use async version in event loop aware manner
+        try:
+            loop = asyncio.get_running_loop()
+            # We're in an async context, but this method is sync
+            # Use the synchronous wrapper
+            combined = orchestrator.execute(
+                query=request.question,
+                top_k=request.top_k,
+                max_methods=3,
+            )
+        except RuntimeError:
+            # No event loop running, safe to use asyncio.run
+            combined = asyncio.run(
+                orchestrator.execute_async(
+                    query=request.question,
+                    top_k=request.top_k,
+                    max_methods=3,
+                )
+            )
+
+        return self._build_orchestrator_response(request, combined)
+
+    async def _query_code_with_orchestrator_async(
+        self,
+        request: QueryRequest,
+    ) -> QueryResponse:
+        """Async version for use in async contexts (MCP server, pydantic-ai)."""
+        from ..retrieval import QueryMethodOrchestrator
+
+        assert self.code_graph is not None, "code_graph must be available"
+        orchestrator = QueryMethodOrchestrator(
+            code_graph=self.code_graph,
+            code_vector=self.code_vector,
+        )
+
+        combined = await orchestrator.execute_async(
             query=request.question,
             top_k=request.top_k,
             max_methods=3,
         )
 
+        return self._build_orchestrator_response(request, combined)
+
+    def _build_orchestrator_response(
+        self,
+        request: QueryRequest,
+        combined,
+    ) -> QueryResponse:
+        """Build QueryResponse from orchestrator results."""
         sources: list[Source] = []
         answer_parts: list[str] = ["**Code Results (multi-method):**\n"]
 
+        # Add integrity warnings if present
+        integrity_warnings = getattr(combined, "integrity_warnings", [])
+        if integrity_warnings:
+            answer_parts.append("⚠️ **Integrity Warnings:**")
+            for w in integrity_warnings[:3]:  # Limit to first 3
+                answer_parts.append(f"  - [{w.severity}] {w.item}: {w.issue}")
+            answer_parts.append("")
+
         for item in combined.items:
+            start_line = item.get("start_line")
+            end_line = item.get("end_line")
+            line_range = None
+            if start_line and end_line:
+                line_range = (start_line, end_line)
+
             sources.append(
                 Source(
                     type="code",
                     path=item.get("file_path", "unknown"),
                     node_type=item.get("type", "Unknown"),
                     qualified_name=item.get("qualified_name"),
-                    line_range=None,
+                    line_range=line_range,
                 )
             )
             score = item.get("combined_score", 0)
@@ -458,11 +521,17 @@ class QueryRouter:
                 f"[Score: {score:.2f}, Methods: {methods}]"
             )
 
+        warnings = list(combined.warnings)
+        if integrity_warnings:
+            warnings.extend(
+                f"[Integrity] {w.item}: {w.issue}" for w in integrity_warnings
+            )
+
         return QueryResponse(
             answer="\n".join(answer_parts),
             sources=sources,
             mode=request.mode,
-            warnings=combined.warnings,
+            warnings=warnings,
         )
 
     def _query_code_legacy(self, request: QueryRequest) -> QueryResponse:

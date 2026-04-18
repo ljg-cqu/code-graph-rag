@@ -1207,6 +1207,18 @@ class MemgraphIngestor:
         logger.debug(ls.MG_FETCH_QUERY, query=query, params=params)
         return self._execute_query(query, params)
 
+    async def fetch_all_async(
+        self, query: str, params: dict[str, PropertyValue] | None = None
+    ) -> list[ResultRow]:
+        """Async wrapper for fetch_all using asyncio.to_thread.
+
+        Required for async-native execution in the query orchestrator,
+        which runs inside async contexts (MCP server, pydantic-ai agent loop).
+        """
+        import asyncio
+
+        return await asyncio.to_thread(self.fetch_all, query, params)
+
     def execute_write(
         self, query: str, params: dict[str, PropertyValue] | None = None
     ) -> None:

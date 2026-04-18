@@ -310,8 +310,10 @@ class TestQueryRouter:
 
     def test_query_router_uses_hybrid_factory(self):
         """Verify QueryRouter uses create_hybrid_retriever factory."""
-        from codebase_rag.memgraph_advanced import create_hybrid_retriever
-        with patch('codebase_rag.shared.query_router.create_hybrid_retriever') as mock_factory:
+        with patch('codebase_rag.memgraph_advanced.create_hybrid_retriever') as mock_factory:
+            mock_retriever = Mock()
+            mock_retriever.search.return_value = []
+            mock_factory.return_value = mock_retriever
             router = QueryRouter(code_graph=Mock())
             request = QueryRequest(question="test", mode=QueryMode.CODE_ONLY)
             router.query(request)
@@ -380,3 +382,133 @@ class TestQueryRouterIsolation:
         assert len(sources) == 1
         assert sources[0].type == "code"
         assert sources[0].path == "src/auth.py"
+
+
+class TestQueryRouterAsyncOrchestrator:
+    """Tests for async orchestrator integration."""
+
+    def test_build_orchestrator_response_with_integrity_warnings(self):
+        """Orchestrator response includes integrity warnings."""
+        from dataclasses import dataclass, field
+        from typing import Any
+
+        from codebase_rag.retrieval.query_orchestrator import IntegrityWarning
+
+        @dataclass
+        class MockCombinedResult:
+            items: list[dict[str, Any]] = field(default_factory=list)
+            warnings: list[str] = field(default_factory=list)
+            integrity_warnings: list[IntegrityWarning] = field(default_factory=list)
+
+        router = QueryRouter(code_graph=Mock())
+        request = QueryRequest(question="test", mode=QueryMode.CODE_ONLY)
+
+        combined = MockCombinedResult(
+            items=[
+                {
+                    "qualified_name": "auth.login",
+                    "file_path": "auth.py",
+                    "type": "Function",
+                    "combined_score": 0.85,
+                    "found_by_methods": ["semantic_search"],
+                }
+            ],
+            integrity_warnings=[
+                IntegrityWarning(
+                    severity="soft",
+                    item="auth.login",
+                    issue="Line range exceeds file length",
+                    action="Re-index file",
+                )
+            ],
+        )
+
+        response = router._build_orchestrator_response(request, combined)
+
+        assert "Integrity Warnings" in response.answer
+        assert "auth.login" in response.answer
+        assert "Line range exceeds file length" in response.answer
+        assert any("Integrity" in w for w in response.warnings)
+
+    def test_build_orchestrator_response_without_integrity_warnings(self):
+        """Orchestrator response works without integrity warnings."""
+        from dataclasses import dataclass, field
+        from typing import Any
+
+        @dataclass
+        class MockCombinedResult:
+            items: list[dict[str, Any]] = field(default_factory=list)
+            warnings: list[str] = field(default_factory=list)
+            integrity_warnings: list = field(default_factory=list)
+
+        router = QueryRouter(code_graph=Mock())
+        request = QueryRequest(question="test", mode=QueryMode.CODE_ONLY)
+
+        combined = MockCombinedResult(
+            items=[
+                {
+                    "qualified_name": "auth.login",
+                    "file_path": "auth.py",
+                    "type": "Function",
+                    "combined_score": 0.85,
+                    "found_by_methods": ["semantic_search"],
+                }
+            ],
+        )
+
+        response = router._build_orchestrator_response(request, combined)
+
+        assert "Integrity Warnings" not in response.answer
+        assert "auth.login" in response.answer
+
+    def test_async_orchestrator_query(self):
+        """Async orchestrator query works in async context."""
+        import asyncio
+
+        mock_code = Mock()
+        mock_code.fetch_all.return_value = []
+
+        router = QueryRouter(code_graph=mock_code, code_vector=None)
+        request = QueryRequest(question="test query", mode=QueryMode.CODE_ONLY)
+
+        async def run_async():
+            return await router._query_code_with_orchestrator_async(request)
+
+        response = asyncio.run(run_async())
+
+        assert response.mode == QueryMode.CODE_ONLY
+        assert "Code Results" in response.answer
+
+    def test_build_orchestrator_response_includes_line_range(self):
+        """Orchestrator response includes line range in sources."""
+        from dataclasses import dataclass, field
+        from typing import Any
+
+        @dataclass
+        class MockCombinedResult:
+            items: list[dict[str, Any]] = field(default_factory=list)
+            warnings: list[str] = field(default_factory=list)
+            integrity_warnings: list = field(default_factory=list)
+
+        router = QueryRouter(code_graph=Mock())
+        request = QueryRequest(question="test", mode=QueryMode.CODE_ONLY)
+
+        combined = MockCombinedResult(
+            items=[
+                {
+                    "qualified_name": "auth.login",
+                    "file_path": "auth.py",
+                    "type": "Function",
+                    "start_line": 10,
+                    "end_line": 25,
+                    "combined_score": 0.9,
+                    "found_by_methods": ["semantic_search", "graph_traversal"],
+                }
+            ],
+        )
+
+        response = router._build_orchestrator_response(request, combined)
+
+        assert len(response.sources) == 1
+        assert response.sources[0].line_range == (10, 25)
+        assert "semantic_search, graph_traversal" in response.answer

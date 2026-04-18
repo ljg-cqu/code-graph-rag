@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from typing import TYPE_CHECKING, Protocol, cast
 
 from loguru import logger
@@ -13,6 +14,43 @@ from .base import EmbeddingProvider
 
 if TYPE_CHECKING:
     import torch
+
+# Module-level singleton state for preventing redundant model loads.
+# When OpenAI auth fails (401), the local fallback loads the model from
+# scratch each time. This singleton ensures the model is loaded once
+# and reused across all fallback invocations.
+_module_model_lock = threading.Lock()
+_module_model_instance: LocalEmbeddingProvider | None = None
+
+
+def get_local_embedding_provider(
+    model_id: str = "BAAI/bge-large-en-v1.5",
+    device: str = "cpu",
+) -> LocalEmbeddingProvider:
+    """Get or create the process-level singleton LocalEmbeddingProvider.
+
+    Thread-safe: uses module-level lock to prevent concurrent model loads.
+    The model is loaded once and reused across all fallback invocations,
+    eliminating the redundant loads observed when OpenAI auth fails.
+
+    Args:
+        model_id: HuggingFace model identifier. Defaults to "BAAI/bge-large-en-v1.5".
+        device: Device for inference (auto, cpu, cuda). Defaults to "cpu".
+
+    Returns:
+        The singleton LocalEmbeddingProvider instance.
+    """
+    global _module_model_instance
+    if _module_model_instance is not None:
+        return _module_model_instance
+    with _module_model_lock:
+        if _module_model_instance is None:
+            logger.info(f"Creating singleton LocalEmbeddingProvider with model {model_id}")
+            _module_model_instance = LocalEmbeddingProvider(
+                model_id=model_id, device=device
+            )
+            _module_model_instance._ensure_model_loaded()
+        return _module_model_instance
 
 
 class TokenizerOutput(Protocol):

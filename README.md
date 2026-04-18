@@ -1210,6 +1210,25 @@ EMBEDDING_PROJECT_ID=your-project-id
 - `GLOBAL_FILE_ACCESS_WRITE_REQUIRES_APPROVAL`: Require explicit approval for write operations outside the project repository (default: `true`)
 - `PARALLEL_INDEXING_WORKERS`: Default number of parallel workers for codebase indexing (default: `20`). Auto-optimized at runtime to never exceed available CPU cores or number of changed files. Set to `1` to disable parallel indexing entirely and run sequentially.
 
+### Query Method Optimization Configuration
+
+The query orchestrator uses multi-paradigm retrieval with adaptive sequencing for improved results and graceful degradation when backends fail.
+
+- `CGR_QUERY_INTENT_CONFIDENCE_THRESHOLD`: Minimum confidence score for intent-based method selection (0.0-1.0, default: `0.5`). Below this threshold, all available query methods are executed.
+- `CGR_QUERY_MIN_METHODS`: Minimum number of successful methods required before early termination (1-6, default: `2`). Higher values ensure more comprehensive results at the cost of latency.
+- `CGR_QUERY_CIRCUIT_BREAKER_THRESHOLD`: Number of consecutive failures before a query method is temporarily disabled (1-10, default: `3`). Prevents wasted effort on consistently failing backends.
+- `CGR_QUERY_INTEGRITY_CHECK_COUNT`: Number of top results to spot-check for graph-to-disk integrity (1-20, default: `5`). Verifies file existence and line number bounds.
+- `CGR_QUERY_ENABLE_INTEGRITY_CHECK`: Enable graph data integrity verification (default: `true`). Checks that graph metadata matches actual source files.
+- `CGR_QUERY_TEMPLATE_FALLBACK_ENABLED`: Enable template-based Cypher fallback when LLM generation fails (default: `true`). Uses pre-built parameterized queries for common patterns.
+
+**Features:**
+- **Adaptive Sequencing**: Executes primary methods first, falls back to secondary methods if results are insufficient
+- **Circuit Breaker**: Temporarily disables failing methods to prevent cascading failures
+- **Template Fallback**: Uses pre-built Cypher templates when LLM generation fails
+- **Integrity Verification**: Spot-checks that retrieved results reference valid files and line numbers
+- **Backend Health Coordination**: Consults health checks before selecting query methods
+- **Async-Native Execution**: Works correctly in async contexts (MCP server, pydantic-ai agent loop)
+
 ### Logging Configuration
 All logs are written to the terminal by default. You can control the log level via environment variable or CLI flag:
 

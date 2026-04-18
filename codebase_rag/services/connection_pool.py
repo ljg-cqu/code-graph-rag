@@ -206,6 +206,18 @@ class PooledMemgraphProxy:
             column_names = [desc.name for desc in cursor.description]
             return [dict[str, Any](zip(column_names, row)) for row in cursor.fetchall()]
 
+    async def fetch_all_async(
+        self, query: str, params: PropertyDict | None = None
+    ) -> list[ResultRow]:
+        """Async wrapper for fetch_all using asyncio.to_thread.
+
+        Required for async-native execution in the query orchestrator,
+        which runs inside async contexts (MCP server, pydantic-ai agent loop).
+        """
+        import asyncio
+
+        return await asyncio.to_thread(self.fetch_all, query, params)
+
     def execute_write(
         self, query: str, params: PropertyDict | None = None
     ) -> None:

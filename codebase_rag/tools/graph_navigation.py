@@ -117,8 +117,11 @@ class GraphNavigator:
 
             if direction in ("callers", "both"):
                 # ENHANCED: Query with PageRank and community scoring for relevance ranking
-                callers_query = """
-                MATCH path = (caller:Function|Method)-[:CALLS*1..$depth]->(target)
+                # NOTE: Memgraph does NOT support parameterized bounds in variable-length paths
+                # (e.g., [:CALLS*1..$depth] causes "Property map matching" error).
+                # Use string interpolation with validated integer to prevent injection.
+                callers_query = f"""
+                MATCH path = (caller:Function|Method)-[:CALLS*1..{depth}]->(target)
                 WHERE target.qualified_name = $qn
                 RETURN DISTINCT
                     caller.qualified_name AS qualified_name,
@@ -133,7 +136,7 @@ class GraphNavigator:
                 callers = await asyncio.to_thread(
                     self.ingestor.fetch_all,
                     callers_query,
-                    {"qn": qualified_name, "depth": depth},
+                    {"qn": qualified_name},
                 )
                 lines.append(f"\nCallers ({len(callers)}, ranked by importance):")
                 if callers:
@@ -153,8 +156,11 @@ class GraphNavigator:
 
             if direction in ("callees", "both"):
                 # ENHANCED: Query with PageRank and community scoring for relevance ranking
-                callees_query = """
-                MATCH path = (target)-[:CALLS*1..$depth]->(callee:Function|Method)
+                # NOTE: Memgraph does NOT support parameterized bounds in variable-length paths
+                # (e.g., [:CALLS*1..$depth] causes "Property map matching" error).
+                # Use string interpolation with validated integer to prevent injection.
+                callees_query = f"""
+                MATCH path = (target)-[:CALLS*1..{depth}]->(callee:Function|Method)
                 WHERE target.qualified_name = $qn
                 RETURN DISTINCT
                     callee.qualified_name AS qualified_name,
@@ -169,7 +175,7 @@ class GraphNavigator:
                 callees = await asyncio.to_thread(
                     self.ingestor.fetch_all,
                     callees_query,
-                    {"qn": qualified_name, "depth": depth},
+                    {"qn": qualified_name},
                 )
                 lines.append(f"\nCallees ({len(callees)}, ranked by importance):")
                 if callees:
@@ -306,8 +312,10 @@ class GraphNavigator:
         logger.info(ls.GRAPH_IMPORT_DEPS.format(path=module_path, depth=depth))
 
         try:
+            # NOTE: Memgraph does NOT support parameterized bounds in variable-length paths.
+            # Use string interpolation with validated integer to prevent injection.
             query = (
-                "MATCH path = (m:Module)-[:IMPORTS*1..$depth]->(dep:Module) "
+                f"MATCH path = (m:Module)-[:IMPORTS*1..{depth}]->(dep:Module) "
                 "WHERE m.qualified_name = $qn OR m.path = $qn "
                 "RETURN DISTINCT dep.qualified_name AS qualified_name, "
                 "dep.path AS path, length(path) AS depth "
@@ -316,7 +324,7 @@ class GraphNavigator:
             results = await asyncio.to_thread(
                 self.ingestor.fetch_all,
                 query,
-                {"qn": module_path, "depth": depth},
+                {"qn": module_path},
             )
 
             if not results:

@@ -619,6 +619,60 @@ class AppConfig(BaseSettings):
     QUERY_RESULT_MIN_ROWS: int = 5
     QUERY_RESULT_DIVERSITY_BUDGET_PCT: float = 0.15
 
+    # ─────────────────────────────────────────────────────────
+    # Query Method Optimization Configuration
+    # ─────────────────────────────────────────────────────────
+    # These settings control the enhanced query orchestrator:
+    # - Intent classification confidence threshold
+    # - Minimum methods required for sufficient results
+    # - Circuit breaker for failing methods
+    # - Graph data integrity verification
+
+    QUERY_INTENT_CONFIDENCE_THRESHOLD: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        validation_alias="CGR_QUERY_INTENT_CONFIDENCE_THRESHOLD",
+    )
+    """Minimum confidence score for intent-based method selection.
+    Below this threshold, all available methods are executed."""
+
+    QUERY_MIN_METHODS: int = Field(
+        default=2,
+        ge=1,
+        le=6,
+        validation_alias="CGR_QUERY_MIN_METHODS",
+    )
+    """Minimum number of successful methods required before early termination."""
+
+    QUERY_CIRCUIT_BREAKER_THRESHOLD: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        validation_alias="CGR_QUERY_CIRCUIT_BREAKER_THRESHOLD",
+    )
+    """Number of consecutive failures before a method is temporarily disabled."""
+
+    QUERY_INTEGRITY_CHECK_COUNT: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        validation_alias="CGR_QUERY_INTEGRITY_CHECK_COUNT",
+    )
+    """Number of top results to spot-check for graph-to-disk integrity."""
+
+    QUERY_ENABLE_INTEGRITY_CHECK: bool = Field(
+        default=True,
+        validation_alias="CGR_QUERY_ENABLE_INTEGRITY_CHECK",
+    )
+    """Enable graph data integrity verification (file existence, line bounds)."""
+
+    QUERY_TEMPLATE_FALLBACK_ENABLED: bool = Field(
+        default=True,
+        validation_alias="CGR_QUERY_TEMPLATE_FALLBACK_ENABLED",
+    )
+    """Enable template-based Cypher fallback when LLM generation fails."""
+
     # Visibility and logging
     LOG_TRUNCATION_DETAILS: bool = True
     RETURN_TRUNCATION_METADATA: bool = True

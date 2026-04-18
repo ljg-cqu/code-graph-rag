@@ -148,6 +148,17 @@ def _clean_cypher_response(response_text: str) -> str:
                     + query[return_pos:]
                 )
 
+    # Detect and discard trailing broken query fragments that leak past
+    # markdown extraction. LLMs sometimes concatenate two queries where
+    # the second starts with a fragment (no MATCH keyword at beginning).
+    # This happens when the LLM generates output like:
+    #   ```cypher MATCH (c:Class)...RETURN...; .qualified_name)...LIMIT 50;```
+    # After markdown extraction and semicolon splitting, the first query
+    # is valid but a trailing fragment without MATCH may remain.
+    if query and not query.lstrip().upper().startswith("MATCH"):
+        logger.warning(f"Discarding trailing Cypher fragment without MATCH: {query[:80]}")
+        return ""
+
     if not query.endswith(cs.CYPHER_SEMICOLON):
         query += cs.CYPHER_SEMICOLON
     return query
