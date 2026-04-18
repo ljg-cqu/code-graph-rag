@@ -160,6 +160,22 @@ class TestInvestigationTracker:
         state.record_tool(AgenticToolName.SEMANTIC_SEARCH, "auth logic", results_count=5)
         assert AgenticToolName.SEMANTIC_SEARCH not in state.tool_failures
 
+    def test_tracker_detects_duplicate_calls(self) -> None:
+        state = InvestigationState()
+        assert not state.is_duplicate("shell_command", "find . -name '*.py'")
+        state.record_tool("shell_command", "find . -name '*.py'")
+        assert state.is_duplicate("shell_command", "find . -name '*.py'")
+        assert not state.is_duplicate("shell_command", "find . -name '*.ts'")
+        assert not state.is_duplicate("read_file", "find . -name '*.py'")
+
+    def test_tracker_records_calls_for_duplicate_detection(self) -> None:
+        state = InvestigationState()
+        state.record_tool(AgenticToolName.READ_FILE, "main.py")
+        state.record_tool(AgenticToolName.READ_FILE, "utils.py")
+        assert state.is_duplicate(AgenticToolName.READ_FILE, "main.py")
+        assert state.is_duplicate(AgenticToolName.READ_FILE, "utils.py")
+        assert not state.is_duplicate(AgenticToolName.READ_FILE, "config.py")
+
 
 class TestParallelWorkerSufficiency:
     def test_parallel_worker_sufficiency_pass(self) -> None:

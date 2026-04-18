@@ -23,7 +23,13 @@ from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.shortcuts import print_formatted_text
-from pydantic_ai import DeferredToolRequests, DeferredToolResults, Tool, ToolDenied
+from pydantic_ai import (
+    DeferredToolRequests,
+    DeferredToolResults,
+    Tool,
+    ToolCallPart,
+    ToolDenied,
+)
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
@@ -33,8 +39,8 @@ from rich.text import Text
 from . import constants as cs
 from . import exceptions as ex
 from . import logs as ls
+from . import tool_errors as te
 from .config import ModelConfig, load_cgrignore_patterns, settings
-from .utils.shutdown_manager import shutdown_manager
 from .context_compressor import ContextCompressor
 from .models import AppContext
 from .orchestrator import (
@@ -73,7 +79,10 @@ from .tools.graph_navigation import (
     create_get_project_structure_tool,
 )
 from .tools.graph_query import create_graph_query_tool
-from .tools.python_inspector import PythonObjectInspector, create_inspect_python_object_tool
+from .tools.python_inspector import (
+    PythonObjectInspector,
+    create_inspect_python_object_tool,
+)
 from .tools.semantic_search import (
     create_get_function_source_tool,
     create_semantic_search_tool,
@@ -94,6 +103,7 @@ from .types_defs import (
     ShellCommandArgs,
     ToolArgs,
 )
+from .utils.shutdown_manager import shutdown_manager
 
 if TYPE_CHECKING:
     from prompt_toolkit.key_binding import KeyPressEvent
@@ -726,20 +736,45 @@ async def _run_agent_response_loop(
             break
 
         if isinstance(response.output, DeferredToolRequests):
+            deferred_results = DeferredToolResults()
+            non_duplicate_approvals: list[ToolCallPart] = []
+
             for call in response.output.approvals:
                 args = call.args_as_dict()
                 tool_name = call.tool_name
                 query_arg = _extract_tool_query_arg(tool_name, args)
-                state.record_tool(tool_name, query_arg)
+
+                if state.is_duplicate(tool_name, query_arg):
+                    logger.warning(
+                        ls.TOOL_DUPLICATE_DETECTED.format(
+                            tool_name=tool_name, query_arg=query_arg
+                        )
+                    )
+                    deferred_results.approvals[call.tool_call_id] = ToolDenied(
+                        te.TOOL_DUPLICATE_CALL.format(
+                            tool_name=tool_name, query_arg=query_arg
+                        )
+                    )
+                else:
+                    state.record_tool(tool_name, query_arg)
+                    non_duplicate_approvals.append(call)
 
             state.rounds_completed += 1
 
-            deferred_results = _process_tool_approvals(
-                response.output,
-                config.approval_prompt,
-                config.denial_default,
-                tool_names,
-            )
+            if non_duplicate_approvals:
+                filtered_requests = DeferredToolRequests(
+                    calls=response.output.calls,
+                    approvals=non_duplicate_approvals,
+                    metadata=response.output.metadata,
+                )
+                approval_results = _process_tool_approvals(
+                    filtered_requests,
+                    config.approval_prompt,
+                    config.denial_default,
+                    tool_names,
+                )
+                deferred_results.approvals.update(approval_results.approvals)
+
             new_msgs = response.new_messages()
             message_history.extend(new_msgs)
             _update_state_from_tool_returns(new_msgs, state)
@@ -1071,9 +1106,10 @@ def _display_models_debug(
     current_model_config: ModelConfig | None = None,
 ) -> None:
     """Display debugging information about model discovery and configuration."""
-    from .providers.base import PROVIDER_REGISTRY
-    from .config import API_KEY_INFO, LOCAL_PROVIDERS
     import os
+
+    from .config import API_KEY_INFO, LOCAL_PROVIDERS
+    from .providers.base import PROVIDER_REGISTRY
 
     console = app_context.console
     console.print("[bold yellow]Model Debugging Information[/bold yellow]")
@@ -1200,7 +1236,7 @@ def _get_dynamic_model_info(provider: str, model_id: str) -> DynamicModelInfo | 
 
     Returns the DynamicModelInfo if found in catalog, or None.
     """
-    from .models_dynamic import build_dynamic_model_catalog, DynamicModelInfo
+    from .models_dynamic import DynamicModelInfo, build_dynamic_model_catalog
 
     catalog = build_dynamic_model_catalog()
     models = catalog.get(provider, [])
@@ -2754,12 +2790,12 @@ def _create_watcher_manager(
     Returns:
         Configured UnifiedWatcherManager instance
     """
-    from .parser_loader import load_parsers
-
     from realtime_updater import (
         JSONChangeEventHandler,
         UnifiedWatcherManager,
     )
+
+    from .parser_loader import load_parsers
 
     parsers, queries = load_parsers()
 

@@ -58,6 +58,12 @@ COMMAND_REDIRECT_NOT_SUPPORTED = (
 CODE_ENTITY_NOT_FOUND = "Entity not found in graph."
 CODE_MISSING_LOCATION = "Graph entry is missing location data."
 
+# (H) Duplicate tool call errors
+TOOL_DUPLICATE_CALL = (
+    "Duplicate tool call rejected: '{tool_name}' with identical arguments was already executed. "
+    "Do not repeat the same tool call. Use the previous results or try a different approach."
+)
+
 # (H) File writer errors
 FILE_WRITER_SECURITY = (
     "Security risk: Attempted to create file outside of project root: {path}"

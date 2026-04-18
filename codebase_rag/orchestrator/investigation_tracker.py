@@ -20,6 +20,10 @@ class InvestigationState:
     files_read: list[str] = field(default_factory=list)
     graph_queries_run: int = 0
     tool_failures: set[str] = field(default_factory=set)
+    _recent_calls: list[tuple[str, str]] = field(default_factory=list, repr=False)
+
+    def is_duplicate(self, tool_name: str, query_arg: str) -> bool:
+        return (tool_name, query_arg) in self._recent_calls
 
     def record_tool(
         self, tool_name: str, query_arg: str = "", results_count: int = -1
@@ -31,6 +35,7 @@ class InvestigationState:
         """
         # ALWAYS record tool usage, even if it returned 0 results
         self.tools_used.add(tool_name)
+        self._recent_calls.append((tool_name, query_arg))
 
         if tool_name == AgenticToolName.QUERY_GRAPH:
             self.graph_queries_run += 1
