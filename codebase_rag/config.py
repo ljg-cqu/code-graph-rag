@@ -309,6 +309,7 @@ class AppConfig(BaseSettings):
     MEMGRAPH_QUERY_TIMEOUT: int = Field(default=120, gt=0)
     MEMGRAPH_USE_DYNAMIC_ALGORITHMS: bool | None = None
     AGENT_RETRIES: int = 3
+    AGENT_REQUEST_LIMIT: int | None = None
     ORCHESTRATOR_OUTPUT_RETRIES: int = 100
 
     @property

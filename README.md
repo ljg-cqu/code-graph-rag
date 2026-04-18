@@ -1209,6 +1209,7 @@ EMBEDDING_PROJECT_ID=your-project-id
 - `ENABLE_GLOBAL_FILE_ACCESS`: Enable access to files outside the project repository (default: `true`)
 - `GLOBAL_FILE_ACCESS_WRITE_REQUIRES_APPROVAL`: Require explicit approval for write operations outside the project repository (default: `true`)
 - `PARALLEL_INDEXING_WORKERS`: Default number of parallel workers for codebase indexing (default: `20`). Auto-optimized at runtime to never exceed available CPU cores or number of changed files. Set to `1` to disable parallel indexing entirely and run sequentially.
+- `AGENT_REQUEST_LIMIT`: Maximum LLM requests allowed in a single agent session (default: `None` for unlimited). Overrides the pydantic-ai default cap of 50 requests.
 
 ### Query Method Optimization Configuration
 

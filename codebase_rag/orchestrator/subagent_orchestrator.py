@@ -10,11 +10,11 @@ import io
 import time
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from codebase_rag.utils.thread_management import ManagedThreadPoolExecutor
 from typing import Any
 
 from loguru import logger
 from pydantic_ai import Agent, Tool
+from pydantic_ai.usage import UsageLimits
 from rich.console import Console
 
 from codebase_rag.config import ModelConfig, settings
@@ -53,6 +53,7 @@ from codebase_rag.tools.semantic_search import (
 )
 from codebase_rag.utils.atomic import AtomicBoolean
 from codebase_rag.utils.shutdown_manager import shutdown_manager
+from codebase_rag.utils.thread_management import ManagedThreadPoolExecutor
 
 from .dynamic_concurrency_controller import DynamicConcurrencyController
 from .investigation_tracker import InvestigationState
@@ -195,7 +196,11 @@ class ReadOnlySubAgent:
         state = InvestigationState.from_parallel_worker(worker_id=self._worker_index)
 
         response = asyncio.run(
-            self.agent.run(subtask.get("prompt", ""), message_history=[])
+            self.agent.run(
+                subtask.get("prompt", ""),
+                message_history=[],
+                usage_limits=UsageLimits(request_limit=settings.AGENT_REQUEST_LIMIT),
+            )
         )
 
         if hasattr(response, "new_messages"):

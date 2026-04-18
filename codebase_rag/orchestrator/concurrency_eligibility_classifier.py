@@ -11,6 +11,7 @@ from typing import cast
 
 from loguru import logger
 from pydantic_ai import Agent
+from pydantic_ai.usage import UsageLimits
 
 from codebase_rag.config import settings
 from codebase_rag.providers import get_provider_from_config
@@ -274,7 +275,9 @@ Safety Rules:
             )
 
         try:
-            result = await self.agent.run(prompt)
+            result = await self.agent.run(
+                prompt, usage_limits=UsageLimits(request_limit=settings.AGENT_REQUEST_LIMIT)
+            )
             result_data_raw = result.output
             if not isinstance(result_data_raw, dict):
                 return 0.0, "llm_invalid_output"

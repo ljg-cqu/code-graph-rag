@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 from pydantic_ai import Agent, DeferredToolRequests, Tool
+from pydantic_ai.usage import UsageLimits
 
 from .. import constants as cs
 from .. import exceptions as ex
@@ -235,7 +236,7 @@ class CypherGenerator:
             raise ex.LLMGenerationError(ex.LLM_INIT_CYPHER.format(error=e)) from e
 
     async def _run_query_prompt(self, prompt: str) -> str:
-        result = await self.agent.run(prompt)
+        result = await self.agent.run(prompt, usage_limits=UsageLimits(request_limit=settings.AGENT_REQUEST_LIMIT))
         if (
             not isinstance(result.output, str)
             or cs.CYPHER_MATCH_KEYWORD not in result.output.upper()
