@@ -14,6 +14,8 @@ if TYPE_CHECKING:
     from ..services import QueryProtocol
     from ..vector_backend import VectorBackend
 
+from ..config import settings
+
 # Module-level shared dependencies (NOT the retriever itself)
 _SHARED_EMBEDDING_PROVIDER: EmbeddingProviderProtocol | None = None
 _PROVIDER_LOCK = threading.Lock()
@@ -30,7 +32,6 @@ def get_shared_embedding_provider() -> EmbeddingProviderProtocol:
     if _SHARED_EMBEDDING_PROVIDER is None:
         with _PROVIDER_LOCK:
             if _SHARED_EMBEDDING_PROVIDER is None:
-                from ..config import settings
                 from ..embeddings import get_embedding_provider
 
                 config = settings.active_embedding_config
@@ -72,7 +73,6 @@ def create_hybrid_retriever(
             retriever = create_hybrid_retriever(ingestor)
             results = retriever.search("query")
     """
-    from ..config import settings
     from ..vector_backend import get_shared_backend
 
     return HybridRetriever(
