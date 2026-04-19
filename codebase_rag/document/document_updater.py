@@ -6,6 +6,7 @@ Pattern follows GraphUpdater from codebase_rag/graph_updater.py
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import math
 import re
 from datetime import UTC, datetime
@@ -1185,8 +1186,10 @@ class DocumentGraphUpdater:
             List of section info dicts with qualified_name, title, start_line, end_line, level
             (includes this section and all subsections)
         """
-        # Create hierarchical qualified name with line number to avoid collisions
-        section_qn = f"{parent_path}#L{section.start_line}:{section.title}"
+        # Create hierarchical qualified name with title hash for stability across edits
+        # Format: {parent_path}#sec_{title_hash[:8]}:{section.title}
+        title_hash = hashlib.sha256(section.title.encode()).hexdigest()[:8]
+        section_qn = f"{parent_path}#sec_{title_hash}:{section.title}"
         ingestor.ensure_node_batch(
             cs.NodeLabel.SECTION.value,
             {

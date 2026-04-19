@@ -37,9 +37,20 @@ class HealthChecker:
     ) -> int:
         cursor.execute(query, params)
         row = cursor.fetchone()
+        # Consume any remaining rows to allow safe connection close
+        HealthChecker._consume_all_results(cursor)
         if row is None:
             return 0
         return int(row[0])
+
+    @staticmethod
+    def _consume_all_results(cursor: mgclient.Cursor) -> None:
+        """Consume all pending results to allow safe connection close."""
+        try:
+            while cursor.fetchone() is not None:
+                pass
+        except Exception:
+            pass  # Ignore errors during cleanup
 
     def check_docker(self) -> HealthCheckResult:
         try:
@@ -125,14 +136,16 @@ class HealthChecker:
         finally:
             if cursor is not None:
                 try:
+                    # Consume any pending results before closing
+                    HealthChecker._consume_all_results(cursor)
                     cursor.close()
                 except Exception as e:
-                    logger.warning(f"Failed to close Memgraph cursor: {e}")
+                    logger.debug(f"Failed to close Memgraph cursor: {e}")
             if conn is not None:
                 try:
                     conn.close()
                 except Exception as e:
-                    logger.warning(f"Failed to close Memgraph connection: {e}")
+                    logger.debug(f"Failed to close Memgraph connection: {e}")
 
     def check_api_key(self, env_name: str, display_name: str) -> HealthCheckResult:
         value = os.getenv(env_name) or getattr(settings, env_name, None)
@@ -267,14 +280,16 @@ class HealthChecker:
         finally:
             if cursor is not None:
                 try:
+                    # Consume any pending results before closing
+                    HealthChecker._consume_all_results(cursor)
                     cursor.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to close Memgraph cursor: {e}")
             if conn is not None:
                 try:
                     conn.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to close Memgraph connection: {e}")
 
     def check_required_properties(self) -> HealthCheckResult:
         conn = None
@@ -309,14 +324,16 @@ class HealthChecker:
         finally:
             if cursor is not None:
                 try:
+                    # Consume any pending results before closing
+                    HealthChecker._consume_all_results(cursor)
                     cursor.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to close Memgraph cursor: {e}")
             if conn is not None:
                 try:
                     conn.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to close Memgraph connection: {e}")
 
     def check_embedding_correlation(self) -> HealthCheckResult:
         conn = None
@@ -358,6 +375,8 @@ class HealthChecker:
         finally:
             if cursor is not None:
                 try:
+                    # Consume any pending results before closing
+                    HealthChecker._consume_all_results(cursor)
                     cursor.close()
                 except Exception:
                     pass
@@ -415,14 +434,16 @@ class HealthChecker:
         finally:
             if cursor is not None:
                 try:
+                    # Consume any pending results before closing
+                    HealthChecker._consume_all_results(cursor)
                     cursor.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to close Memgraph cursor: {e}")
             if conn is not None:
                 try:
                     conn.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to close Memgraph connection: {e}")
 
     def check_large_document_chunk_coverage(self) -> HealthCheckResult:
         conn = None
@@ -479,14 +500,16 @@ class HealthChecker:
         finally:
             if cursor is not None:
                 try:
+                    # Consume any pending results before closing
+                    HealthChecker._consume_all_results(cursor)
                     cursor.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to close Memgraph cursor: {e}")
             if conn is not None:
                 try:
                     conn.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to close Memgraph connection: {e}")
 
     def check_json_ingestion_schema(self, json_path: str) -> HealthCheckResult:
         import json
@@ -579,14 +602,16 @@ class HealthChecker:
         finally:
             if cursor is not None:
                 try:
+                    # Consume any pending results before closing
+                    HealthChecker._consume_all_results(cursor)
                     cursor.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to close Memgraph cursor: {e}")
             if conn is not None:
                 try:
                     conn.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to close Memgraph connection: {e}")
 
     def check_vector_search(self) -> HealthCheckResult:
         """Check if vector search is functional and has embeddings."""
@@ -871,14 +896,16 @@ class HealthChecker:
         finally:
             if cursor is not None:
                 try:
+                    # Consume any pending results before closing
+                    HealthChecker._consume_all_results(cursor)
                     cursor.close()
                 except Exception as e:
-                    logger.warning(f"Failed to close Memgraph cursor: {e}")
+                    logger.debug(f"Failed to close Memgraph cursor: {e}")
             if conn is not None:
                 try:
                     conn.close()
                 except Exception as e:
-                    logger.warning(f"Failed to close Memgraph connection: {e}")
+                    logger.debug(f"Failed to close Memgraph connection: {e}")
 
         return results
 
@@ -940,6 +967,8 @@ def get_runtime_status() -> RuntimeHealthStatus:
         status.vector_search = HealthStatus.UNHEALTHY
         status.last_error = str(e)
 
+    conn = None
+    cursor = None
     try:
         conn = mgclient.connect(
             host=settings.MEMGRAPH_HOST,
@@ -948,12 +977,25 @@ def get_runtime_status() -> RuntimeHealthStatus:
         cursor = conn.cursor()
         cursor.execute("MATCH (n) RETURN count(n) LIMIT 1")
         cursor.fetchall()
-        cursor.close()
-        conn.close()
     except Exception as e:
         status.graph_traversal = HealthStatus.UNHEALTHY
         status.last_error = str(e)
+    finally:
+        if cursor is not None:
+            try:
+                # Consume any pending results before closing
+                HealthChecker._consume_all_results(cursor)
+                cursor.close()
+            except Exception as e:
+                logger.debug(f"Failed to close Memgraph cursor: {e}")
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception as e:
+                logger.debug(f"Failed to close Memgraph connection: {e}")
 
+    conn = None
+    cursor = None
     try:
         conn = mgclient.connect(
             host=settings.MEMGRAPH_HOST,
@@ -965,9 +1007,20 @@ def get_runtime_status() -> RuntimeHealthStatus:
             "WITH rank LIMIT 1 RETURN rank"
         )
         cursor.fetchall()
-        cursor.close()
-        conn.close()
     except Exception:
         status.procedures = HealthStatus.DEGRADED
+    finally:
+        if cursor is not None:
+            try:
+                # Consume any pending results before closing
+                HealthChecker._consume_all_results(cursor)
+                cursor.close()
+            except Exception as e:
+                logger.debug(f"Failed to close Memgraph cursor: {e}")
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception as e:
+                logger.debug(f"Failed to close Memgraph connection: {e}")
 
     return status

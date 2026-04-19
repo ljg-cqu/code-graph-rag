@@ -18,8 +18,6 @@ from codebase_rag.constants import (
     CYPHER_DELETE_CALLS,
     CYPHER_DELETE_FILE,
     CYPHER_DELETE_MODULE,
-    DEFAULT_DEBOUNCE_SECONDS,
-    DEFAULT_MAX_WAIT_SECONDS,
     IGNORE_PATTERNS,
     IGNORE_SUFFIXES,
     KEY_PATH,
@@ -54,8 +52,8 @@ class CodeChangeEventHandler(FileSystemEventHandler):
     def __init__(
         self,
         updater: GraphUpdater,
-        debounce_seconds: float = DEFAULT_DEBOUNCE_SECONDS,
-        max_wait_seconds: float = DEFAULT_MAX_WAIT_SECONDS,
+        debounce_seconds: float = settings.REALTIME_DEBOUNCE_SECONDS,
+        max_wait_seconds: float = settings.REALTIME_MAX_WAIT_SECONDS,
     ):
         self.updater = updater
         self.ignore_patterns = IGNORE_PATTERNS
@@ -272,9 +270,9 @@ def start_watcher(
     repo_path: str,
     host: str,
     port: int,
-    batch_size: int | None = None,
-    debounce_seconds: float = DEFAULT_DEBOUNCE_SECONDS,
-    max_wait_seconds: float = DEFAULT_MAX_WAIT_SECONDS,
+    batch_size: int | None = settings.REALTIME_BATCH_SIZE,
+    debounce_seconds: float = settings.REALTIME_DEBOUNCE_SECONDS,
+    max_wait_seconds: float = settings.REALTIME_MAX_WAIT_SECONDS,
 ) -> None:
     repo_path_obj = Path(repo_path).resolve()
     parsers, queries = load_parsers()
@@ -303,8 +301,8 @@ def _run_watcher_loop(
     repo_path_obj,
     parsers,
     queries,
-    debounce_seconds: float,
-    max_wait_seconds: float,
+    debounce_seconds: float = settings.REALTIME_DEBOUNCE_SECONDS,
+    max_wait_seconds: float = settings.REALTIME_MAX_WAIT_SECONDS,
 ):
     updater = GraphUpdater(ingestor, repo_path_obj, parsers, queries)
 
@@ -359,7 +357,7 @@ def main(
             help=ch.HELP_BATCH_SIZE,
             callback=_validate_positive_int,
         ),
-    ] = None,
+    ] = settings.REALTIME_BATCH_SIZE,
     debounce: Annotated[
         float,
         typer.Option(
@@ -368,7 +366,7 @@ def main(
             help=ch.HELP_DEBOUNCE,
             callback=_validate_non_negative_float,
         ),
-    ] = DEFAULT_DEBOUNCE_SECONDS,
+    ] = settings.REALTIME_DEBOUNCE_SECONDS,
     max_wait: Annotated[
         float,
         typer.Option(
@@ -377,7 +375,7 @@ def main(
             help=ch.HELP_MAX_WAIT,
             callback=_validate_non_negative_float,
         ),
-    ] = DEFAULT_MAX_WAIT_SECONDS,
+    ] = settings.REALTIME_MAX_WAIT_SECONDS,
 ) -> None:
     """
     Watch a repository for file changes and update the knowledge graph in real-time.
@@ -438,8 +436,8 @@ class DocumentChangeEventHandler(FileSystemEventHandler):
     def __init__(
         self,
         doc_updater,  # DocumentGraphUpdater
-        debounce_seconds: float = DEFAULT_DEBOUNCE_SECONDS,
-        max_wait_seconds: float = DEFAULT_MAX_WAIT_SECONDS,
+        debounce_seconds: float = settings.REALTIME_DEBOUNCE_SECONDS,
+        max_wait_seconds: float = settings.REALTIME_MAX_WAIT_SECONDS,
     ):
         self.doc_updater = doc_updater
         self.ignore_patterns = IGNORE_PATTERNS
@@ -569,8 +567,8 @@ class JSONChangeEventHandler(FileSystemEventHandler):
         self,
         repo_path: Path,
         dataset_id: str = "default",
-        debounce_seconds: float = DEFAULT_DEBOUNCE_SECONDS,
-        max_wait_seconds: float = DEFAULT_MAX_WAIT_SECONDS,
+        debounce_seconds: float = settings.REALTIME_DEBOUNCE_SECONDS,
+        max_wait_seconds: float = settings.REALTIME_MAX_WAIT_SECONDS,
     ):
         self.repo_path = repo_path
         self.dataset_id = dataset_id
@@ -732,8 +730,8 @@ class UnifiedChangeEventHandler(FileSystemEventHandler):
         code_updater: GraphUpdater,
         doc_updater,
         json_handler=None,
-        debounce_seconds: float = DEFAULT_DEBOUNCE_SECONDS,
-        max_wait_seconds: float = DEFAULT_MAX_WAIT_SECONDS,
+        debounce_seconds: float = settings.REALTIME_DEBOUNCE_SECONDS,
+        max_wait_seconds: float = settings.REALTIME_MAX_WAIT_SECONDS,
     ):
         self.code_updater = code_updater
         self.doc_updater = doc_updater
@@ -782,9 +780,9 @@ def start_unified_watcher(
     code_port: int = settings.MEMGRAPH_PORT,
     doc_host: str = settings.DOC_MEMGRAPH_HOST,
     doc_port: int = settings.DOC_MEMGRAPH_PORT,
-    batch_size: int | None = None,
-    debounce_seconds: float = DEFAULT_DEBOUNCE_SECONDS,
-    max_wait_seconds: float = DEFAULT_MAX_WAIT_SECONDS,
+    batch_size: int | None = settings.REALTIME_BATCH_SIZE,
+    debounce_seconds: float = settings.REALTIME_DEBOUNCE_SECONDS,
+    max_wait_seconds: float = settings.REALTIME_MAX_WAIT_SECONDS,
 ) -> None:
     """
     Start unified watcher for both code and document graphs.
@@ -864,11 +862,13 @@ class UnifiedWatcherManager:
         code_updater: GraphUpdater,
         doc_updater=None,
         json_handler: JSONChangeEventHandler | None = None,
-        debounce_seconds: float = DEFAULT_DEBOUNCE_SECONDS,
-        max_wait_seconds: float = DEFAULT_MAX_WAIT_SECONDS,
+        debounce_seconds: float = settings.REALTIME_DEBOUNCE_SECONDS,
+        max_wait_seconds: float = settings.REALTIME_MAX_WAIT_SECONDS,
+        ingestor=None,
     ):
         self.repo_path = repo_path
         self.observer: Observer | None = None
+        self.ingestor = ingestor
         self.event_handler = UnifiedChangeEventHandler(
             code_updater=code_updater,
             doc_updater=doc_updater,
@@ -876,6 +876,14 @@ class UnifiedWatcherManager:
             debounce_seconds=debounce_seconds,
             max_wait_seconds=max_wait_seconds,
         )
+
+    def _close_ingestor(self) -> None:
+        """Close the ingestor if it's a context manager."""
+        if self.ingestor is not None:
+            # If ingestor is a context manager, call __exit__
+            if hasattr(self.ingestor, '__exit__'):
+                self.ingestor.__exit__(None, None, None)
+            self.ingestor = None
 
     def start(self) -> None:
         """Start the background file system observer."""
@@ -907,6 +915,8 @@ class UnifiedWatcherManager:
 
         if self.observer:
             self.observer.stop()
+
+        self._close_ingestor()
 
     def join(self, timeout: float | None = None) -> None:
         """Wait for the observer thread to finish."""

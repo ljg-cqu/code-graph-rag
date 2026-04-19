@@ -216,12 +216,12 @@ Use with caution on production codebases.
 class RealtimeConfig:
     """Configuration for realtime file watching."""
 
-    enabled: bool = False
-    debounce: float = cs.DEFAULT_DEBOUNCE_SECONDS
-    max_wait: float = cs.DEFAULT_MAX_WAIT_SECONDS
-    enable_code: bool = True
-    enable_docs: bool = False
-    enable_json: bool = False
+    enabled: bool = settings.REALTIME_UPDATER_ENABLED
+    debounce: float = settings.REALTIME_DEBOUNCE_SECONDS
+    max_wait: float = settings.REALTIME_MAX_WAIT_SECONDS
+    enable_code: bool = settings.REALTIME_CODE_ENABLED
+    enable_docs: bool = settings.REALTIME_DOCS_ENABLED
+    enable_json: bool = settings.REALTIME_JSON_ENABLED
 
 
 @dataclass(frozen=True)
@@ -2990,8 +2990,8 @@ async def main_unified_async(
                 if realtime_config and realtime_config.enabled:
                     watcher_manager = _create_watcher_manager(
                         project_root,
-                        code_graph,
                         realtime_config,
+                        code_ingestor=None,
                         doc_ingestor=doc_graph,
                     )
                     watcher_manager.start()
@@ -3051,8 +3051,8 @@ async def main_unified_async(
             if realtime_config and realtime_config.enabled:
                 watcher_manager = _create_watcher_manager(
                     project_root,
-                    ingestor,
                     realtime_config,
+                    code_ingestor=None,
                 )
                 watcher_manager.start()
 
@@ -3073,17 +3073,20 @@ async def main_unified_async(
 
 def _create_watcher_manager(
     project_root: Path,
-    code_ingestor: QueryProtocol,
     realtime_config: RealtimeConfig,
+    code_ingestor: QueryProtocol | None = None,
     doc_ingestor: MemgraphIngestor | None = None,
+    batch_size: int = settings.REALTIME_BATCH_SIZE,
 ):
     """Create a UnifiedWatcherManager with the appropriate handlers.
 
     Args:
         project_root: Repository root path
-        code_ingestor: Shared code graph ingestor (thread-safe)
         realtime_config: Realtime watcher configuration
+        code_ingestor: Optional shared code graph ingestor (thread-safe).
+            If None, a new ingestor will be created with `batch_size`.
         doc_ingestor: Optional shared document graph ingestor
+        batch_size: Batch size for new ingestor creation (defaults to REALTIME_BATCH_SIZE)
 
     Returns:
         Configured UnifiedWatcherManager instance
@@ -3094,10 +3097,24 @@ def _create_watcher_manager(
     )
 
     from .parser_loader import load_parsers
+    from .services.graph_service import MemgraphIngestor
 
     parsers, queries = load_parsers()
 
-    # Create GraphUpdater for the watcher (shares the same ingestor)
+    own_ingestor = False
+    if code_ingestor is None:
+        # Create a dedicated ingestor for real-time updates with REALTIME_BATCH_SIZE
+        code_ingestor = MemgraphIngestor(
+            host=settings.MEMGRAPH_HOST,
+            port=settings.MEMGRAPH_PORT,
+            batch_size=batch_size,
+            username=settings.MEMGRAPH_USERNAME,
+            password=settings.MEMGRAPH_PASSWORD,
+        )
+        code_ingestor.__enter__()
+        own_ingestor = True
+
+    # Create GraphUpdater for the watcher
     code_updater = GraphUpdater(
         ingestor=code_ingestor,
         repo_path=project_root,
@@ -3132,6 +3149,7 @@ def _create_watcher_manager(
         json_handler=json_handler,
         debounce_seconds=realtime_config.debounce,
         max_wait_seconds=realtime_config.max_wait,
+        ingestor=code_ingestor if own_ingestor else None,
     )
 
 

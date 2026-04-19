@@ -181,6 +181,14 @@ _CYPHER_DANGEROUS_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 ]
 
 
+# Pattern to extract procedure name from CALL statements
+# Matches: CALL procedure.name(...) or CALL procedure.name YIELD ...
+_CALL_PROCEDURE_PATTERN = re.compile(
+    r"\bCALL\s+(?P<proc>[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)",
+    re.IGNORECASE,
+)
+
+
 def _validate_cypher_read_only(query: str) -> None:
     upper_query = query.upper()
 
@@ -209,6 +217,20 @@ def _validate_cypher_read_only(query: str) -> None:
         if pattern.search(upper_query):
             raise ex.LLMGenerationError(
                 ex.LLM_DANGEROUS_QUERY.format(keyword=keyword, query=query)
+            )
+
+    # Validate CALL statements against whitelist of safe procedures
+    for match in _CALL_PROCEDURE_PATTERN.finditer(query):
+        procedure = match.group("proc").lower()
+        # Check if procedure starts with any whitelisted prefix
+        is_safe = any(
+            procedure == safe or procedure.startswith(safe + ".")
+            for safe in cs.CYPHER_SAFE_CALL_PROCEDURES
+        )
+        if not is_safe:
+            raise ex.LLMGenerationError(
+                f"CALL procedure '{procedure}' is not in the whitelist of safe read-only procedures. "
+                f"Query rejected: {query}"
             )
 
 

@@ -471,6 +471,37 @@ def test_recreate_json_vector_index_recreates_mismatched_dimension() -> None:
     )
 
 
+def test_ingest_json_data_calls_ensure_constraints() -> None:
+    class FakeIngestor:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def __enter__(self) -> FakeIngestor:
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        def ensure_constraints(self) -> None:
+            self.calls.append("ensure_constraints")
+
+        def fetch_all(self, query: str, params: dict | None = None) -> list[dict]:
+            return []
+
+        def execute_write(self, query: str, params: dict | None = None) -> None:
+            pass
+
+    fake_ingestor = FakeIngestor()
+
+    with patch(
+        "codebase_rag.json_ingestion._create_json_ingestor",
+        return_value=fake_ingestor,
+    ):
+        result = ingest_json_data(pre_loaded_data=[(Path("test.json"), deepcopy(SAMPLE_VALID_JSON))])
+
+    assert "ensure_constraints" in fake_ingestor.calls
+
+
 def test_recreate_json_vector_index_keeps_matching_dimension() -> None:
     class FakeIngestor:
         def __init__(self) -> None:

@@ -1154,6 +1154,7 @@ def _ingest_entity_file(
         return summary
 
     with _create_json_ingestor(batch_size) as graph_connection:
+        graph_connection.ensure_constraints()
         ingest_summary = ingest_entities(
             prepared_file.dataset_id,
             prepared_file.entities,
@@ -1195,6 +1196,7 @@ def _ingest_relationship_file(
         )
 
     with _create_json_ingestor(batch_size) as graph_connection:
+        graph_connection.ensure_constraints()
         return ingest_relationships(
             prepared_file.dataset_id,
             prepared_file.relationships,

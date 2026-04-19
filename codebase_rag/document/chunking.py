@@ -9,6 +9,7 @@ Use token-aware chunking with section boundaries.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -57,13 +58,17 @@ class DocumentChunk:
 
     @property
     def qualified_name(self) -> str:
-        """Generate unique qualified name for this chunk.
+        """Generate unique qualified name for this chunk using content hash.
 
-        Format: {document_path}#chunk_{chunk_index}
+        Format: {document_path}#chunk_{content_hash[:8]}_{chunk_index}
+
+        Using content hash prefix ensures stable identity across re-indexing
+        when content hasn't changed, while chunk_index handles collisions.
 
         Used as unique key in document graph storage.
         """
-        return f"{self.document_path}#chunk_{self.chunk_index}"
+        content_hash = hashlib.sha256(self.content.encode()).hexdigest()[:8]
+        return f"{self.document_path}#chunk_{content_hash}_{self.chunk_index}"
 
 
 class SemanticDocumentChunker:

@@ -241,6 +241,7 @@ KEY_PREFIX = "prefix"
 KEY_PROJECT_NAME = "project_name"
 KEY_IS_EXTERNAL = "is_external"
 KEY_INDEX = "index"
+KEY_UNIQUE_ID = "unique_id"
 
 ERR_SUBSTR_ALREADY_EXISTS = "already exists"
 ERR_SUBSTR_CONSTRAINT = "constraint"
@@ -423,6 +424,7 @@ class UniqueKeyType(StrEnum):
     NAME = KEY_NAME
     PATH = KEY_PATH
     QUALIFIED_NAME = KEY_QUALIFIED_NAME
+    UNIQUE_ID = KEY_UNIQUE_ID
 
 
 class NodeLabel(StrEnum):
@@ -461,6 +463,7 @@ class NodeLabel(StrEnum):
     JSON_OBJECT = "JsonObject"
     JSON_ARRAY = "JsonArray"
     JSON_FIELD = "JsonField"
+    JSON_ENTITY = "JsonEntity"
     JSON_VALUE = "JsonValue"
 
 
@@ -501,6 +504,7 @@ _NODE_LABEL_UNIQUE_KEYS: dict[NodeLabel, UniqueKeyType] = {
     NodeLabel.JSON_ARRAY: UniqueKeyType.QUALIFIED_NAME,
     NodeLabel.JSON_FIELD: UniqueKeyType.QUALIFIED_NAME,
     NodeLabel.JSON_VALUE: UniqueKeyType.QUALIFIED_NAME,
+    NodeLabel.JSON_ENTITY: UniqueKeyType.UNIQUE_ID,
 }
 
 _missing_keys = set(NodeLabel) - set(_NODE_LABEL_UNIQUE_KEYS.keys())
@@ -562,6 +566,8 @@ class RelationshipType(StrEnum):
     CREATES_GUI = "CREATES_GUI"
     CONTROLS_GUI = "CONTROLS_GUI"
     INCLUDES_FILE = "INCLUDES_FILE"
+    # Generic/dynamic relationships
+    RELATES_TO = "RELATES_TO"
     # JSON content relationships
     CONTAINS_JSON = "CONTAINS_JSON"
     HAS_FIELD = "HAS_FIELD"
@@ -616,6 +622,7 @@ EMBEDDABLE_CODE_NODE_LABELS = (
     "Hotstring",
     "Label",
     "AhkClass",
+    "CodeChunk",
 )
 
 # (H) Method signature formatting
@@ -754,6 +761,12 @@ UNION
 MATCH (m:Module)
 WHERE m.qualified_name STARTS WITH ($project_name + '.')
 MATCH (m)-[:DEFINES]->(n:AhkClass)
+RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
+       n.start_line AS start_line, n.end_line AS end_line, n.path AS path
+UNION
+MATCH (m:Module)
+WHERE m.qualified_name STARTS WITH ($project_name + '.')
+MATCH (m)-[:DEFINES]->(n:CodeChunk)
 RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
        n.start_line AS start_line, n.end_line AS end_line, n.path AS path
 """
@@ -1371,8 +1384,8 @@ LOG_LEVEL_INFO = "INFO"
 LOG_LEVEL_ERROR = "ERROR"
 
 # (H) Debounce settings for realtime watcher
-DEFAULT_DEBOUNCE_SECONDS = 5
-DEFAULT_MAX_WAIT_SECONDS = 30
+DEFAULT_DEBOUNCE_SECONDS = 5.0
+DEFAULT_MAX_WAIT_SECONDS = 30.0
 
 
 class Architecture(StrEnum):
@@ -1495,9 +1508,34 @@ CYPHER_DANGEROUS_KEYWORDS: frozenset[str] = frozenset(
         "SET",
         "MERGE",
         "CREATE",
-        "CALL",
         "LOAD CSV",
         "FOREACH",
+    }
+)
+
+# Whitelist of safe read-only CALL procedure prefixes/names
+# These are Memgraph/community procedures that don't modify data
+CYPHER_SAFE_CALL_PROCEDURES: frozenset[str] = frozenset(
+    {
+        "db.schema",
+        "db.info",
+        "db.show",
+        "db.list",
+        "file_exists",
+        "graph_util",
+        "mg",
+        "meta",
+        "statistics",
+        "page_rank",
+        "betweenness_centrality",
+        "community_detection",
+        "label_propagation",
+        "weakly_connected_components",
+        "strongly_connected_components",
+        "bfs",
+        "dfs",
+        "all_shortest_paths",
+        "algorithm",
     }
 )
 

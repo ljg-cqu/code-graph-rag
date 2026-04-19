@@ -3,6 +3,58 @@ from unittest.mock import MagicMock, patch
 from codebase_rag.tools.health_checker import HealthChecker
 
 
+def test_consume_all_results_handles_exceptions() -> None:
+    """Test _consume_all_results safely handles errors during cleanup."""
+    cursor = MagicMock()
+    cursor.fetchone.side_effect = RuntimeError("Connection lost")
+
+    # Should not raise - silently ignores errors
+    HealthChecker._consume_all_results(cursor)
+
+    assert cursor.fetchone.called
+
+
+def test_validate_ingestion_quality_cleanup_on_exception() -> None:
+    """Test that cleanup succeeds when exception occurs mid-query."""
+    checker = HealthChecker()
+    cursor = MagicMock()
+    # First fetchone returns a row, subsequent calls return None for _consume_all_results
+    cursor.fetchone.side_effect = [(4,), None]
+    # Second query raises exception mid-execution
+    cursor.execute.side_effect = [None, RuntimeError("Query failed")]
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+
+    with patch("codebase_rag.tools.health_checker.mgclient.connect", return_value=conn):
+        results = checker.validate_ingestion_quality(expected_node_count=4)
+
+    # Should have one failure result from the exception
+    assert len(results) >= 1
+    # Cursor close should still be called
+    cursor.close.assert_called()
+    # Connection close should still be called
+    conn.close.assert_called()
+
+
+def test_validate_ingestion_quality_consumes_pending_results_on_error() -> None:
+    """Test that pending results are consumed before closing on error."""
+    checker = HealthChecker()
+    cursor = MagicMock()
+    # Raise exception on first execute
+    cursor.execute.side_effect = RuntimeError("Query execution error")
+    # fetchone returns None for _consume_all_results cleanup
+    cursor.fetchone.return_value = None
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+
+    with patch("codebase_rag.tools.health_checker.mgclient.connect", return_value=conn):
+        results = checker.validate_ingestion_quality()
+
+    # _consume_all_results should be called before close
+    cursor.close.assert_called()
+    conn.close.assert_called()
+
+
 def test_parse_label_expression_splits_pipe_labels() -> None:
     labels = HealthChecker._parse_label_expression("Function|Method|Class")
 
@@ -12,7 +64,16 @@ def test_parse_label_expression_splits_pipe_labels() -> None:
 def test_validate_ingestion_quality_uses_label_filter_not_pipe_syntax() -> None:
     checker = HealthChecker()
     cursor = MagicMock()
-    cursor.fetchone.side_effect = [(4,), (8,), (0,), (4,), (768,), (0,)]
+    # Each _fetch_single_int needs a value followed by None for _consume_all_results
+    # node count, edge count, missing embeddings, embedded node count, dimension, duplicates
+    cursor.fetchone.side_effect = [
+        (4,), None,      # node count
+        (8,), None,      # edge count
+        (0,), None,      # missing embeddings count
+        (4,), None,      # embedded node count
+        (768,), None,    # dimension check
+        (0,), None,      # duplicates count
+    ]
     conn = MagicMock()
     conn.cursor.return_value = cursor
 
@@ -36,13 +97,28 @@ def test_check_vector_indexes_all_present() -> None:
     """Test check_vector_indexes passes when all indexes exist."""
     checker = HealthChecker()
     cursor = MagicMock()
-    # Return all expected indexes
+    # Return all expected indexes (matching EMBEDDABLE_CODE_NODE_LABELS)
     cursor.fetchall.return_value = [
         ("function_embedding_index",),
         ("method_embedding_index",),
         ("class_embedding_index",),
         ("interface_embedding_index",),
+        ("contract_embedding_index",),
+        ("library_embedding_index",),
+        ("enum_embedding_index",),
+        ("type_embedding_index",),
+        ("union_embedding_index",),
+        ("event_embedding_index",),
+        ("modifier_embedding_index",),
+        ("statevariable_embedding_index",),
+        ("customerror_embedding_index",),
+        ("hotkey_embedding_index",),
+        ("hotstring_embedding_index",),
+        ("label_embedding_index",),
+        ("ahkclass_embedding_index",),
     ]
+    # fetchone returns None for _consume_all_results cleanup
+    cursor.fetchone.return_value = None
     conn = MagicMock()
     conn.cursor.return_value = cursor
 
@@ -61,6 +137,8 @@ def test_check_vector_indexes_missing_some() -> None:
     cursor.fetchall.return_value = [
         ("function_embedding_index",),
     ]
+    # fetchone returns None for _consume_all_results cleanup
+    cursor.fetchone.return_value = None
     conn = MagicMock()
     conn.cursor.return_value = cursor
 
@@ -84,11 +162,11 @@ def test_check_vector_search_with_results() -> None:
 
     with (
         patch(
-            "codebase_rag.tools.health_checker.get_embedding_provider",
+            "codebase_rag.embeddings.get_embedding_provider",
             return_value=mock_provider,
         ),
         patch(
-            "codebase_rag.tools.health_checker.get_shared_backend",
+            "codebase_rag.vector_backend.get_shared_backend",
             return_value=mock_backend,
         ),
         patch(
@@ -117,11 +195,11 @@ def test_check_vector_search_no_embeddings() -> None:
 
     with (
         patch(
-            "codebase_rag.tools.health_checker.get_embedding_provider",
+            "codebase_rag.embeddings.get_embedding_provider",
             return_value=mock_provider,
         ),
         patch(
-            "codebase_rag.tools.health_checker.get_shared_backend",
+            "codebase_rag.vector_backend.get_shared_backend",
             return_value=mock_backend,
         ),
         patch(

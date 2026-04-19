@@ -150,9 +150,34 @@ class TestValidateCypherReadOnly:
         with pytest.raises(ex.LLMGenerationError, match="REMOVE"):
             _validate_cypher_read_only("MATCH (n) REMOVE n.prop;")
 
-    def test_rejects_call(self) -> None:
-        with pytest.raises(ex.LLMGenerationError, match="CALL"):
-            _validate_cypher_read_only("CALL db.schema.visualization();")
+    def test_rejects_unsafe_call(self) -> None:
+        """Unsafe CALL procedures (not in whitelist) should be rejected."""
+        with pytest.raises(ex.LLMGenerationError, match="not in the whitelist"):
+            _validate_cypher_read_only("CALL dangerous.write();")
+
+    def test_allows_safe_call_db_schema(self) -> None:
+        """Safe CALL procedures in whitelist should be allowed."""
+        _validate_cypher_read_only("CALL db.schema.visualization();")
+
+    def test_allows_safe_call_file_exists(self) -> None:
+        """file_exists procedure should be allowed for file path validation."""
+        _validate_cypher_read_only(
+            "MATCH (f:File) WHERE NOT EXISTS { CALL file_exists(f.path) YIELD exists RETURN exists } RETURN f;"
+        )
+
+    def test_allows_safe_call_graph_algorithms(self) -> None:
+        """Graph algorithm procedures should be allowed."""
+        _validate_cypher_read_only("CALL page_rank.get() YIELD node, rank RETURN node, rank;")
+        _validate_cypher_read_only("CALL betweenness_centrality.get() YIELD node, centrality RETURN node;")
+
+    def test_allows_safe_call_with_yield(self) -> None:
+        """Safe CALL with YIELD clause should be allowed."""
+        _validate_cypher_read_only("CALL db.info() YIELD * RETURN *;")
+
+    def test_rejects_call_case_insensitive(self) -> None:
+        """Unsafe CALL should be rejected regardless of case."""
+        with pytest.raises(ex.LLMGenerationError, match="not in the whitelist"):
+            _validate_cypher_read_only("call unknown.procedure();")
 
     def test_rejects_create_constraint(self) -> None:
         with pytest.raises(ex.LLMGenerationError, match="CREATE CONSTRAINT"):

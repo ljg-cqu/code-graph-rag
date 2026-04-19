@@ -48,14 +48,43 @@ python realtime_updater.py ~/my-project
 cgr start --repo-path ~/my-project
 ```
 
+## Environment Configuration
+
+Configure default behavior via environment variables:
+
+```bash
+# Enable realtime updates by default
+CGR_REALTIME_UPDATER=true
+
+# Set debounce delay (default: 5.0 seconds)
+CGR_REALTIME_DEBOUNCE=10.0
+
+# Set max wait time (default: 30.0 seconds)
+CGR_REALTIME_MAX_WAIT=60.0
+
+# Enable/disable specific file types
+CGR_REALTIME_CODE=true      # Watch code files (default: true)
+CGR_REALTIME_DOCS=false     # Watch document files (default: false)
+CGR_REALTIME_JSON=false     # Watch JSON files (default: false)
+```
+
+CLI flags override environment settings:
+
+```bash
+# Override env config for this session
+cgr start --realtime-debounce 2.0 --realtime-docs
+```
+
 ## CLI Arguments
+
+Defaults can be configured via environment variables (see above).
 
 | Argument | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `repo_path` | Yes | | Path to repository to watch |
 | `--host` | No | `localhost` | Memgraph host |
 | `--port` | No | `7687` | Memgraph port |
-| `--batch-size` | No | | Number of buffered nodes/relationships before flushing to Memgraph |
+| `--batch-size` | No | `CGR_REALTIME_BATCH_SIZE` (default: 100) | Number of buffered nodes/relationships before flushing to Memgraph |
 
 ## Performance Note
 

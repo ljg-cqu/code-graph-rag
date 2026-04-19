@@ -666,34 +666,34 @@ def start(
     ),
     # === Realtime Updater Flags ===
     realtime_updater: bool = typer.Option(
-        False,
+        settings.REALTIME_UPDATER_ENABLED,
         "--realtime-updater/--no-realtime-updater",
         help="Enable real-time file system monitoring and automatic graph updates",
     ),
     realtime_debounce: float = typer.Option(
-        5.0,
+        settings.REALTIME_DEBOUNCE_SECONDS,
         "--realtime-debounce",
         "-rd",
         help="Debounce delay in seconds for real-time updates (0 to disable)",
     ),
     realtime_max_wait: float = typer.Option(
-        30.0,
+        settings.REALTIME_MAX_WAIT_SECONDS,
         "--realtime-max-wait",
         "-rm",
         help="Maximum wait time in seconds before processing changes",
     ),
     realtime_code: bool = typer.Option(
-        True,
+        settings.REALTIME_CODE_ENABLED,
         "--realtime-code/--no-realtime-code",
         help="Enable real-time updates for code files",
     ),
     realtime_docs: bool = typer.Option(
-        False,
+        settings.REALTIME_DOCS_ENABLED,
         "--realtime-docs/--no-realtime-docs",
         help="Enable real-time updates for document files",
     ),
     realtime_json: bool = typer.Option(
-        False,
+        settings.REALTIME_JSON_ENABLED,
         "--realtime-json/--no-realtime-json",
         help="Enable real-time updates for JSON files",
     ),

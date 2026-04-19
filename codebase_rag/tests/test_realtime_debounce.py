@@ -17,6 +17,7 @@ import pytest
 from watchdog.events import FileCreatedEvent, FileDeletedEvent, FileModifiedEvent
 
 from codebase_rag.constants import DEFAULT_DEBOUNCE_SECONDS, DEFAULT_MAX_WAIT_SECONDS
+from codebase_rag.config import settings
 from codebase_rag.services import QueryProtocol
 
 
@@ -102,13 +103,13 @@ class TestCodeChangeEventHandlerDebounce:
         assert handler.debounce_seconds == 0
         assert handler.debounce_enabled is False
 
-    def test_handler_uses_default_constants(self, mock_updater: MagicMock) -> None:
+    def test_handler_uses_default_settings(self, mock_updater: MagicMock) -> None:
         from realtime_updater import CodeChangeEventHandler
 
         handler = CodeChangeEventHandler(mock_updater)
 
-        assert handler.debounce_seconds == DEFAULT_DEBOUNCE_SECONDS
-        assert handler.max_wait_seconds == DEFAULT_MAX_WAIT_SECONDS
+        assert handler.debounce_seconds == settings.REALTIME_DEBOUNCE_SECONDS
+        assert handler.max_wait_seconds == settings.REALTIME_MAX_WAIT_SECONDS
 
     def test_is_relevant_filters_ignored_patterns(
         self, mock_updater: MagicMock, tmp_path: Path

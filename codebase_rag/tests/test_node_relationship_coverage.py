@@ -9,6 +9,7 @@ from codebase_rag.constants import (
     KEY_NAME,
     KEY_PATH,
     KEY_QUALIFIED_NAME,
+    KEY_UNIQUE_ID,
     NODE_UNIQUE_CONSTRAINTS,
     NodeLabel,
     RelationshipType,
@@ -165,6 +166,12 @@ class TestUniqueKeyPropertyNames:
             key = _NODE_LABEL_UNIQUE_KEYS[label]
             if key == UniqueKeyType.QUALIFIED_NAME:
                 assert NODE_UNIQUE_CONSTRAINTS[label.value] == KEY_QUALIFIED_NAME
+
+    def test_unique_id_unique_key_uses_correct_property(self) -> None:
+        for label in NodeLabel:
+            key = _NODE_LABEL_UNIQUE_KEYS[label]
+            if key == UniqueKeyType.UNIQUE_ID:
+                assert NODE_UNIQUE_CONSTRAINTS[label.value] == KEY_UNIQUE_ID
 
 
 class TestNodeLabelEnumCompleteness:

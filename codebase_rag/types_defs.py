@@ -85,6 +85,7 @@ class NodeType(StrEnum):
     HOTSTRING = "Hotstring"
     LABEL = "Label"
     CLASS_AHK = "AhkClass"
+    CODE_CHUNK = "CodeChunk"
 
 
 type TrieNode = dict[str, TrieNode | QualifiedName | NodeType]
@@ -574,7 +575,7 @@ NODE_SCHEMAS: tuple[NodeSchema, ...] = (
     ),
     NodeSchema(
         NodeLabel.CHUNK,
-        "{qualified_name: string, workspace: string, content: string, token_count: int, section_title: string, start_line: int, end_line: int, code_references: list[string], resolved_code_references: list[string], resolved_code_reference_count: int, embedding: list[float], indexed_at: string}",
+        "{qualified_name: string, workspace: string, content: string, token_count: int, section_title: string, start_line: int, end_line: int, code_references: list[string], resolved_code_references: list[string], resolved_code_reference_count: int, embedding: list[float], embedding_model: string, embedding_version: int, indexed_at: string}",
     ),
     # JSON content node schemas
     NodeSchema(
@@ -592,6 +593,10 @@ NODE_SCHEMAS: tuple[NodeSchema, ...] = (
     NodeSchema(
         NodeLabel.JSON_VALUE,
         "{qualified_name: string, path: string, value: string, value_type: string, depth: int}",
+    ),
+    NodeSchema(
+        NodeLabel.JSON_ENTITY,
+        "{unique_id: string, entity_id: string, name: string, type: string, dataset_id: string, labels: list[string], embedding: list[float], embedding_model: string, embedding_version: int}",
     ),
 )
 
@@ -819,5 +824,10 @@ RELATIONSHIP_SCHEMAS: tuple[RelationshipSchema, ...] = (
         (NodeLabel.JSON_ARRAY,),
         RelationshipType.HAS_ELEMENT,
         (NodeLabel.JSON_VALUE, NodeLabel.JSON_OBJECT, NodeLabel.JSON_ARRAY),
+    ),
+    RelationshipSchema(
+        (NodeLabel.JSON_ENTITY,),
+        RelationshipType.RELATES_TO,
+        (NodeLabel.JSON_ENTITY,),
     ),
 )
