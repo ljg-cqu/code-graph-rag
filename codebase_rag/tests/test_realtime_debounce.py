@@ -28,6 +28,7 @@ class MockQueryIngestor:
         self.fetch_all = MagicMock(return_value=[])
         self.ensure_node_batch = MagicMock()
         self.ensure_relationship_batch = MagicMock()
+        self.conn = MagicMock()
 
     def __enter__(self) -> MockQueryIngestor:
         return self

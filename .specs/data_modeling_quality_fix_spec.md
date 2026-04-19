@@ -4,7 +4,7 @@
 - **Version**: 1.1.0
 - **Date**: 2026-04-19
 - **Scope**: code-graph-rag codebase data modeling quality
-- **Status**: Partially implemented
+- **Status**: Fully implemented
 
 ---
 
@@ -14,8 +14,7 @@ This specification documents **11 data modeling issues** identified in the code-
 
 **Implementation Status:**
 - **Issue 1**: Already resolved in codebase
-- **Issues 2, 3, 6, 7, 8, 9, 10**: Fixed in this update
-- **Issues 4, 5**: Require design decision (see details below)
+- **Issues 2, 3, 4, 5, 6, 7, 8, 9, 10**: Fixed in this update
 - **Issue 11**: Operational note, no code change needed
 
 ---
@@ -63,38 +62,41 @@ NodeLabel.CODE_CHUNK: UniqueKeyType.QUALIFIED_NAME,
 
 ---
 
-### Issue 4: JSON Ingestion Uses `JsonEntity` Label Not in `NodeLabel` Enum [NEEDS DESIGN DECISION]
+### Issue 4: JSON Ingestion Uses `JsonEntity` Label Not in `NodeLabel` Enum [FIXED]
 
 **Severity**: High
 **File**: `codebase_rag/json_ingestion.py`
 
-**Problem**: The JSON ingestion pipeline creates nodes with label `JsonEntity` (constant `JSON_ENTITY_LABEL = "JsonEntity"`), but this label is **not** in the `NodeLabel` enum.
+**Problem**: The JSON ingestion pipeline creates nodes with label `JsonEntity` (constant `JSON_ENTITY_LABEL = "JsonEntity"`), but this label was **not** in the `NodeLabel` enum.
 
 **Context**: The codebase has **two distinct JSON systems**:
 
 | System | Labels | Purpose |
 |--------|--------|---------|
 | JSON Content Nodes | `JSON_OBJECT`, `JSON_ARRAY`, `JSON_FIELD`, `JSON_VALUE` | Parsing JSON file structure (in `NodeLabel` enum with full schema) |
-| Entity JSON Ingestion | `JsonEntity` (string literal) | Entity-based knowledge graph from JSON datasets |
+| Entity JSON Ingestion | `JsonEntity` | Entity-based knowledge graph from JSON datasets |
 
-The JSON Content Nodes (`JSON_OBJECT`, etc.) are already properly defined in `NodeLabel` and `_NODE_LABEL_UNIQUE_KEYS`.
+**Design Decision**: **Option A chosen** — `JSON_ENTITY` added to `NodeLabel` enum with `UniqueKeyType.UNIQUE_ID` (`unique_id` property).
 
-**Design Decision Required**:
-1. **Option A**: Add `JSON_ENTITY` to `NodeLabel` enum with unique key and schema documentation
-2. **Option B**: Keep `JsonEntity` as string-based label for external dataset flexibility, document this decision
-
-**Current State**: `JsonEntity` nodes are created but lack constraint/index coverage via `ensure_constraints()`.
+**Fix Applied**:
+- Added `JSON_ENTITY = "JsonEntity"` to `NodeLabel` enum in `constants.py`
+- Added `NodeLabel.JSON_ENTITY: UniqueKeyType.UNIQUE_ID` to `_NODE_LABEL_UNIQUE_KEYS`
+- Added `KEY_UNIQUE_ID = "unique_id"` and `UniqueKeyType.UNIQUE_ID`
+- Added `NodeSchema` for `JSON_ENTITY` in `types_defs.py`
+- Added `ensure_constraints()` call in JSON ingestion pipeline
 
 ---
 
-### Issue 5: Relationship Schema Missing JSON Relationships [RELATED TO ISSUE 4]
+### Issue 5: Relationship Schema Missing JSON Relationships [FIXED]
 
 **Severity**: High
 **File**: `codebase_rag/types_defs.py`
 
-**Problem**: `RELATIONSHIP_SCHEMAS` does not include relationships for `JsonEntity` nodes.
+**Problem**: `RELATIONSHIP_SCHEMAS` did not include relationships for `JsonEntity` nodes.
 
-**Status**: Depends on Issue 4 resolution. JSON Content Nodes (`JSON_OBJECT`, etc.) already have relationship schemas defined.
+**Fix Applied**: Added generic `RELATES_TO` relationship schema for `JSON_ENTITY` -> `JSON_ENTITY` in `RELATIONSHIP_SCHEMAS`.
+
+**Note**: JSON ingestion uses dynamic relationship types from user data. The `RELATES_TO` schema provides generic documentation coverage for entity-to-entity relationships.
 
 ---
 
@@ -193,8 +195,8 @@ section_qn = f"{parent_path}#sec_{title_hash}:{section.title}"
 | 1 | Resolved | Already fixed in codebase |
 | 2 | Fixed | Added `CODE_CHUNK` to `NodeType` |
 | 3 | Fixed | Added `embedding_model`/`embedding_version` to `Chunk` schema |
-| 4 | Pending | Design decision needed on `JsonEntity` integration |
-| 5 | Pending | Depends on Issue 4 |
+| 4 | Fixed | Added `JSON_ENTITY` to `NodeLabel` with `UNIQUE_ID` key |
+| 5 | Fixed | Added `RELATES_TO` schema for `JSON_ENTITY` relationships |
 | 6 | Fixed | Added `RELATES_TO` to `RelationshipType` |
 | 7 | Fixed | Added `CodeChunk` to `EMBEDDABLE_CODE_NODE_LABELS` |
 | 8 | Fixed | Updated chunk `qualified_name` to use content hash |
@@ -208,10 +210,13 @@ section_qn = f"{parent_path}#sec_{title_hash}:{section.title}"
 
 | File | Changes |
 |------|---------|
-| `codebase_rag/constants.py` | Added `RELATES_TO` to `RelationshipType`, added `CodeChunk` to `EMBEDDABLE_CODE_NODE_LABELS`, added `CodeChunk` UNION to `CYPHER_QUERY_EMBEDDINGS` |
-| `codebase_rag/types_defs.py` | Added `CODE_CHUNK` to `NodeType`, updated `Chunk` NodeSchema with `embedding_model`/`embedding_version` |
+| `codebase_rag/constants.py` | Added `RELATES_TO` to `RelationshipType`, added `CodeChunk` to `EMBEDDABLE_CODE_NODE_LABELS`, added `CodeChunk` UNION to `CYPHER_QUERY_EMBEDDINGS`, added `JSON_ENTITY` to `NodeLabel`, added `UniqueKeyType.UNIQUE_ID` |
+| `codebase_rag/types_defs.py` | Added `CODE_CHUNK` to `NodeType`, updated `Chunk` NodeSchema with `embedding_model`/`embedding_version`, added `JSON_ENTITY` NodeSchema and `RELATES_TO` relationship schema |
 | `codebase_rag/document/chunking.py` | Added `hashlib` import, updated `DocumentChunk.qualified_name` to use content hash |
 | `codebase_rag/document/document_updater.py` | Added `hashlib` import, updated section qualified_name to use title hash |
+| `codebase_rag/json_ingestion.py` | Added `ensure_constraints()` call during entity and relationship ingestion |
+| `codebase_rag/tests/test_node_relationship_coverage.py` | Added `test_unique_id_unique_key_uses_correct_property` |
+| `codebase_rag/tests/test_json_ingestion.py` | Added `test_ingest_json_data_calls_ensure_constraints` |
 
 ---
 
@@ -266,5 +271,5 @@ All changes are additive (new enum values, new dict entries, new schema entries)
 - [x] `DocumentChunk.qualified_name` uses content hash
 - [x] `Section` qualified_name uses title hash
 - [x] All existing tests pass
-- [ ] Design decision made on `JsonEntity` integration (Issues 4/5)
-- [ ] New tests added for JSON entity constraint coverage (if Option A chosen)
+- [x] Design decision made on `JsonEntity` integration (Issues 4/5)
+- [x] New tests added for JSON entity constraint coverage (if Option A chosen)

@@ -129,19 +129,17 @@ class TestGraphNavigator:
     async def test_get_call_hierarchy_depth_cap(self, navigator):
         """Test depth parameter capping."""
         # Depth should be capped between 1 and _MAX_DEPTH (5)
-        # We'll test by checking the query parameter
+        # Depth is interpolated into the query string (Memgraph limitation)
         with patch.object(navigator.ingestor, "fetch_all") as mock_fetch:
             mock_fetch.return_value = []
             await navigator.get_call_hierarchy("target", depth=10)
-            # Check depth param passed
-            call_args = mock_fetch.call_args
-            params = call_args[0][1]  # second arg is params dict
-            assert params["depth"] == 5  # Should be capped to max
+            # Check depth in query string
+            query = mock_fetch.call_args[0][0]
+            assert "*1..5]" in query  # Should be capped to max
 
             await navigator.get_call_hierarchy("target", depth=0)
-            call_args = mock_fetch.call_args
-            params = call_args[0][1]
-            assert params["depth"] == 1  # Should be min 1
+            query = mock_fetch.call_args[0][0]
+            assert "*1..1]" in query  # Should be min 1
 
     @pytest.mark.asyncio
     async def test_get_call_hierarchy_invalid_direction(self, navigator):
@@ -249,12 +247,12 @@ class TestGraphNavigator:
         with patch.object(navigator.ingestor, "fetch_all") as mock_fetch:
             mock_fetch.return_value = []
             await navigator.get_import_dependencies("module", depth=10)
-            params = mock_fetch.call_args[0][1]
-            assert params["depth"] == 5  # Capped to _MAX_DEPTH
+            query = mock_fetch.call_args[0][0]
+            assert "*1..5]" in query  # Capped to _MAX_DEPTH
 
             await navigator.get_import_dependencies("module", depth=0)
-            params = mock_fetch.call_args[0][1]
-            assert params["depth"] == 1  # Min 1
+            query = mock_fetch.call_args[0][0]
+            assert "*1..1]" in query  # Min 1
 
     @pytest.mark.asyncio
     async def test_error_handling(self, navigator, mock_ingestor):

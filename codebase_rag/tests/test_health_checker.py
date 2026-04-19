@@ -116,6 +116,7 @@ def test_check_vector_indexes_all_present() -> None:
         ("hotstring_embedding_index",),
         ("label_embedding_index",),
         ("ahkclass_embedding_index",),
+        ("codechunk_embedding_index",),
     ]
     # fetchone returns None for _consume_all_results cleanup
     cursor.fetchone.return_value = None

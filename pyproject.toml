@@ -76,6 +76,9 @@ cgr = "codebase_rag.cli:app"
 [tool.uv]
 package = true
 
+[tool.setuptools]
+py-modules = ["realtime_updater", "cgr", "build_binary"]
+
 [tool.setuptools.packages.find]
 include = ["codebase_rag*", "codec*", "cgr*"]
 exclude = ["*.tests", "*.tests.*"]
@@ -84,6 +87,7 @@ exclude = ["*.tests", "*.tests.*"]
 test = [
     "anyio>=4.0.0",
     "pytest>=8.4.1",
+    "pytest-asyncio>=0.23.0",
     "pytest-cov>=4.0.0",
     "pytest-xdist>=3.8.0",
     "testcontainers>=4.9.0",

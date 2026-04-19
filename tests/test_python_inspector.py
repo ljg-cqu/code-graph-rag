@@ -134,7 +134,9 @@ class TestPythonObjectInspector:
     @pytest.mark.asyncio
     async def test_timeout(self, inspector):
         """Test timeout behavior."""
-        with patch.object(inspector, "_inspect_sync", side_effect=lambda x: asyncio.sleep(20)):
+        import time
+
+        with patch.object(PythonObjectInspector, "_inspect_sync", side_effect=lambda x: time.sleep(20)):
             with patch("codebase_rag.tools.python_inspector.settings") as mock_settings:
                 mock_settings.PYTHON_INSPECT_TIMEOUT = 0.01  # Very short timeout
                 result = await inspector.inspect("os")

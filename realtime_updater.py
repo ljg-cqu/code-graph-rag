@@ -462,6 +462,9 @@ class DocumentChangeEventHandler(FileSystemEventHandler):
         return all(part not in self.ignore_patterns for part in path.parts)
 
     def dispatch(self, event: FileSystemEvent) -> None:
+        if self.doc_updater is None:
+            return  # No document updater configured
+
         src_path = event.src_path
         if isinstance(src_path, bytes):
             src_path = src_path.decode()
@@ -527,6 +530,9 @@ class DocumentChangeEventHandler(FileSystemEventHandler):
 
     def _process_change(self, event: FileSystemEvent) -> None:
         """Process document file change."""
+        if self.doc_updater is None:
+            return  # No document updater configured
+
         src_path = event.src_path
         if isinstance(src_path, bytes):
             src_path = src_path.decode()
@@ -743,8 +749,12 @@ class UnifiedChangeEventHandler(FileSystemEventHandler):
         self.code_handler = CodeChangeEventHandler(
             code_updater, debounce_seconds, max_wait_seconds
         )
-        self.doc_handler = DocumentChangeEventHandler(
-            doc_updater, debounce_seconds, max_wait_seconds
+        self.doc_handler = (
+            DocumentChangeEventHandler(
+                doc_updater, debounce_seconds, max_wait_seconds
+            )
+            if doc_updater is not None
+            else None
         )
 
     def dispatch(self, event: FileSystemEvent) -> None:
@@ -767,7 +777,7 @@ class UnifiedChangeEventHandler(FileSystemEventHandler):
 
         if classification.file_type == FileType.CODE:
             self.code_handler.dispatch(event)
-        elif classification.file_type == FileType.DOCUMENT:
+        elif classification.file_type == FileType.DOCUMENT and self.doc_handler:
             self.doc_handler.dispatch(event)
         elif classification.file_type == FileType.JSON and self.json_handler:
             self.json_handler.dispatch(event)
