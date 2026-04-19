@@ -60,6 +60,7 @@ CODE_EXTENSIONS: dict[str, str] = {
 DOCUMENT_EXTENSIONS: dict[str, str] = {
     ".md": "markdown",
     ".markdown": "markdown",
+    ".mmd": "mermaid",
     ".rst": "rst",
     ".rest": "rst",
     ".txt": "text",

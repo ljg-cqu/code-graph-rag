@@ -337,6 +337,14 @@ UI_GRAPH_EXPORT_SUCCESS = (
 )
 UI_GRAPH_EXPORT_STATS = "[bold cyan]Export contains {nodes} nodes and {relationships} relationships[/bold cyan]"
 UI_ERR_UNEXPECTED = "[bold red]An unexpected error occurred: {error}[/bold red]"
+UI_ERR_TOKEN_LIMIT = (
+    "[bold red]Context exceeds model token limit ({current:,} > {limit:,}). "
+    "Attempting emergency compression...[/bold red]"
+)
+UI_ERR_TOKEN_LIMIT_COMPRESS_FAILED = (
+    "[bold red]Emergency compression failed to reduce context below limit. "
+    "Consider starting a new session or using /compress --aggressive.[/bold red]"
+)
 UI_ERR_EXPORT_FAILED = "[bold red]Failed to export graph: {error}[/bold red]"
 UI_MODEL_SWITCHED = "[bold green]Model switched to: {model}[/bold green]"
 UI_MODEL_CURRENT = "[bold cyan]Current model: {model}[/bold cyan]"
@@ -1140,6 +1148,8 @@ TABLE_ROW_OLLAMA_CYPHER = "Ollama Endpoint (Cypher)"
 TABLE_ROW_EDIT_CONFIRMATION = "Edit Confirmation"
 TABLE_ROW_YOLO_MODE = "Yolo Mode"
 TABLE_ROW_TARGET_REPOSITORY = "Target Repository"
+TABLE_ROW_ENV_FILE = "Env File"
+TABLE_ROW_ENV_FILE_DEFAULT = "default .env"
 TABLE_ROW_CODE_GRAPH = "Code Graph"
 TABLE_ROW_DOCUMENT_GRAPH = "Document Graph"
 TABLE_ROW_DOC_GRAPH_NOT_CONNECTED = "NOT CONNECTED (use --with-docs)"
@@ -1150,6 +1160,10 @@ MSG_CONNECTED_MEMGRAPH = "Successfully connected to Memgraph."
 MSG_THINKING_CANCELLED = "Thinking cancelled."
 MSG_FORCE_EXIT = "Forcing exit..."
 MSG_TIMEOUT_FORMAT = "Operation timed out after {timeout} seconds."
+MSG_MODEL_OVERLOADED = (
+    "Model overloaded (HTTP {status}). Retrying in {backoff:.1f}s "
+    "(attempt {attempt}/{max_retries})..."
+)
 MSG_CHAT_INSTRUCTIONS = (
     "Ask questions about your codebase graph. Type 'exit' or 'quit' to end."
 )

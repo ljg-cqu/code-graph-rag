@@ -306,3 +306,20 @@ def create_rag_orchestrator(tools: list[Tool]) -> Agent:
     return create_rag_orchestrator_with_config(
         settings.active_orchestrator_config, tools
     )
+
+
+def create_compression_agent() -> Agent:
+    """Create a PydanticAI agent for semantic context distillation."""
+    from ..compression_prompts import COMPRESSION_SYSTEM_PROMPT
+    from ..compression_schemas import CompressedState
+
+    role = settings.SEMANTIC_COMPRESSION_MODEL_ROLE
+    config = getattr(settings, f"active_{role}_config", settings.active_orchestrator_config)
+    llm = _create_provider_model(config)
+
+    return Agent(
+        model=llm,
+        system_prompt=COMPRESSION_SYSTEM_PROMPT,
+        output_type=CompressedState,
+        retries=settings.AGENT_RETRIES,
+    )

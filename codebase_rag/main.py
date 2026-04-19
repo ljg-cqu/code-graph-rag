@@ -4,6 +4,7 @@ import asyncio
 import difflib
 import json
 import os
+import random
 import re
 import shlex
 import shutil
@@ -30,6 +31,7 @@ from pydantic_ai import (
     ToolCallPart,
     ToolDenied,
 )
+from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.usage import UsageLimits
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -42,7 +44,6 @@ from . import exceptions as ex
 from . import logs as ls
 from . import tool_errors as te
 from .config import ModelConfig, load_cgrignore_patterns, settings
-from .context_compressor import ContextCompressor
 from .graph_updater import GraphUpdater
 from .models import AppContext
 from .models_dynamic import DynamicModelInfo
@@ -53,6 +54,7 @@ from .orchestrator import (
 )
 from .prompts import OPTIMIZATION_PROMPT, OPTIMIZATION_PROMPT_WITH_REFERENCE
 from .providers.base import get_provider_from_config
+from .semantic_compressor import SemanticCompressor
 from .services import QueryProtocol
 from .services.graph_service import MemgraphIngestor
 from .services.llm import CypherGenerator, create_rag_orchestrator
@@ -517,6 +519,24 @@ def _create_configuration_table(
     table.add_row(cs.TABLE_ROW_EDIT_CONFIRMATION, confirmation_status)
     table.add_row(cs.TABLE_ROW_TARGET_REPOSITORY, repo_path)
 
+    # Show env file source
+    import os
+    _env_file = os.environ.get("ENV_FILE")
+    if _env_file and os.path.isfile(_env_file):
+        # Show relative path if within project, otherwise show basename
+        env_file_display = _env_file
+        try:
+            from pathlib import Path
+            env_path = Path(_env_file)
+            cwd = Path.cwd()
+            if env_path.is_relative_to(cwd):
+                env_file_display = str(env_path.relative_to(cwd))
+        except ValueError:
+            pass  # Use full path if not relative
+        table.add_row(cs.TABLE_ROW_ENV_FILE, env_file_display)
+    else:
+        table.add_row(cs.TABLE_ROW_ENV_FILE, cs.TABLE_ROW_ENV_FILE_DEFAULT)
+
     return table
 
 
@@ -562,24 +582,117 @@ async def run_optimization_loop(
     )
 
 
+def _is_token_limit_error(error: ModelHTTPError) -> bool:
+    """Check if a ModelHTTPError is due to token limit exceeded."""
+    if not error.body:
+        return False
+    body = error.body if isinstance(error.body, dict) else {}
+    error_info = body.get("error", {})
+    error_message = error_info.get("message", "") if isinstance(error_info, dict) else ""
+    # Match common token limit error messages from various providers
+    token_limit_patterns = [
+        "exceeded model token limit",
+        "context length exceeded",
+        "maximum context length",
+        "token limit",
+        "context_length_exceeded",
+    ]
+    return any(pattern in error_message.lower() for pattern in token_limit_patterns)
+
+
+async def _emergency_compress(
+    message_history: list,
+    max_context: int,
+    pending_query: str,
+    app_context: AppContext,
+) -> bool:
+    """Attempt emergency compression when token limit is exceeded.
+
+    Args:
+        message_history: The conversation history to compress.
+        max_context: Maximum allowed token budget.
+        pending_query: The current user query.
+        app_context: Application context for console output.
+
+    Returns:
+        True if compression succeeded and context was reduced, False otherwise.
+    """
+    from .semantic_compressor import SemanticCompressor, _count_context_tokens
+
+    try:
+        context = _message_history_to_context(message_history)
+        original_tokens = _count_context_tokens(context)
+
+        compressor = SemanticCompressor(
+            context=context,
+            max_context=max_context,
+            pending_query=pending_query,
+            aggressive_mode=True,  # Use aggressive mode for emergency compression
+        )
+        result = await compressor.compress()
+
+        if result.compressed_tokens < original_tokens and result.compressed_tokens <= max_context:
+            compressed_history = _context_to_message_history(result.compressed_context)
+            if compressed_history:
+                message_history[:] = compressed_history
+                app_context.console.print(
+                    style(
+                        f"✅ Emergency compression reduced context from {original_tokens:,} to {result.compressed_tokens:,} tokens",
+                        cs.Color.GREEN,
+                    )
+                )
+                return True
+
+        logger.warning(ls.EMERGENCY_COMPRESSION_FAILED.format(error="Context not reduced below limit"))
+        return False
+    except Exception as e:
+        logger.error(ls.EMERGENCY_COMPRESSION_FAILED.format(error=str(e)))
+        return False
+
+
 def _cleanup_unprocessed_tool_calls(message_history: list) -> None:
     """Remove unprocessed tool call parts from message history.
 
-    When a user cancels mid-execution, tool calls may be in the history
-    without corresponding results. Pydantic-ai rejects new prompts in
-    this state, so we must clean up before the next interaction.
+    When execution is interrupted (cancellation or model errors), tool calls
+    may be in the history without corresponding results. Pydantic-ai rejects
+    new prompts in this state, so we must clean up before the next interaction.
     """
-    from pydantic_ai.messages import ModelRequest, ToolCallPart
+    from dataclasses import replace
+
+    from pydantic_ai.messages import (
+        BuiltinToolCallPart,
+        ModelRequest,
+        ModelResponse,
+        ToolCallPart,
+    )
 
     cleaned = []
     for msg in message_history:
         if isinstance(msg, ModelRequest):
-            parts = [p for p in msg.parts if not isinstance(p, ToolCallPart)]
+            parts = [
+                p
+                for p in msg.parts
+                if not isinstance(p, ToolCallPart | BuiltinToolCallPart)
+            ]
             if parts:
                 cleaned.append(ModelRequest(parts=parts))
         else:
             cleaned.append(msg)
     message_history[:] = cleaned
+
+    # Strip unprocessed tool calls from trailing ModelResponse so the history
+    # ends in a valid state for the next user prompt.
+    if message_history and isinstance(message_history[-1], ModelResponse):
+        last = message_history[-1]
+        non_tool_parts = [
+            p
+            for p in last.parts
+            if not isinstance(p, ToolCallPart | BuiltinToolCallPart)
+        ]
+        if non_tool_parts:
+            message_history[-1] = replace(last, parts=non_tool_parts)
+        else:
+            message_history.pop()
 
 
 async def run_with_cancellation[T](
@@ -650,24 +763,24 @@ async def _run_agent_response_loop(
             and message_history
             and not deferred_results
         ):
-            from .utils.token_utils import count_tokens
+            from .semantic_compressor import _count_context_tokens
 
             # Estimate total tokens (history + new question)
-            # Avoid circular references by stringifying directly instead of asdict
-            serialized = "\n".join(
-                [str(m) for m in message_history] + [question_with_context]
-            )
-            total_tokens = count_tokens(serialized)
+            # Use dedicated token counter for message format
+            context = _message_history_to_context(message_history)
+            history_tokens = _count_context_tokens(context)
+            question_tokens = _count_context_tokens([{"role": "user", "content": question_with_context}])
+            total_tokens = history_tokens + question_tokens
             # Get max context window from model config (default to 256k if not specified)
-            max_context = settings.DEFAULT_CONTEXT_WINDOW
+            model_context_window = settings.DEFAULT_CONTEXT_WINDOW
             try:
                 # Check for role-specific override first (highest precedence)
                 if settings.ORCHESTRATOR_CONTEXT_WINDOW:
-                    max_context = settings.ORCHESTRATOR_CONTEXT_WINDOW
+                    model_context_window = settings.ORCHESTRATOR_CONTEXT_WINDOW
                 elif model_override_config:
                     # Get from override if set
                     provider = get_provider_from_config(model_override_config)
-                    max_context = provider.get_model_context_window(
+                    model_context_window = provider.get_model_context_window(
                         model_override_config.model_id
                     )
                 else:
@@ -675,7 +788,7 @@ async def _run_agent_response_loop(
                     provider = get_provider_from_config(
                         settings.active_orchestrator_config
                     )
-                    max_context = provider.get_model_context_window(
+                    model_context_window = provider.get_model_context_window(
                         settings.active_orchestrator_config.model_id
                     )
             except Exception as e:
@@ -683,6 +796,16 @@ async def _run_agent_response_loop(
                 logger.debug(
                     f"Failed to retrieve model context window, using default {settings.DEFAULT_CONTEXT_WINDOW:,}: {e}"
                 )
+
+            # Apply system reserve for system prompt, tools, and response buffer
+            system_reserve_factor = (100 - settings.CONTEXT_COMPRESSION_SYSTEM_RESERVE_PCT) / 100
+            max_context = int(model_context_window * system_reserve_factor)
+
+            # Additional safety margin for pydantic-ai overhead (message serialization, etc.)
+            # The token counter only counts message content, but pydantic-ai adds overhead
+            # when serializing messages for the LLM API call
+            PYDANTIC_AI_OVERHEAD_FACTOR = 0.95  # 5% safety margin
+            max_context = int(max_context * PYDANTIC_AI_OVERHEAD_FACTOR)
 
             trigger_threshold = int(
                 max_context * settings.CONTEXT_COMPRESSION_AUTO_TRIGGER_PCT / 100
@@ -696,16 +819,14 @@ async def _run_agent_response_loop(
                     )
                 )
 
-                # Convert history to compressor format
-                context = _message_history_to_context(message_history)
-
-                compressor = ContextCompressor(
+                # context was already converted above for token counting
+                compressor = SemanticCompressor(
                     context=context,
                     max_context=max_context,
+                    pending_query=question_with_context,
                     aggressive_mode=False,
-                    worker_count=settings.CONTEXT_COMPRESSION_PARALLEL_WORKERS,
                 )
-                result = compressor.compress_sync()
+                result = await compressor.compress()
 
                 if not result.was_rolled_back and result.compressed_context:
                     compressed_history = _context_to_message_history(
@@ -742,16 +863,91 @@ async def _run_agent_response_loop(
                         )
                     )
 
-        with app_context.console.status(config.status_message):
-            response = await run_with_cancellation(
-                rag_agent.run(
-                    question_with_context,
-                    message_history=message_history,
-                    deferred_tool_results=deferred_results,
-                    model=model_override,
-                    usage_limits=UsageLimits(request_limit=settings.AGENT_REQUEST_LIMIT),
-                ),
-            )
+        max_retries = settings.AGENT_RETRIES
+        retry_delay = 1.0
+
+        for attempt in range(max_retries + 1):
+            try:
+                with app_context.console.status(config.status_message):
+                    response = await run_with_cancellation(
+                        rag_agent.run(
+                            question_with_context,
+                            message_history=message_history,
+                            deferred_tool_results=deferred_results,
+                            model=model_override,
+                            usage_limits=UsageLimits(
+                                request_limit=settings.AGENT_REQUEST_LIMIT
+                            ),
+                        ),
+                    )
+                break
+            except ModelHTTPError as e:
+                transient_codes = {429, 502, 503, 504}
+                if e.status_code in transient_codes and attempt < max_retries:
+                    backoff = retry_delay * (2**attempt) + random.uniform(0, 1)
+                    logger.warning(
+                        ls.MODEL_HTTP_RETRY.format(
+                            status=e.status_code,
+                            backoff=backoff,
+                            attempt=attempt + 1,
+                            max_retries=max_retries,
+                        )
+                    )
+                    app_context.console.print(
+                        style(
+                            cs.MSG_MODEL_OVERLOADED.format(
+                                status=e.status_code,
+                                backoff=backoff,
+                                attempt=attempt + 1,
+                                max_retries=max_retries,
+                            ),
+                            cs.Color.YELLOW,
+                        )
+                    )
+                    await asyncio.sleep(backoff)
+                    continue
+
+                # Handle token limit exceeded error (status 400 with specific message)
+                if e.status_code == 400 and _is_token_limit_error(e):
+                    logger.warning(ls.EMERGENCY_COMPRESSION_TRIGGERED)
+                    current_tokens = _count_context_tokens(
+                        _message_history_to_context(message_history)
+                    )
+                    app_context.console.print(
+                        style(
+                            cs.UI_ERR_TOKEN_LIMIT.format(
+                                current=current_tokens,
+                                limit=model_context_window,
+                            ),
+                            cs.Color.RED,
+                        )
+                    )
+
+                    # Attempt emergency compression with aggressive mode
+                    emergency_success = await _emergency_compress(
+                        message_history,
+                        max_context,
+                        question_with_context,
+                        app_context,
+                    )
+
+                    if emergency_success and attempt < max_retries:
+                        # Retry with compressed context
+                        logger.info("Retrying with compressed context")
+                        continue
+                    else:
+                        app_context.console.print(
+                            style(
+                                cs.UI_ERR_TOKEN_LIMIT_COMPRESS_FAILED,
+                                cs.Color.RED,
+                            )
+                        )
+
+                _cleanup_unprocessed_tool_calls(message_history)
+                raise
+            except Exception:
+                _cleanup_unprocessed_tool_calls(message_history)
+                raise
 
         if isinstance(response, CancelledResult):
             # Clean up any unprocessed tool calls from message history
@@ -1710,15 +1906,15 @@ async def _run_interactive_loop(
                     context = _message_history_to_context(app_context.session.history)
 
                     # Get max context window for current model
-                    max_context = settings.DEFAULT_CONTEXT_WINDOW
+                    model_context_window = settings.DEFAULT_CONTEXT_WINDOW
                     try:
                         # Check for role-specific override first (highest precedence)
                         if settings.ORCHESTRATOR_CONTEXT_WINDOW:
-                            max_context = settings.ORCHESTRATOR_CONTEXT_WINDOW
+                            model_context_window = settings.ORCHESTRATOR_CONTEXT_WINDOW
                         elif model_override_config:
                             # Get from model override if set
                             provider = get_provider_from_config(model_override_config)
-                            max_context = provider.get_model_context_window(
+                            model_context_window = provider.get_model_context_window(
                                 model_override_config.model_id
                             )
                         else:
@@ -1726,7 +1922,7 @@ async def _run_interactive_loop(
                             provider = get_provider_from_config(
                                 settings.active_orchestrator_config
                             )
-                            max_context = provider.get_model_context_window(
+                            model_context_window = provider.get_model_context_window(
                                 settings.active_orchestrator_config.model_id
                             )
                     except Exception as e:
@@ -1734,14 +1930,22 @@ async def _run_interactive_loop(
                             f"Failed to retrieve model context window for /compress command, using default {settings.DEFAULT_CONTEXT_WINDOW:,}: {e}"
                         )
 
-                    compressor = ContextCompressor(
+                    # Apply system reserve for system prompt, tools, and response buffer
+                    system_reserve_factor = (100 - settings.CONTEXT_COMPRESSION_SYSTEM_RESERVE_PCT) / 100
+                    max_context = int(model_context_window * system_reserve_factor)
+
+                    # Additional safety margin for pydantic-ai overhead (message serialization, etc.)
+                    # Consistent with auto-compression logic
+                    PYDANTIC_AI_OVERHEAD_FACTOR = 0.95  # 5% safety margin
+                    max_context = int(max_context * PYDANTIC_AI_OVERHEAD_FACTOR)
+
+                    compressor = SemanticCompressor(
                         context=context,
                         max_context=max_context,
                         aggressive_mode=aggressive,
                         preserve_pattern=preserve_pattern,
-                        worker_count=workers,
                     )
-                    result = compressor.compress_sync()
+                    result = await compressor.compress()
 
                     # Display results
                     table = Table(
@@ -1766,6 +1970,42 @@ async def _run_interactive_loop(
                         )
 
                     app_context.console.print(table)
+
+                    # Display semantic compression details if available
+                    if result.compression_rationale:
+                        app_context.console.print(
+                            style("\n📝 Compression Rationale:", cs.Color.CYAN)
+                        )
+                        app_context.console.print(f"  {result.compression_rationale}")
+
+                    if result.task_state:
+                        task_table = Table(
+                            title=style("\n🔍 Task State Summary", cs.Color.CYAN),
+                            show_header=False,
+                            box=None,
+                        )
+                        task_table.add_column("Field", style=cs.Color.MAGENTA)
+                        task_table.add_column("Value", style=cs.Color.WHITE)
+
+                        ts = result.task_state
+                        if ts.current_objective:
+                            task_table.add_row("Objective", ts.current_objective)
+                        if ts.completed_steps:
+                            task_table.add_row("Completed", "; ".join(ts.completed_steps))
+                        if ts.pending_questions:
+                            task_table.add_row("Pending", "; ".join(ts.pending_questions))
+                        if ts.active_code_elements:
+                            task_table.add_row("Active Code", "; ".join(ts.active_code_elements))
+                        if ts.key_decisions:
+                            task_table.add_row("Decisions", "; ".join(ts.key_decisions))
+                        if ts.error_states:
+                            task_table.add_row("Errors", "; ".join(ts.error_states))
+                        if ts.tool_results_summary:
+                            task_table.add_row("Tool Results", ts.tool_results_summary)
+                        if ts.user_preferences:
+                            task_table.add_row("Preferences", "; ".join(ts.user_preferences))
+
+                        app_context.console.print(task_table)
 
                     if result.was_rolled_back:
                         app_context.console.print(
@@ -2003,6 +2243,7 @@ async def _run_interactive_loop(
                 except asyncio.CancelledError:
                     # Defensive: CancelledError propagates if run_with_cancellation
                     # doesn't catch it (shouldn't happen in current design)
+                    _cleanup_unprocessed_tool_calls(message_history)
                     break
                 finally:
                     _current_processing_task = None
@@ -2014,6 +2255,7 @@ async def _run_interactive_loop(
             except asyncio.CancelledError:
                 break
             except Exception as e:
+                _cleanup_unprocessed_tool_calls(message_history)
                 logger.exception(ls.UNEXPECTED.format(error=e))
                 app_context.console.print(cs.UI_ERR_UNEXPECTED.format(error=e))
 

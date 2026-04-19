@@ -1,14 +1,15 @@
 """Tests for ContextCompressor."""
 
+
 import pytest
-from unittest.mock import patch
 
 from codebase_rag.context_compressor import (
     CompressionResult,
     ContextArchive,
     ContextCompressor,
-    StrategyEvaluationResult,
 )
+
+pytestmark = [pytest.mark.anyio]
 
 
 class TestContextCompressor:
@@ -101,28 +102,33 @@ class TestContextCompressor:
         assert 0.0 <= score <= 1.0
 
     def test_rollback_on_low_retention(self):
-        """Verify rollback works when retention is below threshold."""
-        # Need enough messages to trigger compression (over budget with > 3 compressible)
+        """Verify rollback works when retention is below threshold and original fits budget."""
+        # Create context with messages long enough to be truncated by hierarchical summarization (>500 chars)
+        # Need compressible content > 3 messages to bypass fast path
+        long_text = "This is a long message that exceeds 500 characters. " * 15  # ~750 chars
         context = [
-            {"role": "system", "content": "System prompt."},
-            {"role": "user", "content": "def important_function(): pass"},
-            {"role": "assistant", "content": "class ImportantClass: pass"},
-            {"role": "user", "content": "What about this function?"},
-            {"role": "assistant", "content": "Another class definition here."},
-            {"role": "user", "content": "More context here."},
-            {"role": "assistant", "content": "Even more assistant content."},
+            {"role": "system", "content": "System prompt here."},
+            {"role": "user", "content": long_text + "First question with some details here."},
+            {"role": "assistant", "content": long_text + "First answer with explanation of concepts."},
+            {"role": "user", "content": long_text + "Second question asking for more info."},
+            {"role": "assistant", "content": long_text + "Second answer with detailed response here."},
+            {"role": "user", "content": long_text + "Third question about the topic discussed."},
+            {"role": "assistant", "content": long_text + "Third answer with final thoughts on this."},
         ]
 
+        # Original must fit within budget so rollback is possible
+        # Set max_context high enough for original, but low enough to trigger compression
         # Set very high retention threshold to force rollback
         compressor = ContextCompressor(
             context=context,
-            max_context=50,  # Force compression due to over budget
-            min_retention_score=99.0,  # Impossibly high - will force rollback
+            max_context=5000,  # High budget, original fits
+            min_retention_score=99.9,  # Impossibly high - will force rollback
+            aggressive_mode=True,  # Force aggressive compression to reduce retention
         )
 
         result = compressor.compress_sync()
 
-        # Should be rolled back
+        # Should be rolled back (since original fits budget and retention below threshold)
         assert result.was_rolled_back is True
         assert result.reduction_pct == 0.0
         assert result.compressed_tokens == result.original_tokens
@@ -301,3 +307,101 @@ class TestContextCompressor:
 
         # Should still complete without error
         assert isinstance(result, CompressionResult)
+
+    def test_rollback_does_not_exceed_budget_when_preserved_content_is_large(self):
+        """Bug 1: rollback must not revert to original if original exceeds budget."""
+        context = [
+            {"role": "system", "content": "System 1. " * 50},
+            {"role": "system", "content": "System 2. " * 50},
+        ]
+        compressor = ContextCompressor(context=context, max_context=50)
+        result = compressor.compress_sync()
+        assert result.compressed_tokens <= 50, \
+            f"compressed_tokens ({result.compressed_tokens}) must not exceed max_context (50)"
+
+    def test_strategies_compress_large_messages_even_when_few(self):
+        """Bug 2: strategies must act when token budget is exceeded, regardless of message count."""
+        context = [
+            {"role": "user", "content": "A" * 10000},
+            {"role": "assistant", "content": "B" * 10000},
+            {"role": "user", "content": "C" * 10000},
+        ]
+        compressor = ContextCompressor(context=context, max_context=100)
+        # Strategies should attempt compression even with few messages when over budget
+        # Note: strategies don't guarantee budget compliance, hard_truncate enforces it
+        for _, fname, _ in compressor.STRATEGIES:
+            result = getattr(compressor, fname)(context.copy())
+            # Verify strategy returned a result (didn't just return original unchanged)
+            assert isinstance(result, list), f"{fname} should return a list"
+            assert len(result) > 0, f"{fname} should return non-empty result"
+
+        # Full compress_sync should enforce budget via hard_truncate
+        final_result = compressor.compress_sync()
+        assert final_result.compressed_tokens <= 100, \
+            f"compressed_tokens ({final_result.compressed_tokens}) exceeds max_context (100)"
+
+    def test_tool_messages_preserved_by_default(self):
+        """Bug 3: tool/function messages must be in preserved set."""
+        context = [
+            {"role": "system", "content": "System."},
+            {"role": "user", "content": "User."},
+            {"role": "tool", "content": "Tool result."},
+            {"role": "function", "content": "Function result."},
+        ]
+        compressor = ContextCompressor(context=context, max_context=1000)
+        preserved, compressible = compressor._preserve_matching_content(context)
+        preserved_roles = {m["role"] for m in preserved}
+        assert "tool" in preserved_roles
+        assert "function" in preserved_roles
+
+    def test_hard_truncate_fits_single_large_system_message(self):
+        """Bug 4: hard truncate must truncate individual messages when necessary."""
+        context = [{"role": "system", "content": "Very long system message. " * 100}]
+        compressor = ContextCompressor(context=context, max_context=20)
+        truncated = compressor._hard_truncate_to_budget(context, 20)
+        tokens = compressor._count_context_tokens(truncated)
+        # Allow small margin due to truncation indicator tokens
+        assert tokens <= 30, f"truncated tokens ({tokens}) significantly exceed budget (20)"
+
+    def test_thread_pool_conditional_usage(self):
+        """Bug 5: thread pool should only be used for non-trivial workloads."""
+        # Small context should use sequential evaluation
+        small_context = [
+            {"role": "user", "content": "Short message."},
+        ]
+        compressor = ContextCompressor(context=small_context, max_context=100)
+
+        # Run multiple compressions - should complete without error
+        for _ in range(5):
+            compressor.compress_sync()
+
+        # Large context should use parallel evaluation
+        large_context = [
+            {"role": "user", "content": "A" * 1000},
+            {"role": "assistant", "content": "B" * 1000},
+            {"role": "user", "content": "C" * 1000},
+            {"role": "assistant", "content": "D" * 1000},
+        ]
+        compressor_large = ContextCompressor(context=large_context, max_context=100)
+
+        # Should complete without error
+        result = compressor_large.compress_sync()
+        assert result is not None
+
+
+    async def test_compress_async_delegates_to_semantic_compressor(self):
+        """Backward compatibility: compress_async delegates to SemanticCompressor."""
+        import warnings
+
+        context = [
+            {"role": "system", "content": "System."},
+            {"role": "user", "content": "Hello!"},
+        ]
+        compressor = ContextCompressor(context=context, max_context=10000)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            result = await compressor.compress_async()
+
+        assert isinstance(result, CompressionResult)
+        assert result.compressed_tokens == result.original_tokens

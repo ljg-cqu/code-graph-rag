@@ -64,6 +64,11 @@ CMD_LANGUAGE_CLEANUP = "Clean up orphaned git modules that weren't properly remo
 HELP_BATCH_SIZE = "Number of buffered nodes/relationships before flushing to Memgraph"
 HELP_MEMGRAPH_HOST = "Memgraph host"
 HELP_MEMGRAPH_PORT = "Memgraph port"
+HELP_ENV_FILE = (
+    "Path to custom .env file for configuration. "
+    "Overrides default .env in current directory. "
+    "Can also be set via ENV_FILE environment variable."
+)
 HELP_ORCHESTRATOR = (
     "Specify orchestrator as provider:model "
     "(e.g., ollama:llama3.2, openai:gpt-4, google:gemini-3.1-pro-preview)"

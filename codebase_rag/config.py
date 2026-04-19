@@ -16,7 +16,20 @@ from . import exceptions as ex
 from . import logs
 from .types_defs import CgrignorePatterns, EmbeddingConfigKwargs, ModelConfigKwargs
 
-load_dotenv()
+# Support ENV_FILE environment variable for custom env file location
+_env_file = os.environ.get("ENV_FILE")
+if _env_file:
+    if os.path.isfile(_env_file):
+        load_dotenv(_env_file)
+        logger.debug(f"Loaded environment from ENV_FILE: {_env_file}")
+    else:
+        logger.warning(
+            f"ENV_FILE is set to '{_env_file}' but file not found. "
+            f"Falling back to default .env file."
+        )
+        load_dotenv()  # Fallback to default
+else:
+    load_dotenv()  # Default: load from current directory
 
 
 class ApiKeyInfoEntry(TypedDict):
@@ -290,7 +303,10 @@ class AppConfig(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        # Note: Environment is loaded at module level via load_dotenv()
+        # with support for ENV_FILE environment variable. This avoids
+        # double-loading and ensures ENV_FILE takes precedence.
+        env_file=None,
         env_file_encoding="utf-8",
         case_sensitive=False,
         validate_assignment=True,
@@ -506,6 +522,11 @@ class AppConfig(BaseSettings):
     """Number of parallel workers to use for codebase indexing.
     Auto-optimized at runtime: will not exceed available CPU cores or number of changed files.
     Set to 1 to disable parallel processing entirely (sequential mode)."""
+
+    INDEXING_WORKER_TIMEOUT: int = Field(default=3600, gt=0)
+    """Timeout in seconds for worker processes during indexing.
+    Prevents indefinite hangs when processing large files or stuck workers.
+    Default: 3600 (1 hour). Increase for very large codebases."""
 
     RUN_INGESTION_QUALITY_CHECKS: bool = True
     """Whether to run post-ingestion data quality validation checks after indexing completes."""
@@ -774,7 +795,10 @@ class AppConfig(BaseSettings):
     CYPHER_CONTEXT_WINDOW: int | None = Field(default=None, gt=0)
 
     # Context Window Compression Configuration
-    CONTEXT_COMPRESSION_AUTO_TRIGGER_PCT: float = Field(default=85.0, gt=0, lt=100)
+    CONTEXT_COMPRESSION_AUTO_TRIGGER_PCT: float = Field(
+        default=75.0, gt=0, lt=100,
+        description="Trigger compression when context reaches this % of max_context (reduced from 85% for safety)"
+    )
     CONTEXT_COMPRESSION_HYSTERESIS_PCT: float = Field(default=5.0, gt=0, lt=20)
     CONTEXT_COMPRESSION_MIN_RETENTION_SCORE: float = Field(default=70.0, gt=0, lt=100)
     CONTEXT_COMPRESSION_PARALLEL_WORKERS: int = Field(default=10, gt=0)
@@ -783,6 +807,23 @@ class AppConfig(BaseSettings):
     )
     CONTEXT_COMPRESSION_ARCHIVE_TTL_HOURS: int = Field(default=24, gt=0)
     CONTEXT_COMPRESSION_ENABLED: bool = True
+    CONTEXT_COMPRESSION_SYSTEM_RESERVE_PCT: float = Field(
+        default=20.0, gt=0, lt=50,
+        description="Percentage of context window to reserve for system prompt, tools, and response buffer"
+    )
+
+    # Semantic Compression Configuration
+    SEMANTIC_COMPRESSION_ENABLED: bool = True
+    SEMANTIC_COMPRESSION_MODEL_ROLE: Literal["orchestrator", "cypher"] = "orchestrator"
+    SEMANTIC_COMPRESSION_MAX_RECENT_MESSAGES: int = Field(default=4, ge=1, le=10)
+    SEMANTIC_COMPRESSION_TARGET_PCT: float = Field(default=75.0, gt=0, lt=100)
+    SEMANTIC_COMPRESSION_TIMEOUT_SECONDS: int = Field(default=30, gt=0)
+    SEMANTIC_COMPRESSION_FALLBACK_ON_ERROR: bool = True
+    SEMANTIC_COMPRESSION_VERBATIM_BUDGET_PCT: float = Field(default=40.0, gt=0, lt=80)
+    SEMANTIC_COMPRESSION_LLM_INPUT_CAP: int = Field(default=50000, gt=1000)
+    SEMANTIC_COMPRESSION_PRESERVE_VERBATIM_ROLES: frozenset[str] = Field(
+        default_factory=lambda: frozenset({"system", "tool", "function"})
+    )
 
     # ─────────────────────────────────────────────────────────
     # Model Management Feature Configuration (Phase 3 placeholders)

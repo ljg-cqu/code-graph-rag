@@ -32,6 +32,7 @@ from .types_defs import (
     SimpleNameLookup,
     TrieNode,
 )
+from .shared.utils.file_classifier import is_code_file
 from .utils.dependencies import has_embedding_provider, has_semantic_dependencies
 from .utils.fqn_resolver import find_function_source_by_fqn
 from .utils.path_utils import should_skip_path
@@ -464,7 +465,7 @@ class GraphUpdater:
                 self.repo_path,
                 exclude_paths=self.exclude_paths,
                 unignore_paths=self.unignore_paths,
-            ):
+            ) and is_code_file(self._single_file):
                 return [self._single_file]
             return []
 
@@ -479,6 +480,7 @@ class GraphUpdater:
                     exclude_paths=self.exclude_paths,
                     unignore_paths=self.unignore_paths,
                 )
+                and is_code_file(filepath)
             ):
                 eligible.append(filepath)
         return eligible
@@ -561,6 +563,14 @@ class GraphUpdater:
 
         buffered_node_count_since_flush = 0
 
+        # Early exit if no files to process
+        if not changed_files:
+            logger.info("No files to process (all files unchanged or no eligible files)")
+            if skipped_count > 0:
+                logger.info(ls.INCREMENTAL_SKIPPED, count=skipped_count)
+            _save_hash_cache(cache_path, new_hashes)
+            return
+
         with Progress(
             SpinnerColumn(),
             TextColumn(ls.PROGRESS_INDEXING_LABEL),
@@ -572,6 +582,8 @@ class GraphUpdater:
             progress.advance(task, skipped_count)
 
             # Parallel processing with ProcessPoolExecutor (safe for CPU-bound tasks)
+            # Use configurable timeout to prevent indefinite hangs
+            worker_timeout = settings.INDEXING_WORKER_TIMEOUT
             with ProcessPoolExecutor(
                 max_workers=actual_workers,
                 mp_context=mp.get_context("spawn"),
@@ -591,10 +603,28 @@ class GraphUpdater:
 
                 from .types_defs import NodeType
 
-                # Collect results as they complete
-                for future in as_completed(futures):
-                    try:
-                        node_results, rel_results = future.result()
+                # Collect results as they complete with timeout
+                completed_count = 0
+                total_chunks = len(futures)
+                try:
+                    for future in as_completed(futures, timeout=worker_timeout):
+                        completed_count += 1
+                        try:
+                            node_results, rel_results = future.result()
+                        except Exception as e:
+                            # Log individual worker error but continue processing other futures
+                            logger.error(
+                                ls.WORKER_PROCESSING_FAILED.format(
+                                    error=str(e),
+                                    traceback="".join(
+                                        traceback.format_exception(
+                                            type(e), e, e.__traceback__
+                                        )
+                                    ).rstrip(),
+                                )
+                            )
+                            continue
+
                         processed_node_count = 0
                         processed_file_count = futures[future]
 
@@ -659,17 +689,28 @@ class GraphUpdater:
                             self.ingestor.flush_all()
                             buffered_node_count_since_flush = 0
 
-                    except Exception as e:
-                        logger.error(
-                            ls.WORKER_PROCESSING_FAILED.format(
-                                error=str(e),
-                                traceback="".join(
-                                    traceback.format_exception(
-                                        type(e), e, e.__traceback__
-                                    )
-                                ).rstrip(),
+                        # Log progress every 10% of chunks
+                        if completed_count % max(1, total_chunks // 10) == 0:
+                            logger.debug(
+                                f"Processing progress: {completed_count}/{total_chunks} chunks completed"
+                            )
+
+                except TimeoutError:
+                    logger.error(
+                        f"Worker timeout after {worker_timeout}s - some files may not be indexed. "
+                        f"Completed {completed_count}/{total_chunks} chunks."
+                    )
+                    # Cancel remaining futures
+                    for future in futures:
+                        future.cancel()
+                    # Still flush what we have
+                    if buffered_node_count_since_flush > 0:
+                        logger.info(
+                            ls.PERIODIC_FLUSH.format(
+                                count=buffered_node_count_since_flush
                             )
                         )
+                        self.ingestor.flush_all()
 
         deleted_keys = set(old_hashes.keys()) - current_file_keys
         if deleted_keys:

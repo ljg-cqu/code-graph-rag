@@ -180,7 +180,7 @@ class TestIncrementalUpdates:
             patch("codebase_rag.graph_updater.ProcessPoolExecutor", FakeExecutor),
             patch(
                 "codebase_rag.graph_updater.as_completed",
-                side_effect=lambda futures: list(futures),
+                side_effect=lambda futures, timeout=None: list(futures),
             ),
         ):
             updater._process_files(force=True, num_workers=2)
@@ -271,7 +271,7 @@ class TestIncrementalUpdates:
             patch("codebase_rag.graph_updater.ProcessPoolExecutor", FakeExecutor),
             patch(
                 "codebase_rag.graph_updater.as_completed",
-                side_effect=lambda futures: list(futures),
+                side_effect=lambda futures, timeout=None: list(futures),
             ),
         ):
             updater._process_files(force=True, num_workers=2)

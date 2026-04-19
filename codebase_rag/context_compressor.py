@@ -4,6 +4,7 @@ import json
 import re
 import threading
 import time
+import warnings
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -29,6 +30,8 @@ class CompressionResult:
     execution_time: float
     archive_id: str | None = None
     was_rolled_back: bool = False
+    compression_rationale: str | None = None  # LLM explanation of what was kept and why
+    task_state: Any | None = None  # Structured TaskState from semantic compression
 
 
 @dataclass
@@ -165,6 +168,9 @@ class ContextCompressor:
             # Always preserve system messages
             if msg.get("role") == "system":
                 preserved.append(msg)
+            # Preserve tool and function messages (critical execution results)
+            elif msg.get("role") in ("tool", "function"):
+                preserved.append(msg)
             # Preserve messages matching the pattern
             elif self.preserve_pattern and self.preserve_pattern.search(
                 json.dumps(msg)
@@ -177,6 +183,52 @@ class ContextCompressor:
             f"Preserved {len(preserved)} messages (system prompts + pattern matches)"
         )
         return preserved, compressible
+
+    def _truncate_message_to_budget(self, msg: dict[str, Any], token_budget: int) -> dict[str, Any] | None:
+        """Truncate a single message's content to fit within token budget.
+
+        Args:
+            msg: Message dictionary with 'content' field.
+            token_budget: Maximum tokens allowed for this message.
+
+        Returns:
+            Truncated message dict, or None if the message cannot fit even with
+            minimal content (should be dropped).
+        """
+        content = msg.get("content", "")
+        if not content:
+            return msg  # Empty content, fits trivially
+
+        # Convert non-string content to JSON string for truncation
+        if not isinstance(content, str):
+            try:
+                content = json.dumps(content)
+            except (TypeError, ValueError):
+                # Cannot serialize, drop message
+                return None
+
+        # Binary search for maximal prefix that fits within token budget
+        marker = "... [truncated]"
+        low, high = 0, len(content)
+        best_fit = 0
+
+        while low <= high:
+            mid = (low + high) // 2
+            truncated = content[:mid] + marker
+            test_msg = {**msg, "content": truncated}
+            test_tokens = self._count_context_tokens([test_msg])
+            if test_tokens <= token_budget:
+                best_fit = mid
+                low = mid + 1
+            else:
+                high = mid - 1
+
+        if best_fit == 0:
+            # Cannot fit even with minimal content
+            return None
+
+        final_content = content[:best_fit] + marker
+        return {**msg, "content": final_content}
 
     def _hard_truncate_to_budget(
         self, context: list[dict[str, Any]], budget: int
@@ -195,7 +247,46 @@ class ContextCompressor:
             if result_tokens + msg_tokens <= budget:
                 result.insert(len(system_msgs), msg)  # Insert after system messages
                 result_tokens += msg_tokens
-            else:
+            # Continue evaluating all messages, don't break on first that doesn't fit
+
+        # FIX Bug 4: If still over budget, truncate message content
+        # This handles: (1) system messages alone exceed budget, (2) last non-system message exceeds budget
+        max_iterations = len(result) * 2  # Prevent infinite loops
+        iteration = 0
+        while result_tokens > budget and result and iteration < max_iterations:
+            iteration += 1
+            # Find the newest message that has content we can truncate
+            truncated_something = False
+            for i in range(len(result) - 1, -1, -1):  # Start from newest
+                msg = result[i]
+                # Calculate budget for this message if we keep all other messages
+                other_messages = result[:i] + result[i+1:]
+                other_tokens = self._count_context_tokens(other_messages)
+                leftover = budget - other_tokens
+
+                if leftover > 10:
+                    # Try to truncate this message to fit within leftover budget
+                    truncated_msg = self._truncate_message_to_budget(msg, leftover)
+                    if truncated_msg is not None:
+                        result[i] = truncated_msg
+                        result_tokens = self._count_context_tokens(result)
+                        truncated_something = True
+                        break
+                    else:
+                        # Cannot fit even after truncation, remove message
+                        result = result[:i] + result[i+1:]
+                        result_tokens = self._count_context_tokens(result)
+                        truncated_something = True
+                        break
+                else:
+                    # Not enough budget for this message, remove it
+                    result = result[:i] + result[i+1:]
+                    result_tokens = self._count_context_tokens(result)
+                    truncated_something = True
+                    break
+
+            if not truncated_something:
+                # Can't truncate anything further
                 break
 
         return result
@@ -284,7 +375,13 @@ class ContextCompressor:
     def _hierarchical_summarization(
         self, context: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
-        if len(context) <= 3:
+        warnings.warn(
+            "_hierarchical_summarization is deprecated, use SemanticCompressor instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        # FIX Bug 2: Check token budget, not just message count
+        if len(context) <= 3 and self._count_context_tokens(context) <= self.max_context:
             return context
 
         preserved = context[-2:]
@@ -309,7 +406,13 @@ class ContextCompressor:
     def _stale_context_pruning(
         self, context: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
-        if len(context) <= 5:
+        warnings.warn(
+            "_stale_context_pruning is deprecated, use SemanticCompressor instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        # FIX Bug 2: Check token budget, not just message count
+        if len(context) <= 5 and self._count_context_tokens(context) <= self.max_context:
             return context
 
         latest_user_msg = next(
@@ -354,6 +457,11 @@ class ContextCompressor:
     def _semantic_ranking_filter(
         self, context: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
+        warnings.warn(
+            "_semantic_ranking_filter is deprecated, use SemanticCompressor instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         seen_hashes = set()
         unique_context = []
         for msg in context:
@@ -362,7 +470,8 @@ class ContextCompressor:
                 seen_hashes.add(msg_hash)
                 unique_context.append(msg)
 
-        if len(unique_context) <= 10:
+        # FIX Bug 2: Check token budget, not just message count
+        if len(unique_context) <= 10 and self._count_context_tokens(unique_context) <= self.max_context:
             return unique_context
 
         latest_user_msg = next(
@@ -399,6 +508,11 @@ class ContextCompressor:
     def _token_aware_merging(
         self, context: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
+        warnings.warn(
+            "_token_aware_merging is deprecated, use SemanticCompressor instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         merged = []
         last_role = None
         last_content = []
@@ -431,6 +545,11 @@ class ContextCompressor:
     def _hybrid_summarization_pruning(
         self, context: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
+        warnings.warn(
+            "_hybrid_summarization_pruning is deprecated, use SemanticCompressor instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         system_prompts = [m for m in context if m["role"] == "system"]
         user_messages = [m for m in context if m["role"] == "user"]
         preserved_recent = (
@@ -484,6 +603,7 @@ class ContextCompressor:
         strategy_id = params["strategy_id"]
         strategy_func = params["strategy_func"]
         context = params["context"]
+        original_compressible_tokens = self._count_context_tokens(context)
         start_time = time.time()
         try:
             compressed_context = strategy_func(context.copy())
@@ -491,12 +611,12 @@ class ContextCompressor:
 
             compressed_tokens = self._count_context_tokens(compressed_context)
             token_reduction_pct = (
-                (self.original_tokens - compressed_tokens) / self.original_tokens
-                if self.original_tokens > 0
+                (original_compressible_tokens - compressed_tokens) / original_compressible_tokens
+                if original_compressible_tokens > 0
                 else 0
             )
             semantic_retention = self._calculate_semantic_retention(
-                self.context, compressed_context
+                context, compressed_context
             )
 
             speed_score = min(1.0, max(0.0, 1.0 - (execution_time * 10)))
@@ -530,7 +650,7 @@ class ContextCompressor:
                 strategy_id=strategy_id,
                 strategy_name=strategy_func.__name__,
                 compressed_context=context,
-                compressed_tokens=self.original_tokens,
+                compressed_tokens=original_compressible_tokens,
                 semantic_retention_score=1.0,
                 token_reduction_pct=0.0,
                 execution_time=time.time() - start_time,
@@ -569,43 +689,49 @@ class ContextCompressor:
                 execution_time=time.time() - start_time,
             )
 
-        pool = self._get_worker_pool()
-        try:
-            task_funcs = [getattr(self, func_name) for (_, func_name, _) in self.STRATEGIES]
-            tasks = [
+        # FIX Bug 5: Only use thread pool for non-trivial workloads
+        task_funcs = [getattr(self, func_name) for (_, func_name, _) in self.STRATEGIES]
+        tasks = [
+            {
+                "strategy_id": strategy_id,
+                "strategy_func": func,
+                "context": compressible_content,
+            }
+            for (strategy_id, _, _), func in zip(self.STRATEGIES, task_funcs)
+        ]
+
+        compressible_tokens = self._count_context_tokens(compressible_content)
+        if len(self.STRATEGIES) <= 2 or compressible_tokens < 500:
+            # Sequential evaluation for small workloads
+            results = [self._evaluate_strategy(task) for task in tasks]
+        else:
+            pool = self._get_worker_pool()
+            try:
+                # Submit all strategy evaluations to the thread pool
+                futures = [pool.submit(self._evaluate_strategy, task) for task in tasks]
+                results = [f.result() for f in futures]
+            finally:
+                # Shutdown the thread pool to free resources
+                pool.shutdown(wait=True)
+
+        valid_results = [
+            res for res in results if isinstance(res, StrategyEvaluationResult)
+        ]
+
+        if not valid_results:
+            logger.warning(
+                "No valid compression strategy results, falling back to default hybrid strategy"
+            )
+            best_result = self._evaluate_strategy(
                 {
-                    "strategy_id": strategy_id,
-                    "strategy_func": func,
+                    "strategy_id": "S5",
+                    "strategy_func": self._hybrid_summarization_pruning,
                     "context": compressible_content,
-                }
-                for (strategy_id, _, _), func in zip(self.STRATEGIES, task_funcs)
-            ]
-
-            # Submit all strategy evaluations to the thread pool
-            futures = [pool.submit(self._evaluate_strategy, task) for task in tasks]
-            results = [f.result() for f in futures]
-
-            valid_results = [
-                res for res in results if isinstance(res, StrategyEvaluationResult)
-            ]
-
-            if not valid_results:
-                logger.warning(
-                    "No valid compression strategy results, falling back to default hybrid strategy"
-                )
-                best_result = self._evaluate_strategy(
-                    {
-                        "strategy_id": "S5",
-                        "strategy_func": self._hybrid_summarization_pruning,
-                        "context": compressible_content,
-                    },
-                )
-            else:
-                valid_results.sort(reverse=True, key=lambda x: x.total_score)
-                best_result = valid_results[0]
-        finally:
-            # Shutdown the thread pool to free resources
-            pool.shutdown(wait=True)
+                },
+            )
+        else:
+            valid_results.sort(reverse=True, key=lambda x: x.total_score)
+            best_result = valid_results[0]
 
         final_compressed = preserved_content + best_result.compressed_context
         final_tokens = self._count_context_tokens(final_compressed)
@@ -630,9 +756,14 @@ class ContextCompressor:
         was_rolled_back = False
         # min_retention_score is stored as percentage (e.g. 70 = 70%), convert to decimal for comparison
         min_retention_decimal = self.min_retention_score / 100
-        if best_result.semantic_retention_score < min_retention_decimal:
+
+        # FIX Bug 1: Only rollback if original fits within budget AND retention is too low.
+        # If original exceeds budget, hard-truncated result is the best possible fit.
+        original_fits_budget = self.original_tokens <= self.max_context
+        if original_fits_budget and best_result.semantic_retention_score < min_retention_decimal:
             logger.warning(
-                f"Compression retention score {best_result.semantic_retention_score * 100:.2f}% below minimum {self.min_retention_score:.2f}%, rolling back"
+                f"Compression retention score {best_result.semantic_retention_score * 100:.2f}% "
+                f"below minimum {self.min_retention_score:.2f}%, rolling back to original"
             )
             final_compressed = self.context
             final_tokens = self.original_tokens
@@ -653,3 +784,27 @@ class ContextCompressor:
             archive_id=archive_id,
             was_rolled_back=was_rolled_back,
         )
+
+
+    async def compress_async(
+        self, pending_query: str | None = None
+    ) -> CompressionResult:
+        """Asynchronous wrapper that delegates to SemanticCompressor.
+
+        Provides backward compatibility for callers migrating from sync to async.
+
+        Args:
+            pending_query: Optional query to optimize compression for (query-aware mode).
+        """
+        from .semantic_compressor import SemanticCompressor
+
+        compressor = SemanticCompressor(
+            context=self.context,
+            max_context=self.max_context,
+            pending_query=pending_query,
+            aggressive_mode=self.aggressive_mode,
+            preserve_pattern=self.preserve_pattern.pattern
+            if self.preserve_pattern
+            else None,
+        )
+        return await compressor.compress()

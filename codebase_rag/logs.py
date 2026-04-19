@@ -408,6 +408,9 @@ FILE_WRITER_SUCCESS = "[FileWriter] Successfully wrote {chars} characters to {pa
 
 # (H) Error logs (used with logger.error/warning)
 UNEXPECTED = "An unexpected error occurred: {error}"
+TOKEN_LIMIT_EXCEEDED = "Token limit exceeded: {current:,} > {limit:,} tokens for model {model}"
+EMERGENCY_COMPRESSION_TRIGGERED = "Emergency compression triggered due to token limit"
+EMERGENCY_COMPRESSION_FAILED = "Emergency compression failed: {error}"
 EXPORT_ERROR = "Export error: {error}"
 STATS_ERROR = "Stats error: {error}"
 INDEXING_FAILED = "Indexing failed"
@@ -725,6 +728,10 @@ TOOL_DUPLICATE_ESCALATED = (
     "Duplicate tool call escalated (attempt {count}): {tool_name}({query_arg})"
 )
 TOOL_DUPLICATE_INJECTED_WARNING = "Injected duplicate-call warning into message history"
+MODEL_HTTP_RETRY = (
+    "Model HTTP {status} error, retrying in {backoff:.1f}s "
+    "(attempt {attempt}/{max_retries})"
+)
 MCP_SERVER_TOOL_ERROR = "[GraphCode MCP] Error executing tool '{name}': {error}"
 MCP_SERVER_STARTING = "[GraphCode MCP] Starting MCP server..."
 MCP_SERVER_CREATED = "[GraphCode MCP] Server created, starting stdio transport..."

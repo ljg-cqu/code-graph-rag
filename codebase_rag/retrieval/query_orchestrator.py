@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from loguru import logger
 
 from ..config import settings
+from ..shared.utils.file_classifier import is_code_file
 
 if TYPE_CHECKING:
     from ..embeddings.base import EmbeddingProviderProtocol
@@ -370,12 +371,8 @@ class QueryMethodOrchestrator:
 
             # Count actual source files on disk (fast walk, no reading)
             repo_path = Path(settings.TARGET_REPO_PATH)
-            source_extensions = {
-                ".py", ".js", ".ts", ".java", ".cpp", ".c", ".rs",
-                ".go", ".lua", ".sol", ".php", ".scala", ".cs"
-            }
             disk_count = sum(
-                1 for _ in repo_path.rglob("*") if _.suffix in source_extensions
+                1 for _ in repo_path.rglob("*") if _.is_file() and is_code_file(_)
             )
 
             # Allow 10% tolerance (graph may exclude files via .cgrignore)
