@@ -235,6 +235,7 @@ class HealthChecker:
         self.results.append(self.check_file_layer())
         self.results.append(self.check_large_document_chunk_coverage())
         self.results.append(self.check_log_directory())
+        self.results.append(self.check_data_migrations_needed())
         sample_json_path = Path(cs.HEALTH_CHECK_JSON_SAMPLE_FILE)
         if sample_json_path.exists():
             self.results.append(self.check_json_ingestion_schema(str(sample_json_path)))
@@ -398,6 +399,8 @@ class HealthChecker:
             cursor.execute("MATCH (m:Module) RETURN count(m) AS module_count")
             module_row = cursor.fetchone()
             module_count = int(module_row[0]) if module_row else 0
+            # Consume any remaining results before next query
+            HealthChecker._consume_all_results(cursor)
 
             cursor.execute("MATCH (f:File) RETURN count(f) AS file_count")
             file_row = cursor.fetchone()
@@ -551,6 +554,90 @@ class HealthChecker:
             passed=True,
             message="File logging is disabled, all logs go to terminal"
         )
+
+    def check_data_migrations_needed(self) -> HealthCheckResult:
+        """Check if data migrations are needed."""
+        conn = None
+        cursor = None
+        issues = []
+
+        try:
+            conn = mgclient.connect(
+                host=settings.MEMGRAPH_HOST,
+                port=settings.MEMGRAPH_PORT,
+            )
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                MATCH (f:Function)
+                WHERE f.qualified_name STARTS WITH 'builtin.' AND NOT (f)<-[:DEFINES]-()
+                RETURN count(f)
+            """)
+            orphaned_builtins = cursor.fetchone()[0]
+            if orphaned_builtins > 0:
+                issues.append(f"{orphaned_builtins} orphaned builtin functions")
+
+            cursor.execute("""
+                MATCH (m:Module)
+                WHERE m.is_external = true AND m.path IS NOT NULL
+                RETURN count(m)
+            """)
+            external_with_path = cursor.fetchone()[0]
+            if external_with_path > 0:
+                issues.append(f"{external_with_path} external modules with path set")
+
+            cursor.execute("""
+                MATCH (n)
+                WHERE any(label IN labels(n) WHERE label IN ['JsonObject', 'JsonArray', 'JsonField', 'JsonValue'])
+                AND n.name IS NULL
+                RETURN count(n)
+            """)
+            json_missing_name = cursor.fetchone()[0]
+            if json_missing_name > 0:
+                issues.append(f"{json_missing_name} JSON nodes missing name")
+
+            cursor.execute("""
+                MATCH (t:Test)
+                WHERE t.name IS NULL AND t.qualified_name IS NULL
+                RETURN count(t)
+            """)
+            incomplete_tests = cursor.fetchone()[0]
+            if incomplete_tests > 0:
+                issues.append(f"{incomplete_tests} incomplete Test nodes")
+
+            if not issues:
+                return HealthCheckResult(
+                    name=cs.HEALTH_CHECK_MIGRATION_PASS,
+                    passed=True,
+                    message=cs.HEALTH_CHECK_MIGRATION_PASS_MSG,
+                )
+
+            return HealthCheckResult(
+                name=cs.HEALTH_CHECK_MIGRATION_NEEDED,
+                passed=False,
+                message=cs.HEALTH_CHECK_MIGRATION_NEEDED_MSG.format(issues="; ".join(issues)),
+                error=cs.HEALTH_CHECK_MIGRATION_ERROR_MSG,
+            )
+
+        except Exception as e:
+            return HealthCheckResult(
+                name=cs.HEALTH_CHECK_MIGRATION_NEEDED,
+                passed=False,
+                message=cs.HEALTH_CHECK_MIGRATION_NEEDED,
+                error=str(e),
+            )
+        finally:
+            if cursor is not None:
+                try:
+                    HealthChecker._consume_all_results(cursor)
+                    cursor.close()
+                except Exception as e:
+                    logger.debug(f"Failed to close Memgraph cursor: {e}")
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception as e:
+                    logger.debug(f"Failed to close Memgraph connection: {e}")
 
     def check_vector_indexes(self) -> HealthCheckResult:
         """Check if vector indexes exist for embeddable node types."""
@@ -839,6 +926,8 @@ class HealthChecker:
                     {"embedded_labels": embedded_labels},
                 )
                 result = cursor.fetchone()
+                # Consume any remaining results to allow safe subsequent queries
+                HealthChecker._consume_all_results(cursor)
                 if result:
                     actual_dim = result[0]
                     dim_passed = actual_dim == vector_dim

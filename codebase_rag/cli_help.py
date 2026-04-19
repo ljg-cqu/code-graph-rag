@@ -20,6 +20,8 @@ class CLICommandName(StrEnum):
     # JSON Data Ingestion commands
     INGEST_JSON = "ingest-json"
     DELETE_DATASET = "delete-dataset"
+    # Data migration command
+    MIGRATE_DATA = "migrate-data"
 
 
 APP_DESCRIPTION = (
@@ -54,6 +56,7 @@ CMD_INGEST_JSON = "Ingest pre-extracted JSON data containing entities/relationsh
 CMD_DELETE_DATASET = (
     "Delete all nodes, relationships, and vector entries for a specific dataset ID"
 )
+CMD_MIGRATE_DATA = "Run data model migrations for existing graph data"
 
 CMD_LANGUAGE_GROUP = "CLI for managing language grammars"
 CMD_LANGUAGE_ADD = "Add a new language grammar to the project."
@@ -213,4 +216,6 @@ CLI_COMMANDS: dict[CLICommandName, str] = {
     # JSON Data Ingestion commands
     CLICommandName.INGEST_JSON: CMD_INGEST_JSON,
     CLICommandName.DELETE_DATASET: CMD_DELETE_DATASET,
+    # Data migration command
+    CLICommandName.MIGRATE_DATA: CMD_MIGRATE_DATA,
 }

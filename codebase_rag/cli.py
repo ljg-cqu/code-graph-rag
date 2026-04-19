@@ -1282,6 +1282,31 @@ def doctor() -> None:
         raise typer.Exit(1)
 
 
+@app.command(name=ch.CLICommandName.MIGRATE_DATA, help=ch.CMD_MIGRATE_DATA)
+def migrate_data(
+    dry_run: bool = typer.Option(
+        True,
+        "--dry-run/--no-dry-run",
+        help="Report changes without applying them. Use --no-dry-run to execute.",
+    ),
+) -> None:
+    """Run data model migrations for existing graph data.
+
+    Defaults to dry-run mode for safety. Pass --no-dry-run to apply changes.
+    """
+    from .migrations.data_model_migrations import run_migrations
+
+    results = run_migrations(dry_run=dry_run)
+
+    if dry_run:
+        app_context.console.print("[yellow]Dry run mode - no changes made[/yellow]")
+
+    app_context.console.print("\nMigration Results:")
+    for name, count in results.items():
+        status = "would migrate" if dry_run else "migrated"
+        app_context.console.print(f"  {name}: {count} nodes {status}")
+
+
 def _build_stats_table(
     title: str,
     col_label: str,

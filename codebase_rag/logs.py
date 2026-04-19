@@ -809,3 +809,13 @@ GRAPH_CALL_HIERARCHY = "Getting call hierarchy for: {name} (direction={direction
 GRAPH_IMPLEMENTATIONS = "Finding implementations for: {name}"
 GRAPH_PROJECT_STRUCTURE = "Getting project structure"
 GRAPH_IMPORT_DEPS = "Analyzing import dependencies for: {path} (depth={depth})"
+
+# (H) Data migration logs
+MIGRATION_DRY_RUN_BUILTINS = "[DRY RUN] Would migrate {count} orphaned builtin functions"
+MIGRATION_BUILTINS_DONE = "Migrated {count} orphaned builtin functions"
+MIGRATION_DRY_RUN_EXTERNAL_PATHS = "[DRY RUN] Would migrate {count} external module paths"
+MIGRATION_EXTERNAL_PATHS_DONE = "Migrated {count} external module paths"
+MIGRATION_DRY_RUN_JSON_NAMES = "[DRY RUN] Would migrate {count} JSON node names"
+MIGRATION_JSON_NAMES_DONE = "Migrated {count} JSON node names"
+MIGRATION_DRY_RUN_TEST_NODES = "[DRY RUN] Would delete {count} incomplete Test nodes"
+MIGRATION_TEST_NODES_DONE = "Deleted {count} incomplete Test nodes"

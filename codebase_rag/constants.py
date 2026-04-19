@@ -4187,3 +4187,10 @@ HEALTH_CHECK_VECTOR_SEARCH_PASS_MSG = "Vector search returns results ({count} em
 HEALTH_CHECK_VECTOR_SEARCH_FAIL_MSG = "Vector search failed: {error}"
 HEALTH_CHECK_VECTOR_SEARCH_NO_EMBEDDINGS_MSG = "No embeddings found in the graph - run indexing first"
 HEALTH_CHECK_VECTOR_SEARCH_ERROR_MSG = "Vector search check failed: {error}"
+
+# (H) Data migration health check constants
+HEALTH_CHECK_MIGRATION_PASS = "Data migrations applied"
+HEALTH_CHECK_MIGRATION_NEEDED = "Data migrations needed"
+HEALTH_CHECK_MIGRATION_PASS_MSG = "All data model migrations are up to date"
+HEALTH_CHECK_MIGRATION_NEEDED_MSG = "Data migrations needed: {issues}"
+HEALTH_CHECK_MIGRATION_ERROR_MSG = "Run 'cgr migrate-data --no-dry-run' to apply migrations"
