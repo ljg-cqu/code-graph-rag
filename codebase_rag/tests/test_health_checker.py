@@ -214,3 +214,173 @@ def test_check_vector_search_no_embeddings() -> None:
 
     assert result.passed is False
     assert "No embeddings" in result.message
+
+
+def test_validate_ingestion_quality_excludes_builtins_from_embedding_check() -> None:
+    """Test that builtin functions are excluded from missing embeddings check."""
+    checker = HealthChecker()
+    cursor = MagicMock()
+    # node count, edge count, missing embeddings count, embedded node count, dimension, duplicates
+    cursor.fetchone.side_effect = [
+        (10,), None,      # node count
+        (20,), None,      # edge count
+        (2,), None,       # missing embeddings count (excludes builtins)
+        (8,), None,       # embedded node count (excludes builtins)
+        (768,), None,     # dimension check
+        (0,), None,       # duplicates count
+    ]
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+
+    with patch("codebase_rag.tools.health_checker.mgclient.connect", return_value=conn):
+        results = checker.validate_ingestion_quality()
+
+    # Verify the queries exclude builtins
+    executed_queries = [call.args[0] for call in cursor.execute.call_args_list]
+
+    # Check that missing embeddings query excludes builtins (query with IS NULL)
+    missing_emb_queries = [
+        q for q in executed_queries
+        if "embedding" in q.lower() and "is null" in q.lower()
+    ]
+    assert len(missing_emb_queries) >= 1, "Should have at least one missing embeddings query"
+    for query in missing_emb_queries:
+        assert "is_builtin" in query.lower() or "builtin." in query.lower(), (
+            f"Missing embeddings query should exclude builtins: {query}"
+        )
+
+
+def test_get_missing_embeddings_returns_nodes_without_embeddings() -> None:
+    """Test get_missing_embeddings returns nodes missing embeddings."""
+    checker = HealthChecker()
+    cursor = MagicMock()
+    cursor.fetchall.return_value = [
+        ("myproject.utils.helper", ["Function"], "utils/helper.py"),
+        ("myproject.services.UserService.get", ["Method"], "services/user_service.py"),
+    ]
+    cursor.fetchone.return_value = None  # for _consume_all_results
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+
+    with patch("codebase_rag.tools.health_checker.mgclient.connect", return_value=conn):
+        results = checker.get_missing_embeddings(limit=10)
+
+    assert len(results) == 2
+    assert results[0]["qualified_name"] == "myproject.utils.helper"
+    assert results[1]["qualified_name"] == "myproject.services.UserService.get"
+
+    # Verify query excludes builtins
+    executed_query = cursor.execute.call_args[0][0]
+    assert "is_builtin" in executed_query.lower() or "builtin." in executed_query.lower()
+
+
+def test_get_missing_embeddings_count_returns_count() -> None:
+    """Test get_missing_embeddings_count returns correct count."""
+    checker = HealthChecker()
+    cursor = MagicMock()
+    cursor.fetchone.side_effect = [(5,), None]  # count, then None for _consume_all_results
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+
+    with patch("codebase_rag.tools.health_checker.mgclient.connect", return_value=conn):
+        count = checker.get_missing_embeddings_count()
+
+    assert count == 5
+
+    # Verify query excludes builtins
+    executed_query = cursor.execute.call_args[0][0]
+    assert "is_builtin" in executed_query.lower() or "builtin." in executed_query.lower()
+
+
+def test_validate_ingestion_quality_error_details_in_result() -> None:
+    """Test that error details are captured in HealthCheckResult when validation fails."""
+    checker = HealthChecker()
+    cursor = MagicMock()
+    # Raise exception on first execute
+    cursor.execute.side_effect = RuntimeError("Database connection lost")
+    cursor.fetchone.return_value = None  # for _consume_all_results cleanup
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+
+    with patch("codebase_rag.tools.health_checker.mgclient.connect", return_value=conn):
+        results = checker.validate_ingestion_quality()
+
+    # Should have one failure result with error details
+    assert len(results) == 1
+    assert results[0].passed is False
+    assert results[0].error is not None
+    assert "Database connection lost" in results[0].error
+
+
+def test_validate_ingestion_quality_error_logged_at_warning_level() -> None:
+    """Test that validation errors are logged at WARNING level, not DEBUG."""
+    checker = HealthChecker()
+    cursor = MagicMock()
+    cursor.execute.side_effect = RuntimeError("Query timeout exceeded")
+    cursor.fetchone.return_value = None
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+
+    with (
+        patch("codebase_rag.tools.health_checker.mgclient.connect", return_value=conn),
+        patch("codebase_rag.tools.health_checker.logger") as mock_logger,
+    ):
+        results = checker.validate_ingestion_quality()
+
+    # Error should be logged at WARNING level
+    assert any(
+        call[0][0].startswith("Quality validation error:")
+        for call in mock_logger.warning.call_args_list
+    ), "Error should be logged at WARNING level"
+
+
+def test_validate_ingestion_quality_stacktrace_with_config_enabled() -> None:
+    """Test that stack traces are included when LOG_QUALITY_CHECK_STACKTRACES is True."""
+    checker = HealthChecker()
+    cursor = MagicMock()
+    cursor.execute.side_effect = ValueError("Invalid query parameter")
+    cursor.fetchone.return_value = None
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+
+    mock_settings = MagicMock()
+    mock_settings.LOG_QUALITY_CHECK_STACKTRACES = True
+    mock_settings.MEMGRAPH_HOST = "localhost"
+    mock_settings.MEMGRAPH_PORT = 7687
+
+    with (
+        patch("codebase_rag.tools.health_checker.mgclient.connect", return_value=conn),
+        patch("codebase_rag.tools.health_checker.settings", mock_settings),
+    ):
+        results = checker.validate_ingestion_quality()
+
+    # Error should contain stack trace
+    assert results[0].error is not None
+    assert "Invalid query parameter" in results[0].error
+    assert "Traceback" in results[0].error or "ValueError" in results[0].error
+
+
+def test_validate_ingestion_quality_no_stacktrace_by_default() -> None:
+    """Test that stack traces are NOT included by default (only error message)."""
+    checker = HealthChecker()
+    cursor = MagicMock()
+    cursor.execute.side_effect = ValueError("Test error without traceback")
+    cursor.fetchone.return_value = None
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+
+    mock_settings = MagicMock()
+    mock_settings.LOG_QUALITY_CHECK_STACKTRACES = False
+    mock_settings.MEMGRAPH_HOST = "localhost"
+    mock_settings.MEMGRAPH_PORT = 7687
+
+    with (
+        patch("codebase_rag.tools.health_checker.mgclient.connect", return_value=conn),
+        patch("codebase_rag.tools.health_checker.settings", mock_settings),
+    ):
+        results = checker.validate_ingestion_quality()
+
+    # Error should NOT contain stack trace by default
+    assert results[0].error is not None
+    assert "Test error without traceback" in results[0].error
+    assert "Traceback" not in results[0].error

@@ -500,7 +500,7 @@ NODE_SCHEMAS: tuple[NodeSchema, ...] = (
     ),
     NodeSchema(
         NodeLabel.MODULE,
-        "{qualified_name: string, name: string, path: string, absolute_path: string}",
+        "{qualified_name: string, name: string, path: string | null, import_path: string | null, absolute_path: string, is_external: bool | null}",
     ),
     NodeSchema(
         NodeLabel.CLASS,
@@ -580,19 +580,19 @@ NODE_SCHEMAS: tuple[NodeSchema, ...] = (
     # JSON content node schemas
     NodeSchema(
         NodeLabel.JSON_OBJECT,
-        "{qualified_name: string, path: string, depth: int}",
+        "{qualified_name: string, name: string, path: string, depth: int}",
     ),
     NodeSchema(
         NodeLabel.JSON_ARRAY,
-        "{qualified_name: string, path: string, depth: int, length: int}",
+        "{qualified_name: string, name: string, path: string, depth: int, length: int}",
     ),
     NodeSchema(
         NodeLabel.JSON_FIELD,
-        "{qualified_name: string, path: string, key: string, value: string, value_type: string, depth: int}",
+        "{qualified_name: string, name: string, path: string, key: string, value: string, value_type: string, depth: int}",
     ),
     NodeSchema(
         NodeLabel.JSON_VALUE,
-        "{qualified_name: string, path: string, value: string, value_type: string, depth: int}",
+        "{qualified_name: string, name: string, path: string, value: string, value_type: string, depth: int}",
     ),
     NodeSchema(
         NodeLabel.JSON_ENTITY,

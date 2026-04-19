@@ -72,6 +72,7 @@ class JsonContentProcessor:
             cs.NodeLabel.JSON_OBJECT,
             {
                 cs.KEY_QUALIFIED_NAME: object_qn,
+                cs.KEY_NAME: object_qn.split(cs.SEPARATOR_DOT)[-1],
                 cs.KEY_PATH: file_path,
                 cs.KEY_JSON_DEPTH: depth,
             },
@@ -86,6 +87,7 @@ class JsonContentProcessor:
                 cs.NodeLabel.JSON_FIELD,
                 {
                     cs.KEY_QUALIFIED_NAME: field_qn,
+                    cs.KEY_NAME: raw_key,
                     cs.KEY_PATH: file_path,
                     cs.KEY_JSON_KEY: raw_key,
                     cs.KEY_JSON_VALUE: value_str if is_scalar else None,
@@ -123,6 +125,7 @@ class JsonContentProcessor:
             cs.NodeLabel.JSON_ARRAY,
             {
                 cs.KEY_QUALIFIED_NAME: array_qn,
+                cs.KEY_NAME: array_qn.split(cs.SEPARATOR_DOT)[-1],
                 cs.KEY_PATH: file_path,
                 cs.KEY_JSON_DEPTH: depth,
                 cs.KEY_JSON_LENGTH: len(arr),
@@ -197,10 +200,14 @@ class JsonContentProcessor:
         depth: int,
     ) -> tuple[cs.NodeLabel, str]:
         value_str, value_type = self._classify_value(value)
+        name = value_str
+        if len(name) > 50:
+            name = name[:50] + "..."
         self.ingestor.ensure_node_batch(
             cs.NodeLabel.JSON_VALUE,
             {
                 cs.KEY_QUALIFIED_NAME: value_qn,
+                cs.KEY_NAME: name,
                 cs.KEY_PATH: file_path,
                 cs.KEY_JSON_VALUE: value_str,
                 cs.KEY_JSON_VALUE_TYPE: value_type,

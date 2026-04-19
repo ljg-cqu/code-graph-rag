@@ -641,6 +641,8 @@ class AppConfig(BaseSettings):
     REALTIME_CODE_ENABLED: bool = Field(default=True, validation_alias="CGR_REALTIME_CODE")
     REALTIME_DOCS_ENABLED: bool = Field(default=False, validation_alias="CGR_REALTIME_DOCS")
     REALTIME_JSON_ENABLED: bool = Field(default=False, validation_alias="CGR_REALTIME_JSON")
+    REALTIME_IGNORE_OPENED_EVENTS: bool = Field(default=True, validation_alias="CGR_REALTIME_IGNORE_OPENED")
+    REALTIME_LOG_SKIPPED_DOCUMENTS: bool = Field(default=False, validation_alias="CGR_REALTIME_LOG_SKIPPED")
 
     QUERY_RESULT_MAX_TOKENS: int = Field(default=16000, gt=0)
     QUERY_RESULT_ROW_CAP: int = Field(default=500, gt=0)
@@ -708,6 +710,9 @@ class AppConfig(BaseSettings):
     # Visibility and logging
     LOG_TRUNCATION_DETAILS: bool = True
     RETURN_TRUNCATION_METADATA: bool = True
+    LOG_QUALITY_CHECK_STACKTRACES: bool = False
+    """Whether to log full stack traces for quality check failures.
+    Enable for debugging complex issues."""
 
     OLLAMA_HEALTH_TIMEOUT: float = 5.0
 

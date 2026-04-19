@@ -19,7 +19,14 @@ from .utils import get_function_captures, is_method_node, query_captures_to_dict
 
 
 class CallProcessor:
-    __slots__ = ("ingestor", "repo_path", "project_name", "_resolver")
+    __slots__ = (
+        "ingestor",
+        "repo_path",
+        "project_name",
+        "_resolver",
+        "_builtin_module_ensured",
+        "_ensured_builtin_relationships",
+    )
 
     def __init__(
         self,
@@ -34,6 +41,8 @@ class CallProcessor:
         self.ingestor = ingestor
         self.repo_path = repo_path
         self.project_name = project_name
+        self._builtin_module_ensured = False
+        self._ensured_builtin_relationships: set[str] = set()
 
         self._resolver = CallResolver(
             function_registry=function_registry,
@@ -383,6 +392,17 @@ class CallProcessor:
             )
 
     def _ensure_builtin_node(self, callee_type: str, callee_qn: str) -> None:
+        if not self._builtin_module_ensured:
+            self.ingestor.ensure_node(
+                cs.NodeLabel.MODULE,
+                {
+                    cs.KEY_QUALIFIED_NAME: cs.BUILTIN_MODULE_QN,
+                    cs.KEY_NAME: "__builtins__",
+                    cs.KEY_IS_VIRTUAL: True,
+                },
+            )
+            self._builtin_module_ensured = True
+
         self.ingestor.ensure_node(
             callee_type,
             {
@@ -391,6 +411,22 @@ class CallProcessor:
                 cs.KEY_IS_BUILTIN: True,
             },
         )
+
+        if callee_qn not in self._ensured_builtin_relationships:
+            self.ingestor.ensure_relationship_batch(
+                (
+                    cs.NodeLabel.MODULE,
+                    cs.KEY_QUALIFIED_NAME,
+                    cs.BUILTIN_MODULE_QN,
+                ),
+                cs.RelationshipType.DEFINES,
+                (
+                    callee_type,
+                    cs.KEY_QUALIFIED_NAME,
+                    callee_qn,
+                ),
+            )
+            self._ensured_builtin_relationships.add(callee_qn)
 
     def _build_nested_qualified_name(
         self,

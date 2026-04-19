@@ -778,13 +778,14 @@ class HealthChecker:
                     )
                 )
 
-            # 3. Check missing embeddings
+            # 3. Check missing embeddings (exclude builtin functions)
             missing_embeddings_count = self._fetch_single_int(
                 cursor,
                 f"""
                 MATCH (n)
                 WHERE ANY(label IN labels(n) WHERE label IN $embedded_labels)
                   AND n.{embedding_property} IS NULL
+                  AND NOT (n.is_builtin = true OR n.qualified_name STARTS WITH 'builtin.')
                 RETURN count(n) AS count
             """,
                 {"embedded_labels": embedded_labels},
@@ -794,6 +795,7 @@ class HealthChecker:
                 """
                 MATCH (n)
                 WHERE ANY(label IN labels(n) WHERE label IN $embedded_labels)
+                  AND NOT (n.is_builtin = true OR n.qualified_name STARTS WITH 'builtin.')
                 RETURN count(n) AS count
             """,
                 {"embedded_labels": embedded_labels},
@@ -885,12 +887,17 @@ class HealthChecker:
             )
 
         except Exception as e:
+            error_detail = str(e)
+            if settings.LOG_QUALITY_CHECK_STACKTRACES:
+                import traceback
+                error_detail = f"{e}\n{traceback.format_exc()}"
+            logger.warning(f"Quality validation error: {error_detail}")
             results.append(
                 HealthCheckResult(
                     name=cs.HEALTH_CHECK_INGESTION_VALIDATION_FAILED,
                     passed=False,
                     message=cs.HEALTH_CHECK_INGESTION_VALIDATION_ERROR_MSG,
-                    error=str(e),
+                    error=error_detail,
                 )
             )
         finally:
@@ -909,6 +916,110 @@ class HealthChecker:
 
         return results
 
+    def get_missing_embeddings(
+        self,
+        embedded_labels: list[str] | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, str | list[str] | None]]:
+        """Get nodes missing embeddings (excludes builtin functions).
+
+        This method identifies nodes that need embedding backfill.
+        Builtin functions are excluded since they shouldn't have embeddings.
+
+        Args:
+            embedded_labels: Labels to check for embeddings (default: Function, Method).
+            limit: Maximum number of results to return.
+
+        Returns:
+            List of dicts with qualified_name, labels, and path for each node.
+        """
+        if embedded_labels is None:
+            embedded_labels = ["Function", "Method"]
+
+        conn = None
+        cursor = None
+        results: list[dict[str, str | list[str] | None]] = []
+
+        try:
+            conn = mgclient.connect(
+                host=settings.MEMGRAPH_HOST,
+                port=settings.MEMGRAPH_PORT,
+            )
+            cursor = conn.cursor()
+            cursor.execute(
+                cs.QUERY_GEN_MISSING_EMBEDDINGS,
+                {"embedded_labels": embedded_labels, "limit": limit},
+            )
+            for row in cursor.fetchall():
+                results.append(
+                    {
+                        "qualified_name": row[0],
+                        "labels": list(row[1]) if row[1] else [],
+                        "path": row[2],
+                    }
+                )
+        except Exception as e:
+            logger.warning(f"Failed to get missing embeddings: {e}")
+        finally:
+            if cursor is not None:
+                try:
+                    HealthChecker._consume_all_results(cursor)
+                    cursor.close()
+                except Exception:
+                    pass
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+        return results
+
+    def get_missing_embeddings_count(
+        self,
+        embedded_labels: list[str] | None = None,
+    ) -> int:
+        """Get count of nodes missing embeddings (excludes builtin functions).
+
+        Args:
+            embedded_labels: Labels to check for embeddings (default: Function, Method).
+
+        Returns:
+            Count of nodes missing embeddings.
+        """
+        if embedded_labels is None:
+            embedded_labels = ["Function", "Method"]
+
+        conn = None
+        cursor = None
+
+        try:
+            conn = mgclient.connect(
+                host=settings.MEMGRAPH_HOST,
+                port=settings.MEMGRAPH_PORT,
+            )
+            cursor = conn.cursor()
+            cursor.execute(
+                cs.QUERY_GEN_MISSING_EMBEDDINGS_COUNT,
+                {"embedded_labels": embedded_labels},
+            )
+            row = cursor.fetchone()
+            return int(row[0]) if row else 0
+        except Exception as e:
+            logger.warning(f"Failed to get missing embeddings count: {e}")
+            return 0
+        finally:
+            if cursor is not None:
+                try:
+                    HealthChecker._consume_all_results(cursor)
+                    cursor.close()
+                except Exception:
+                    pass
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     def get_runtime_status(self, ingestor: "MemgraphIngestor") -> RuntimeHealthStatus:
         """Get current runtime health status for active session.

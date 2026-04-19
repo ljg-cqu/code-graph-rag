@@ -96,6 +96,9 @@ def temp_repo() -> Generator[Path, None, None]:
     shutil.rmtree(temp_dir)
 
 
+from codebase_rag.services import QueryProtocol
+
+
 class _MockIngestor:
     _TRACKED = (
         "fetch_all",
@@ -106,7 +109,7 @@ class _MockIngestor:
     )
 
     def __init__(self) -> None:
-        self.fetch_all = MagicMock()
+        self.fetch_all = MagicMock(return_value=[])
         self.execute_write = MagicMock()
         self.ensure_node_batch = MagicMock()
         self.ensure_relationship_batch = MagicMock()
@@ -129,6 +132,9 @@ class _MockIngestor:
 
     def __getattr__(self, name: str) -> MagicMock:
         return getattr(self._fallback, name)
+
+
+QueryProtocol.register(_MockIngestor)
 
 
 @pytest.fixture

@@ -113,7 +113,11 @@ class MyClass:
         temp_repo: Path,
         mock_ingestor: MagicMock,
         parsers_and_queries: tuple,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        from codebase_rag.config import settings
+
+        monkeypatch.setattr(settings, "PARALLEL_INDEXING_WORKERS", 1)
         parsers, queries = parsers_and_queries
         if cs.SupportedLanguage.PYTHON not in parsers:
             pytest.skip("Python parser not available")
@@ -286,7 +290,9 @@ class MyClass {
         temp_repo: Path,
         mock_ingestor: MagicMock,
         parsers_and_queries: tuple,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        monkeypatch.setenv("INCLUDE_BUILTIN_CALLS", "true")
         parsers, queries = parsers_and_queries
         if cs.SupportedLanguage.JS not in parsers:
             pytest.skip("JavaScript parser not available")

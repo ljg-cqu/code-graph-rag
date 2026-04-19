@@ -474,9 +474,20 @@ def outer(items):
         node_calls = mock_ingestor.ensure_node.call_args_list
 
         assert any(
+            c[0][0] == cs.NodeLabel.MODULE
+            and c[0][1][cs.KEY_QUALIFIED_NAME] == cs.BUILTIN_MODULE_QN
+            for c in node_calls
+        )
+        assert any(
             c[0][0] == cs.NodeLabel.FUNCTION
             and c[0][1][cs.KEY_QUALIFIED_NAME] == builtin_qn
             for c in node_calls
+        )
+        assert any(
+            c[0][1] == cs.RelationshipType.DEFINES
+            and c[0][0][2] == cs.BUILTIN_MODULE_QN
+            and c[0][2][2] == builtin_qn
+            for c in rel_calls
         )
         assert not any(
             c[0][1] == cs.RelationshipType.CALLS and c[0][2][2] == builtin_qn
@@ -518,6 +529,12 @@ def outer(items):
         builtin_qn = f"{cs.BUILTIN_PREFIX}.python.len"
         rel_calls = mock_ingestor.ensure_relationship_batch.call_args_list
 
+        assert any(
+            c[0][1] == cs.RelationshipType.DEFINES
+            and c[0][0][2] == cs.BUILTIN_MODULE_QN
+            and c[0][2][2] == builtin_qn
+            for c in rel_calls
+        )
         assert any(
             c[0][1] == cs.RelationshipType.CALLS and c[0][2][2] == builtin_qn
             for c in rel_calls

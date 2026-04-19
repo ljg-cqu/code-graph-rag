@@ -6,13 +6,22 @@ Code is SOURCE OF TRUTH.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypedDict
 
 from ..query_router import ValidationReport, ValidationResult
 from .validator import BaseValidator
 
 if TYPE_CHECKING:
     from ...services import QueryProtocol
+
+
+class ClaimDict(TypedDict, total=False):
+    """Factual claim extracted from document."""
+
+    description: str
+    code_reference: str
+    source_section: str
+    source_document: str
 
 
 class DocVsCodeValidator(BaseValidator):
@@ -87,7 +96,7 @@ class DocVsCodeValidator(BaseValidator):
             results=results,
         )
 
-    def _extract_claims(self, document_path: str) -> list[dict]:
+    def _extract_claims(self, document_path: str) -> list[ClaimDict]:
         """
         Extract factual claims from document.
 
@@ -107,7 +116,7 @@ class DocVsCodeValidator(BaseValidator):
 
         # Extract claims from document content
         # This is a simplified implementation - full implementation would use LLM
-        claims: list[dict] = []
+        claims: list[ClaimDict] = []
         for result in results:
             section_title = result.get("section_title", "")
             section_content = result.get("section_content", "")
@@ -144,9 +153,8 @@ class DocVsCodeValidator(BaseValidator):
                             }
                         )
 
-        # Deduplicate claims by code reference
         seen_refs: set[str] = set()
-        unique_claims: list[dict] = []
+        unique_claims: list[ClaimDict] = []
         for claim in claims:
             ref = claim.get("code_reference", "")
             if ref and ref not in seen_refs:
@@ -180,7 +188,7 @@ class DocVsCodeValidator(BaseValidator):
 
         return doc_paths
 
-    def _verify_claim(self, claim: dict) -> bool:
+    def _verify_claim(self, claim: ClaimDict) -> bool:
         """
         Verify claim against code graph.
 
@@ -226,14 +234,47 @@ class DocVsCodeValidator(BaseValidator):
 
         return False
 
-    def _suggest_fix(self, claim: dict) -> str:
+    def _suggest_fix(self, claim: ClaimDict) -> str:
         """
-        Suggest fix for outdated claim.
+        Generate a context-aware suggestion for an outdated claim.
 
-        Uses LLM to generate suggestion based on actual code.
+        Uses claim metadata to produce specific guidance without blocking
+        on an LLM call. Future enhancements may integrate LLMService
+        once the validation pipeline supports async execution.
         """
-        # TODO: Implement suggestion generation
-        return "Update the documentation to reflect current implementation."
+        code_reference = claim.get("code_reference", "")
+
+        if not code_reference:
+            return "Update the documentation to reflect current implementation."
+
+        if code_reference.startswith("/"):
+            return (
+                f"Update API documentation for endpoint '{code_reference}' "
+                f"to match the current route implementation."
+            )
+
+        if "(" in code_reference and ")" in code_reference:
+            return (
+                f"Update documentation for function '{code_reference}' "
+                f"to match the current signature and behavior."
+            )
+
+        if "." in code_reference:
+            return (
+                f"Update documentation for '{code_reference}' "
+                f"to reflect the current module or class structure."
+            )
+
+        if code_reference[0:1].isupper():
+            return (
+                f"Update documentation for class '{code_reference}' "
+                f"to match the current implementation."
+            )
+
+        return (
+            f"Update documentation referencing '{code_reference}' "
+            f"to reflect the current code."
+        )
 
     def generate_summary(self, report: ValidationReport) -> str:
         """Generate human-readable summary."""

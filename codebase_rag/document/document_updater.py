@@ -223,9 +223,7 @@ class DocumentGraphUpdater:
         combined_excludes = set(cgrignore.exclude)
         if exclude_paths:
             combined_excludes.update(exclude_paths)
-        self.exclude_paths = (
-            frozenset(combined_excludes) if combined_excludes else None
-        )
+        self.exclude_paths = frozenset(combined_excludes) if combined_excludes else None
 
         combined_unignores = set(cgrignore.unignore)
         if unignore_paths:
@@ -531,7 +529,9 @@ class DocumentGraphUpdater:
                             {"ws": self.workspace},
                         )
                         if section_result and len(section_result) > 0:
-                            stats["sections_created"] = section_result[0].get("count", 0)
+                            stats["sections_created"] = section_result[0].get(
+                                "count", 0
+                            )
                         if chunk_result and len(chunk_result) > 0:
                             stats["chunks_created"] = chunk_result[0].get("count", 0)
                     except Exception as e:
@@ -1373,12 +1373,9 @@ class DocumentGraphUpdater:
             embeddings.extend(batch_embeddings)
 
             should_log_progress = (
-                batch_index in {1, total_batches}
-                or batch_index % log_interval == 0
+                batch_index in {1, total_batches} or batch_index % log_interval == 0
             )
-            if total_batches > 1 and (
-                should_log_progress
-            ):
+            if total_batches > 1 and (should_log_progress):
                 processed_chunks = start + len(batch_contents)
                 logger.info(
                     ls.DOC_EMBEDDING_BATCH_PROGRESS.format(
@@ -1421,9 +1418,7 @@ class DocumentGraphUpdater:
                 )
             # Check for all-zero embedding (indicates failure)
             if all(v == 0.0 for v in embedding):
-                logger.warning(
-                    ls.DOC_EMBEDDING_ZERO_VECTOR.format(index=i)
-                )
+                logger.warning(ls.DOC_EMBEDDING_ZERO_VECTOR.format(index=i))
             validated_embeddings.append(embedding)
 
         # Return chunks and validated embeddings (without original indices)
@@ -1667,6 +1662,73 @@ class DocumentGraphUpdater:
             self.version_cache.remove(str(file_path))  # Rollback stale version
             return "failed"
 
+    def delete_file(self, file_path: Path) -> str:
+        """
+        Delete a document and all related nodes from the graph.
+
+        Called by real-time updater when a document file is deleted.
+
+        Args:
+            file_path: Path to the deleted document file
+
+        Returns:
+            "deleted", "skipped", or "failed"
+        """
+        if self._is_excluded_path(file_path):
+            return "skipped"
+
+        resolved_path = file_path.resolve()
+        if not self._is_path_within_boundary(resolved_path):
+            logger.error(
+                f"Path traversal attempt: {file_path} is outside repo {self.base_path}"
+            )
+            self.dead_letter_queue.enqueue(
+                ExtractionError(
+                    path=str(file_path),
+                    error_type=ErrorType.PATH_TRAVERSAL,
+                    message="Path is outside repository boundaries",
+                )
+            )
+            return "failed"
+
+        doc_path = str(file_path.relative_to(self.repo_path))
+
+        try:
+            with MemgraphIngestor(
+                host=self.host,
+                port=self.port,
+                batch_size=self.batch_size,
+                connection_timeout=settings.DOC_MEMGRAPH_CONNECTION_TIMEOUT,
+            ) as ingestor:
+                ingestor.ensure_constraints()
+                self._delete_document_nodes(doc_path, ingestor)
+                ingestor.execute_write(
+                    """
+                    MATCH (d:Document {path: $path, workspace: $workspace})
+                    DETACH DELETE d
+                    """,
+                    {"path": doc_path, "workspace": self.workspace},
+                )
+                ingestor.flush_all()
+                logger.debug("Saving version cache to disk")
+                self.version_cache.remove(doc_path)
+                self.version_cache.save()
+                return "deleted"
+        except ExtractionException as e:
+            logger.error(f"Failed to delete file {file_path}: {type(e).__name__}: {e}")
+            self.dead_letter_queue.enqueue(e.to_extraction_error())
+            return "failed"
+        except Exception as e:
+            logger.error(f"Failed to delete file {file_path}: {type(e).__name__}: {e}")
+            self.dead_letter_queue.enqueue(
+                ExtractionError(
+                    path=str(file_path),
+                    error_type=self._map_error_type(e),
+                    message=str(e),
+                )
+            )
+            return "failed"
+
 
 def migrate_section_count_property(
     host: str = "localhost",
@@ -1699,7 +1761,9 @@ def migrate_section_count_property(
     if connection_timeout is None:
         connection_timeout = settings.DOC_MEMGRAPH_CONNECTION_TIMEOUT
 
-    with MemgraphIngestor(host=host, port=port, connection_timeout=connection_timeout) as ingestor:
+    with MemgraphIngestor(
+        host=host, port=port, connection_timeout=connection_timeout
+    ) as ingestor:
         # Case 1: Documents with only old property -> rename to new
         if workspace:
             query1 = """

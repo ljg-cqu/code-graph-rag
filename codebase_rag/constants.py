@@ -225,6 +225,7 @@ KEY_PARSER = "parser"
 KEY_NAME = "name"
 KEY_QUALIFIED_NAME = "qualified_name"
 KEY_IS_BUILTIN = "is_builtin"
+KEY_IS_VIRTUAL = "is_virtual"
 KEY_START_LINE = "start_line"
 KEY_END_LINE = "end_line"
 KEY_PATH = "path"
@@ -240,6 +241,7 @@ KEY_VERSION_SPEC = "version_spec"
 KEY_PREFIX = "prefix"
 KEY_PROJECT_NAME = "project_name"
 KEY_IS_EXTERNAL = "is_external"
+KEY_IMPORT_PATH = "import_path"
 KEY_INDEX = "index"
 KEY_UNIQUE_ID = "unique_id"
 
@@ -1427,7 +1429,6 @@ VERSION_SPLIT_GTE = ">="
 VERSION_SPLIT_EQ = "=="
 VERSION_SPLIT_LT = "<"
 CHAR_HYPHEN = "-"
-CHAR_UNDERSCORE = "_"
 
 PYINSTALLER_PACKAGES: list["PyInstallerPackage"] = [
     PyInstallerPackage(
@@ -1557,83 +1558,6 @@ SHELL_RM_RF_FLAG = "-rf"
 SHELL_CMD_WHICH = "which"
 SHELL_CMD_WHERE = "where"
 
-# (H) Health check constants
-HEALTH_CHECK_MEMGRAPH_QUERY = "MATCH (n) RETURN count(n) LIMIT 1"
-
-# Docker health checks
-HEALTH_CHECK_DOCKER_RUNNING = "Docker running"
-HEALTH_CHECK_DOCKER_RUNNING_MSG = "Docker is running, version: {version}"
-HEALTH_CHECK_DOCKER_NOT_RUNNING = "Docker not running"
-HEALTH_CHECK_DOCKER_NOT_RESPONDING_MSG = "Docker is not responding"
-HEALTH_CHECK_DOCKER_EXIT_CODE = "Docker exited with non-zero code"
-HEALTH_CHECK_DOCKER_NOT_INSTALLED_MSG = "Docker is not installed"
-HEALTH_CHECK_DOCKER_NOT_IN_PATH = "Docker executable not found in PATH"
-HEALTH_CHECK_DOCKER_TIMEOUT_MSG = "Docker check timed out"
-HEALTH_CHECK_DOCKER_TIMEOUT_ERROR = "Docker check took longer than 5 seconds"
-HEALTH_CHECK_DOCKER_FAILED_MSG = "Docker check failed unexpectedly"
-
-# Memgraph health checks
-HEALTH_CHECK_MEMGRAPH_SUCCESSFUL = "Memgraph connection successful"
-HEALTH_CHECK_MEMGRAPH_CONNECTED_MSG = (
-    "Successfully connected to Memgraph at {host}:{port}"
-)
-HEALTH_CHECK_MEMGRAPH_FAILED = "Memgraph connection failed"
-HEALTH_CHECK_MEMGRAPH_CONNECTION_FAILED_MSG = "Failed to connect to Memgraph"
-HEALTH_CHECK_MEMGRAPH_ERROR = "Memgraph error: {error}"
-HEALTH_CHECK_MEMGRAPH_UNEXPECTED_FAILURE_MSG = "Memgraph check failed unexpectedly"
-
-# API key health checks
-HEALTH_CHECK_API_KEY_SET = "{display_name} API key set"
-HEALTH_CHECK_API_KEY_NOT_SET = "{display_name} API key not set"
-HEALTH_CHECK_API_KEY_CONFIGURED = "API key is properly configured"
-HEALTH_CHECK_API_KEY_NOT_CONFIGURED = "API key is missing"
-HEALTH_CHECK_API_KEY_MISSING_MSG = "Environment variable {env_name} is not set"
-HEALTH_CHECK_TOOLS = [
-    ("OPENAI_API_KEY", "OpenAI"),
-    ("ANTHROPIC_API_KEY", "Anthropic"),
-    ("GOOGLE_API_KEY", "Google"),
-]
-
-# External tool health checks
-HEALTH_CHECK_TOOL_INSTALLED = "{tool_name} installed"
-HEALTH_CHECK_TOOL_INSTALLED_MSG = "{tool_name} installed at: {path}"
-HEALTH_CHECK_TOOL_NOT_INSTALLED = "{tool_name} not installed"
-HEALTH_CHECK_TOOL_NOT_IN_PATH_MSG = "{cmd} not found in PATH"
-HEALTH_CHECK_TOOL_TIMEOUT_MSG = "{tool_name} check timed out"
-HEALTH_CHECK_TOOL_TIMEOUT_ERROR = "{cmd} check took longer than 4 seconds"
-HEALTH_CHECK_TOOL_FAILED_MSG = "{tool_name} check failed unexpectedly"
-HEALTH_CHECK_EXTERNAL_TOOLS = [
-    ("rg", "rg"),
-    ("git", "git"),
-    ("docker", "docker"),
-]
-
-# Ingestion quality validation checks
-HEALTH_CHECK_NODE_COUNT = "Node count validation"
-HEALTH_CHECK_NODE_COUNT_OK_MSG = "Node count matches expected: {actual} == {expected}"
-HEALTH_CHECK_NODE_COUNT_MISMATCH_MSG = "Node count mismatch: {actual} != {expected}"
-HEALTH_CHECK_NODE_COUNT_SKIP_MSG = "Node count check skipped, found {count} nodes"
-HEALTH_CHECK_EDGE_COUNT = "Edge count validation"
-HEALTH_CHECK_EDGE_COUNT_OK_MSG = "Edge count matches expected: {actual} == {expected}"
-HEALTH_CHECK_EDGE_COUNT_MISMATCH_MSG = "Edge count mismatch: {actual} != {expected}"
-HEALTH_CHECK_EDGE_COUNT_SKIP_MSG = "Edge count check skipped, found {count} edges"
-HEALTH_CHECK_MISSING_EMBEDDINGS = "Missing embeddings check"
-HEALTH_CHECK_MISSING_EMBEDDINGS_OK_MSG = "No missing embeddings found"
-HEALTH_CHECK_MISSING_EMBEDDINGS_FOUND_MSG = (
-    "Found {count} nodes with missing embeddings"
-)
-HEALTH_CHECK_EMBEDDING_DIMENSION = "Embedding dimension validation"
-HEALTH_CHECK_EMBEDDING_DIMENSION_OK_MSG = "Embedding dimension is correct: {dim}"
-HEALTH_CHECK_EMBEDDING_DIMENSION_MISMATCH_MSG = (
-    "Embedding dimension mismatch: {actual} != {expected}"
-)
-HEALTH_CHECK_DUPLICATE_NODES = "Duplicate nodes check"
-HEALTH_CHECK_DUPLICATE_NODES_OK_MSG = "No duplicate nodes found"
-HEALTH_CHECK_DUPLICATE_NODES_FOUND_MSG = "Found {count} duplicate node paths"
-HEALTH_CHECK_INGESTION_VALIDATION_FAILED = "Ingestion validation failed"
-HEALTH_CHECK_INGESTION_VALIDATION_ERROR_MSG = (
-    "Error running ingestion quality validation"
-)
 SHELL_RETURN_CODE_ERROR = -1
 SHELL_PIPE_OPERATORS = ("|", "&&", "||", ";")
 SHELL_SUBSHELL_PATTERNS = ("$(", "`")
@@ -1811,6 +1735,7 @@ SEPARATOR_COLON = ":"
 SEPARATOR_PROTOTYPE = ".prototype."
 RUST_CRATE_PREFIX = "crate::"
 BUILTIN_PREFIX = "builtin"
+BUILTIN_MODULE_QN = "builtin"
 IIFE_FUNC_PREFIX = "iife_func_"
 IIFE_ARROW_PREFIX = "iife_arrow_"
 OPERATOR_PREFIX = "operator"
@@ -2451,7 +2376,6 @@ TS_PHP_QUALIFIED_NAME = "qualified_name"
 TS_LUA_CHUNK = "chunk"
 TS_LUA_FUNCTION_DECLARATION = "function_declaration"
 TS_LUA_FUNCTION_DEFINITION = "function_definition"
-TS_LUA_FUNCTION_CALL = "function_call"
 
 # (H) Tree-sitter Solidity node types
 TS_SOL_SOURCE_FILE = "source_file"
@@ -3054,9 +2978,6 @@ QUERY_KEY_FUNCTIONS = "functions"
 JAVA_KEYWORD_THIS = "this"
 JAVA_KEYWORD_SUPER = "super"
 
-# (H) Java array type suffix
-JAVA_ARRAY_SUFFIX = "[]"
-
 # (H) Java heuristic patterns
 JAVA_GETTER_PATTERN = "get"
 JAVA_NAME_PATTERN = "name"
@@ -3272,9 +3193,7 @@ TS_FUNCTION_EXPRESSION = "function_expression"
 TS_ARROW_FUNCTION = "arrow_function"
 TS_MODULE = "module"
 TS_CLASS_BODY = "class_body"
-TS_STATIC = "static"
 TS_PROPERTY_IDENTIFIER = "property_identifier"
-TS_VARIABLE_DECLARATOR = "variable_declarator"
 
 # (H) JS prototype property keywords
 JS_PROTOTYPE_KEYWORD = "prototype"
@@ -4123,8 +4042,8 @@ HEALTH_CHECK_EDGE_COUNT_MISMATCH_MSG = (
 HEALTH_CHECK_EDGE_COUNT_SKIP_MSG = "Edge count not checked (found {count} edges)"
 
 HEALTH_CHECK_MISSING_EMBEDDINGS = "Missing embeddings"
-HEALTH_CHECK_MISSING_EMBEDDINGS_OK_MSG = "All nodes have embeddings"
-HEALTH_CHECK_MISSING_EMBEDDINGS_FOUND_MSG = "{count} nodes are missing embeddings"
+HEALTH_CHECK_MISSING_EMBEDDINGS_OK_MSG = "All nodes have embeddings (builtin functions excluded)"
+HEALTH_CHECK_MISSING_EMBEDDINGS_FOUND_MSG = "{count} nodes are missing embeddings (builtin functions excluded)"
 
 HEALTH_CHECK_EMBEDDING_DIMENSION = "Embedding dimension"
 HEALTH_CHECK_EMBEDDING_DIMENSION_OK_MSG = "Embedding dimension correct: {dim}"
@@ -4173,8 +4092,8 @@ MATCH (n)
 WHERE (n:Function OR n:Method OR n:Class OR n:Interface OR n:Enum OR n:Type
        OR n:Union OR n:Contract OR n:Library OR n:Event OR n:Modifier
        OR n:StateVariable OR n:CustomError OR n:Hotkey OR n:Hotstring
-       OR n:Label OR n:AhkClass)
-  AND (n.qualified_name IS NULL OR n.path IS NULL
+       OR n:Label OR n:AhkClass OR n:Test)
+  AND (n.name IS NULL OR n.qualified_name IS NULL OR n.path IS NULL
        OR n.start_line IS NULL OR n.end_line IS NULL)
 RETURN count(n) AS total_invalid"""
 
@@ -4183,6 +4102,23 @@ MATCH (n)
 WHERE n.embedding IS NOT NULL AND n.embedding_model IS NOT NULL
   AND n.embedding_model <> $expected_model
 RETURN count(n) AS mismatched_count"""
+
+# Query to identify nodes missing embeddings (excludes builtin functions)
+QUERY_GEN_MISSING_EMBEDDINGS = """
+MATCH (n)
+WHERE n.embedding IS NULL
+  AND NOT (n.is_builtin = true OR n.qualified_name STARTS WITH 'builtin.')
+  AND ANY(label IN labels(n) WHERE label IN $embedded_labels)
+RETURN n.qualified_name AS qualified_name, labels(n) AS labels, n.path AS path
+ORDER BY n.qualified_name
+LIMIT $limit"""
+
+QUERY_GEN_MISSING_EMBEDDINGS_COUNT = """
+MATCH (n)
+WHERE n.embedding IS NULL
+  AND NOT (n.is_builtin = true OR n.qualified_name STARTS WITH 'builtin.')
+  AND ANY(label IN labels(n) WHERE label IN $embedded_labels)
+RETURN count(n) AS count"""
 
 HEALTH_CHECK_DISCONNECTED_PASS = "No disconnected production nodes"
 HEALTH_CHECK_DISCONNECTED_FAIL = "Disconnected production nodes detected"
@@ -4251,6 +4187,3 @@ HEALTH_CHECK_VECTOR_SEARCH_PASS_MSG = "Vector search returns results ({count} em
 HEALTH_CHECK_VECTOR_SEARCH_FAIL_MSG = "Vector search failed: {error}"
 HEALTH_CHECK_VECTOR_SEARCH_NO_EMBEDDINGS_MSG = "No embeddings found in the graph - run indexing first"
 HEALTH_CHECK_VECTOR_SEARCH_ERROR_MSG = "Vector search check failed: {error}"
-
-SHELL_CMD_WHERE = "where"
-SHELL_CMD_WHICH = "which"

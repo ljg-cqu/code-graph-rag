@@ -360,9 +360,8 @@ class GraphUpdater:
             )
             failed = [res for res in validation_results if not res.passed]
             for fail in failed:
-                logger.warning(f"Quality check failed: {fail.name} - {fail.message}")
-                if fail.error:
-                    logger.debug(f"Error details: {fail.error}")
+                error_msg = f" - {fail.error}" if fail.error else ""
+                logger.warning(f"Quality check failed: {fail.name} - {fail.message}{error_msg}")
 
     def _run_post_ingestion_algorithms(self) -> None:
         from .graph_algorithms import get_shared_algorithms
@@ -555,16 +554,18 @@ class GraphUpdater:
             )
 
         worker_task_count = (
-            min(len(changed_files), actual_workers * 4) if changed_files else 1
+            min(len(changed_files), actual_workers) if changed_files else 1
         )
         task_chunks: list[list[Path]] = [[] for _ in range(worker_task_count)]
         for idx, file in enumerate(changed_files):
             task_chunks[idx % worker_task_count].append(file)
 
+        deleted_keys = set(old_hashes.keys()) - current_file_keys
+
         buffered_node_count_since_flush = 0
 
-        # Early exit if no files to process
-        if not changed_files:
+        # Early exit if no files to process and no deletions
+        if not changed_files and not deleted_keys:
             logger.info("No files to process (all files unchanged or no eligible files)")
             if skipped_count > 0:
                 logger.info(ls.INCREMENTAL_SKIPPED, count=skipped_count)
@@ -712,7 +713,6 @@ class GraphUpdater:
                         )
                         self.ingestor.flush_all()
 
-        deleted_keys = set(old_hashes.keys()) - current_file_keys
         if deleted_keys:
             logger.info(ls.INCREMENTAL_DELETED, count=len(deleted_keys))
             for deleted_key in deleted_keys:
@@ -808,6 +808,7 @@ class GraphUpdater:
 
         all_nodes: list[dict] = []
         all_relationships: list[dict] = []
+        ast_results: list[tuple[Path, Node, cs.SupportedLanguage]] = []
 
         for filepath in file_chunk:
             nodes_offset = len(worker_ingestor.nodes)
@@ -835,10 +836,7 @@ class GraphUpdater:
                 if result:
                     root_node, language = result
                     worker_ast_cache[filepath] = (root_node, language)
-
-                    worker_factory.call_processor.process_calls_in_file(
-                        filepath, root_node, language, queries
-                    )
+                    ast_results.append((filepath, root_node, language))
 
             elif (
                 filepath.name.lower() in cs.DEPENDENCY_FILES
@@ -880,6 +878,39 @@ class GraphUpdater:
                 to_key,
             ), rel_list in worker_ingestor.relationships.items():
                 old_offset = rel_offsets.get(
+                    (from_label, from_key, rel_type, to_label, to_key), 0
+                )
+                for rel_data in rel_list[old_offset:]:
+                    all_relationships.append(
+                        {
+                            "from_label": str(from_label),
+                            "from_key": from_key,
+                            "rel_type": rel_type,
+                            "to_label": str(to_label),
+                            "to_key": to_key,
+                            "from_val": rel_data["from_val"],
+                            "to_val": rel_data["to_val"],
+                            "props": dict(rel_data.get("props") or {}),
+                            "file_path": str(filepath),
+                        }
+                    )
+
+        for filepath, root_node, language in ast_results:
+            call_rel_offsets: dict[tuple[str, str, str, str, str], int] = {
+                pattern: len(rel_list)
+                for pattern, rel_list in worker_ingestor.relationships.items()
+            }
+            worker_factory.call_processor.process_calls_in_file(
+                filepath, root_node, language, queries
+            )
+            for (
+                from_label,
+                from_key,
+                rel_type,
+                to_label,
+                to_key,
+            ), rel_list in worker_ingestor.relationships.items():
+                old_offset = call_rel_offsets.get(
                     (from_label, from_key, rel_type, to_label, to_key), 0
                 )
                 for rel_data in rel_list[old_offset:]:

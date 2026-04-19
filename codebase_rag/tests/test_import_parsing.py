@@ -298,6 +298,8 @@ class TestExternalModuleNodeCreation:
         assert props[cs.KEY_NAME] == "util", (
             f"Expected name='util' (last part of module_path), got name='{props[cs.KEY_NAME]}'"
         )
+        assert props[cs.KEY_PATH] is None
+        assert props[cs.KEY_IMPORT_PATH] == "java.util.List"
 
     def test_rust_external_module_node_created(self, mock_ingestor: MagicMock) -> None:
         from codebase_rag import constants as cs
@@ -319,6 +321,8 @@ class TestExternalModuleNodeCreation:
         label, props = mock_ingestor.nodes_created[0]
         assert label == cs.NodeLabel.MODULE
         assert props[cs.KEY_QUALIFIED_NAME] == "std::collections"
+        assert props[cs.KEY_PATH] is None
+        assert props[cs.KEY_IMPORT_PATH] == "std::collections::HashMap"
 
     def test_rust_external_module_name_uses_module_path(
         self, mock_ingestor: MagicMock
@@ -341,6 +345,8 @@ class TestExternalModuleNodeCreation:
         assert len(mock_ingestor.nodes_created) == 1
         label, props = mock_ingestor.nodes_created[0]
         assert props[cs.KEY_NAME] == "collections"
+        assert props[cs.KEY_PATH] is None
+        assert props[cs.KEY_IMPORT_PATH] == "std::collections::HashMap"
 
 
 class TestRustCrateResolution:

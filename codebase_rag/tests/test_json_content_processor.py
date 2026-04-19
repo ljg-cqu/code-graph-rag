@@ -63,6 +63,9 @@ def test_process_json_file_models_object_field_values(tmp_path: Path) -> None:
     enabled_field = field_by_key["enabled"]
     has_value_rels = _get_relationships(ingestor, cs.RelationshipType.HAS_VALUE)
 
+    assert all(props.get(cs.KEY_NAME) is not None for props in field_nodes)
+    assert service_field[cs.KEY_NAME] == "service.config"
+    assert enabled_field[cs.KEY_NAME] == "enabled"
     assert "service.config" not in str(service_field[cs.KEY_QUALIFIED_NAME])
     assert enabled_field[cs.KEY_JSON_VALUE] == "true"
     assert enabled_field[cs.KEY_JSON_VALUE_TYPE] == "boolean"
@@ -100,6 +103,8 @@ def test_process_json_file_models_root_array_with_indexed_elements(
     ]
 
     assert root_rel["to_label"] == cs.NodeLabel.JSON_ARRAY
+    array_nodes = _get_nodes_by_label(ingestor, cs.NodeLabel.JSON_ARRAY)
+    assert all(props.get(cs.KEY_NAME) is not None for props in array_nodes)
     assert {rel["props"][cs.KEY_INDEX] for rel in root_array_rels} == {0, 1, 2}
     assert {rel["to_label"] for rel in root_array_rels} == {
         cs.NodeLabel.JSON_VALUE,
@@ -131,5 +136,7 @@ def test_process_json_file_supports_root_scalars_and_distinct_paths(
     contains_json_rels = _get_relationships(ingestor, cs.RelationshipType.CONTAINS_JSON)
     root_targets = {str(rel["to_val"]) for rel in contains_json_rels}
 
+    value_nodes = _get_nodes_by_label(ingestor, cs.NodeLabel.JSON_VALUE)
+    assert all(props.get(cs.KEY_NAME) is not None for props in value_nodes)
     assert {rel["to_label"] for rel in contains_json_rels} == {cs.NodeLabel.JSON_VALUE}
     assert len(root_targets) == 2

@@ -263,7 +263,8 @@ class ImportProcessor:
             {
                 cs.KEY_NAME: name,
                 cs.KEY_QUALIFIED_NAME: module_path,
-                cs.KEY_PATH: full_name,
+                cs.KEY_PATH: None,
+                cs.KEY_IMPORT_PATH: full_name,
                 cs.KEY_IS_EXTERNAL: True,
             },
         )

@@ -23,6 +23,7 @@ from .services.graph_service import MemgraphIngestor
 __all__ = [
     "ingest_json_data",
     "delete_dataset",
+    "delete_entities_by_source_file",
     "handle_json_update_event",
     "validate_json_input",
     "load_json_files",
@@ -477,9 +478,7 @@ def _validate_prepared_files(prepared_files: list[PreparedJsonFile]) -> list[str
             )
 
     dataset_ambiguous_names = {
-        dataset_id: {
-            name for name, count in name_counts.items() if count > 1
-        }
+        dataset_id: {name for name, count in name_counts.items() if count > 1}
         for dataset_id, name_counts in dataset_name_counts.items()
     }
 
@@ -1270,6 +1269,62 @@ def delete_dataset(
         return False, nodes_deleted, relationships_deleted, errors
 
 
+def delete_entities_by_source_file(
+    dataset_id: str,
+    source_file: str,
+    batch_size: int = 100,
+    dry_run: bool = False,
+) -> OperationSummary:
+    """
+    Delete all JSON entities associated with a specific source file.
+
+    Args:
+        dataset_id: Dataset identifier
+        source_file: Source file path to match against entity source_file property
+        batch_size: Graph connection batch size
+        dry_run: If True, only count without deleting
+
+    Returns:
+        OperationSummary with deletion counts
+    """
+    summary = OperationSummary()
+
+    try:
+        with _create_json_ingestor(batch_size) as graph_connection:
+            graph_connection.ensure_constraints()
+            rows = graph_connection.fetch_all(
+                """
+                MATCH (n:JsonEntity {dataset_id: $dataset_id, source_file: $source_file})
+                RETURN n.unique_id AS unique_id
+                """,
+                {"dataset_id": dataset_id, "source_file": source_file},
+            )
+
+            if dry_run:
+                summary.deleted = len(rows)
+                return summary
+
+            for row in rows:
+                unique_id = str(row["unique_id"])
+                graph_connection.execute_write(
+                    """
+                    MATCH (n:JsonEntity {unique_id: $unique_id, dataset_id: $dataset_id})
+                    DETACH DELETE n
+                    """,
+                    {"unique_id": unique_id, "dataset_id": dataset_id},
+                )
+                summary.deleted += 1
+
+        logger.info(
+            f"Deleted {summary.deleted} entities for source_file={source_file} in dataset={dataset_id}"
+        )
+    except Exception as exc:
+        summary.failed += 1
+        summary.errors.append(f"Failed to delete entities for {source_file}: {exc}")
+
+    return summary
+
+
 def ingest_json_data(
     input_path: str = "",
     dataset_id: str | None = None,
@@ -1426,6 +1481,7 @@ def handle_json_update_event(
     dataset_id: str,
     conflict_resolution: str = "last-write-wins",
     dry_run: bool = False,
+    metadata: dict[str, Any] | None = None,
 ) -> UpdateResult:
     event_id = event.get("id")
     operation = str(event.get("operation", "add")).lower()
@@ -1436,8 +1492,12 @@ def handle_json_update_event(
         f"Processing update event {event_id}: operation={operation}, dataset={dataset_id}"
     )
 
+    merged_metadata: dict[str, Any] = {"dataset_id": dataset_id}
+    if metadata:
+        merged_metadata.update(metadata)
+
     json_data = {
-        "metadata": {"dataset_id": dataset_id},
+        "metadata": merged_metadata,
         "operation": operation,
         "last_updated": last_updated,
         "entities": event.get("entities", []),

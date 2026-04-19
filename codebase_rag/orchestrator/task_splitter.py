@@ -6,12 +6,26 @@ Handles splitting user requests into independent subtasks.
 import os
 import re
 from pathlib import Path
-from typing import Any
+from typing import TypedDict
 
 from loguru import logger
 
 from codebase_rag.config import settings
 from codebase_rag.utils.path_utils import get_all_code_files
+
+
+class Subtask(TypedDict, total=False):
+    """A single parallelizable subtask produced by the task splitter."""
+
+    id: str
+    type: str
+    query: str
+    prompt: str
+    file_path: str
+    relative_path: str
+    priority: int
+    complexity: int
+    target_entity: str
 
 
 class TaskSplitter:
@@ -25,7 +39,7 @@ class TaskSplitter:
 
     def split_task(
         self, prompt: str, strategy: str = "auto", max_subtasks: int | None = None
-    ) -> list[dict[str, Any]]:
+    ) -> list[Subtask]:
         """
         Split a user request into subtasks based on the given strategy.
 
@@ -101,7 +115,7 @@ class TaskSplitter:
         # Default to file-based for MVP
         return "file"
 
-    def _split_by_file(self, prompt: str) -> list[dict[str, Any]]:
+    def _split_by_file(self, prompt: str) -> list[Subtask]:
         """
         Split task by file boundaries, one subtask per file.
 
@@ -180,12 +194,20 @@ class TaskSplitter:
         if scope_paths:
             all_files = get_all_code_files(self.repo_path)
             scoped_files = [
-                file_path for file_path in all_files
-                if any(self._path_matches_scope(file_path, scope_path) for scope_path in scope_paths)
+                file_path
+                for file_path in all_files
+                if any(
+                    self._path_matches_scope(file_path, scope_path)
+                    for scope_path in scope_paths
+                )
             ]
             if scoped_files:
-                scoped_files.sort(key=lambda path: os.path.relpath(path, self.repo_path))
-                logger.info(f"Scoped file split selected {len(scoped_files)} files from explicit paths")
+                scoped_files.sort(
+                    key=lambda path: os.path.relpath(path, self.repo_path)
+                )
+                logger.info(
+                    f"Scoped file split selected {len(scoped_files)} files from explicit paths"
+                )
                 return scoped_files
 
         # Strategy 2: Analyze prompt for file type hints (NEW)
@@ -195,9 +217,13 @@ class TaskSplitter:
             extension_hints, name_pattern_hints = self._extract_file_type_hints(prompt)
             if extension_hints or name_pattern_hints:
                 all_files = get_all_code_files(self.repo_path)
-                hinted_files = _filter_files_by_hints(all_files, extension_hints, name_pattern_hints)
+                hinted_files = _filter_files_by_hints(
+                    all_files, extension_hints, name_pattern_hints
+                )
                 if hinted_files:
-                    hinted_files.sort(key=lambda path: os.path.relpath(path, self.repo_path))
+                    hinted_files.sort(
+                        key=lambda path: os.path.relpath(path, self.repo_path)
+                    )
                     logger.info(
                         f"File type hints yielded {len(hinted_files)} files "
                         f"(extensions: {extension_hints}, patterns: {name_pattern_hints})"
@@ -210,7 +236,9 @@ class TaskSplitter:
         # _run_interactive_loop handles excessive subtask counts correctly
         # by falling back to sequential execution with a clear log message.
         all_files = get_all_code_files(self.repo_path)
-        logger.info(f"Using all {len(all_files)} code files (no scope paths or type hints found)")
+        logger.info(
+            f"Using all {len(all_files)} code files (no scope paths or type hints found)"
+        )
         return all_files
 
     def _extract_scope_paths(self, prompt: str) -> list[Path]:
@@ -272,26 +300,65 @@ class TaskSplitter:
         except ValueError:
             return False
 
-    def _split_by_node_type(self, prompt: str) -> list[dict[str, Any]]:
+    def _split_by_node_type(self, prompt: str) -> list[Subtask]:
         """
         Split task by graph node type (functions, classes, etc.).
-        TODO: Implement in Phase 2
+
+        Planned Behavior:
+        - Analyze prompt for mentions of specific node types
+        - Create subtasks for each node type cluster
+        - Enable parallel querying of different node types
+
+        Example:
+            "Find all authentication functions and classes"
+            -> [
+                {"type": "function", "query": "authentication"},
+                {"type": "class", "query": "authentication"},
+            ]
+
+        Status: Planned for Phase 2
         """
         raise NotImplementedError("Node-type splitting will be implemented in Phase 2")
 
-    def _split_by_query(self, prompt: str) -> list[dict[str, Any]]:
+    def _split_by_query(self, prompt: str) -> list[Subtask]:
         """
         Split task by independent query segments.
-        TODO: Implement in Phase 2
+
+        Planned Behavior:
+        - Parse prompt into semantically independent sub-queries
+        - Create a subtask for each independent segment
+        - Enable parallel execution of unrelated questions
+
+        Example:
+            "Find auth functions and list all database models"
+            -> [
+                {"type": "function", "query": "auth"},
+                {"type": "class", "query": "database models"},
+            ]
+
+        Status: Planned for Phase 2
         """
         raise NotImplementedError(
             "Query-based splitting will be implemented in Phase 2"
         )
 
-    def _split_manual(self, prompt: str) -> list[dict[str, Any]]:
+    def _split_manual(self, prompt: str) -> list[Subtask]:
         """
         Split task based on explicit user-defined subtasks.
-        TODO: Implement in Phase 2
+
+        Planned Behavior:
+        - Parse prompt for numbered or bulleted subtask lists
+        - Create a subtask for each explicitly listed item
+        - Preserve user intent for custom decomposition
+
+        Example:
+            "1. Find auth functions 2. List database models"
+            -> [
+                {"type": "function", "query": "auth"},
+                {"type": "class", "query": "database models"},
+            ]
+
+        Status: Planned for Phase 2
         """
         raise NotImplementedError("Manual splitting will be implemented in Phase 2")
 
@@ -337,9 +404,7 @@ class TaskSplitter:
 
         return None
 
-    def validate_subtasks(
-        self, subtasks: list[dict[str, Any]], original_prompt: str
-    ) -> bool:
+    def validate_subtasks(self, subtasks: list[Subtask], original_prompt: str) -> bool:
         """
         Validate that subtasks cover the full scope of the original request with no gaps or overlaps.
 
@@ -354,10 +419,14 @@ class TaskSplitter:
             logger.warning("No subtasks generated")
             return False
 
-        file_subtasks = [st for st in subtasks if st["type"] == "file"]
+        file_subtasks = [st for st in subtasks if st.get("type") == "file"]
         if file_subtasks:
             expected_files = self._collect_scoped_files(original_prompt)
-            subtask_files = [st["file_path"] for st in file_subtasks]
+            subtask_files = [
+                st.get("file_path")
+                for st in file_subtasks
+                if st.get("file_path") is not None
+            ]
             if len(set(subtask_files)) != len(expected_files):
                 logger.warning("File-based subtasks do not cover the requested scope")
                 return False
@@ -384,52 +453,57 @@ class TaskSplitter:
         name_pattern_hints: list[str] = []
 
         # Language-specific extension hints (matched against f.suffix)
-        if any(word in lowered for word in ['python', '.py', 'django', 'flask']):
-            extension_hints.append('.py')
-        if any(word in lowered for word in ['javascript', '.js', 'react', 'node', 'express']):
-            extension_hints.extend(['.js', '.jsx', '.ts', '.tsx'])
-        if any(word in lowered for word in ['java', '.java', 'spring', 'android']):
-            extension_hints.append('.java')
-        if any(word in lowered for word in ['c++', '.cpp', 'stl']):
-            extension_hints.extend(['.cpp', '.h', '.hpp'])
-        if any(word in lowered for word in ['go', '.go', 'golang']):
-            extension_hints.append('.go')
-        if any(word in lowered for word in ['rust', '.rs', 'cargo']):
-            extension_hints.append('.rs')
-        if any(word in lowered for word in ['c#', '.cs', 'csharp', '.net', 'asp.net']):
-            extension_hints.append('.cs')
-        if any(word in lowered for word in ['ruby', '.rb', 'rails']):
-            extension_hints.append('.rb')
-        if any(word in lowered for word in ['php', '.php', 'laravel']):
-            extension_hints.append('.php')
-        if any(word in lowered for word in ['swift', '.swift', 'ios']):
-            extension_hints.append('.swift')
-        if any(word in lowered for word in ['kotlin', '.kt', 'android']):
-            extension_hints.append('.kt')
-        if any(word in lowered for word in ['scala', '.scala']):
-            extension_hints.append('.scala')
-        if any(word in lowered for word in ['typescript', '.ts']):
-            extension_hints.extend(['.ts', '.tsx'])
+        if any(word in lowered for word in ["python", ".py", "django", "flask"]):
+            extension_hints.append(".py")
+        if any(
+            word in lowered
+            for word in ["javascript", ".js", "react", "node", "express"]
+        ):
+            extension_hints.extend([".js", ".jsx", ".ts", ".tsx"])
+        if any(word in lowered for word in ["java", ".java", "spring", "android"]):
+            extension_hints.append(".java")
+        if any(word in lowered for word in ["c++", ".cpp", "stl"]):
+            extension_hints.extend([".cpp", ".h", ".hpp"])
+        if any(word in lowered for word in ["go", ".go", "golang"]):
+            extension_hints.append(".go")
+        if any(word in lowered for word in ["rust", ".rs", "cargo"]):
+            extension_hints.append(".rs")
+        if any(word in lowered for word in ["c#", ".cs", "csharp", ".net", "asp.net"]):
+            extension_hints.append(".cs")
+        if any(word in lowered for word in ["ruby", ".rb", "rails"]):
+            extension_hints.append(".rb")
+        if any(word in lowered for word in ["php", ".php", "laravel"]):
+            extension_hints.append(".php")
+        if any(word in lowered for word in ["swift", ".swift", "ios"]):
+            extension_hints.append(".swift")
+        if any(word in lowered for word in ["kotlin", ".kt", "android"]):
+            extension_hints.append(".kt")
+        if any(word in lowered for word in ["scala", ".scala"]):
+            extension_hints.append(".scala")
+        if any(word in lowered for word in ["typescript", ".ts"]):
+            extension_hints.extend([".ts", ".tsx"])
 
         # General name pattern hints (matched against f.name, NOT f.suffix)
-        if 'test' in lowered or 'spec' in lowered:
-            name_pattern_hints.extend(['_test', '_spec', 'test_', 'spec_', '.test', '.spec'])
-        if 'config' in lowered or 'setting' in lowered:
+        if "test" in lowered or "spec" in lowered:
+            name_pattern_hints.extend(
+                ["_test", "_spec", "test_", "spec_", ".test", ".spec"]
+            )
+        if "config" in lowered or "setting" in lowered:
             # Config files can be extension-based (.json, .yaml, .toml) or name-based (config, settings)
-            extension_hints.extend(['.json', '.yaml', '.yml', '.toml', '.ini'])
-            name_pattern_hints.extend(['config', 'settings', 'configuration'])
-        if 'readme' in lowered:
-            name_pattern_hints.extend(['readme'])
-            extension_hints.extend(['.md', '.rst'])
-        if 'doc' in lowered and 'documentation' not in lowered:
+            extension_hints.extend([".json", ".yaml", ".yml", ".toml", ".ini"])
+            name_pattern_hints.extend(["config", "settings", "configuration"])
+        if "readme" in lowered:
+            name_pattern_hints.extend(["readme"])
+            extension_hints.extend([".md", ".rst"])
+        if "doc" in lowered and "documentation" not in lowered:
             # Avoid false positive on "documentation for" queries
-            name_pattern_hints.extend(['doc', 'docs'])
-        if 'html' in lowered or 'web' in lowered or 'frontend' in lowered:
-            extension_hints.extend(['.html', '.css', '.scss', '.sass'])
-        if 'sql' in lowered or 'database' in lowered:
-            extension_hints.extend(['.sql'])
-        if 'shell' in lowered or 'bash' in lowered or 'script' in lowered:
-            extension_hints.extend(['.sh', '.bash'])
+            name_pattern_hints.extend(["doc", "docs"])
+        if "html" in lowered or "web" in lowered or "frontend" in lowered:
+            extension_hints.extend([".html", ".css", ".scss", ".sass"])
+        if "sql" in lowered or "database" in lowered:
+            extension_hints.extend([".sql"])
+        if "shell" in lowered or "bash" in lowered or "script" in lowered:
+            extension_hints.extend([".sh", ".bash"])
 
         return extension_hints, name_pattern_hints
 

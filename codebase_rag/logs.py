@@ -77,6 +77,10 @@ EMBEDDING_REEMBEDDING_PROGRESS = "Re-embedding progress: {done}/{total}"
 EMBEDDING_REEMBEDDING_COMPLETE = (
     "Re-embedding complete: {success} success, {failed} failed"
 )
+EMBEDDING_BACKFILL_START = "Starting embedding backfill for {count} nodes missing embeddings"
+EMBEDDING_BACKFILL_PROGRESS = "Embedding backfill progress: {done}/{total}"
+EMBEDDING_BACKFILL_COMPLETE = "Embedding backfill complete: {success} success, {failed} failed"
+EMBEDDING_BACKFILL_NONE_NEEDED = "No nodes require embedding backfill"
 
 # (H) Image logs
 IMAGE_COPIED = "Copied image to temporary path: {path}"

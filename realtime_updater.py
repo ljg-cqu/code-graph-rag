@@ -28,12 +28,16 @@ from codebase_rag.constants import (
     SupportedLanguage,
 )
 from codebase_rag.graph_updater import GraphUpdater
-from codebase_rag.json_ingestion import handle_json_update_event
+from codebase_rag.json_ingestion import (
+    delete_entities_by_source_file,
+    handle_json_update_event,
+)
 from codebase_rag.language_spec import get_language_spec
 from codebase_rag.parser_loader import load_parsers
 from codebase_rag.services import QueryProtocol
 from codebase_rag.services.graph_service import MemgraphIngestor
 from codebase_rag.shared.utils.file_classifier import FileType, classify_file
+from codebase_rag.utils.path_utils import should_skip_path
 
 
 class CodeChangeEventHandler(FileSystemEventHandler):
@@ -106,6 +110,16 @@ class CodeChangeEventHandler(FileSystemEventHandler):
         if event.is_directory or not self._is_relevant(src_path):
             return
 
+        # (H) Filter out read-only events early to avoid log spam
+        # (H) Skip "opened", "closed_no_write" etc. that don't modify the file
+        relevant_events = {
+            EventType.MODIFIED,
+            EventType.CREATED,
+            EventType.DELETED,
+        }
+        if event.event_type not in relevant_events:
+            return
+
         if not self.debounce_enabled:
             # (H) No debouncing - process immediately (legacy behavior)
             self._process_change(event)
@@ -120,7 +134,7 @@ class CodeChangeEventHandler(FileSystemEventHandler):
             # (H) Track the first event time for max-wait calculation
             if relative_path_str not in self.first_event_time:
                 self.first_event_time[relative_path_str] = current_time
-                logger.info(
+                logger.debug(
                     logs.CHANGE_DEBOUNCING.format(
                         event_type=event.event_type,
                         name=path.name,
@@ -210,17 +224,7 @@ class CodeChangeEventHandler(FileSystemEventHandler):
         path = Path(src_path)
         relative_path_str = str(path.relative_to(self.updater.repo_path))
 
-        # (H) Only process events that actually change file content
-        # (H) Skip read-only events like "opened", "closed_no_write" that don't modify the file
-        relevant_events = {
-            EventType.MODIFIED,
-            EventType.CREATED,
-            EventType.DELETED,  # (H) watchdog deletion event
-        }
-        if event.event_type not in relevant_events:
-            return
-
-        logger.warning(
+        logger.info(
             logs.CHANGE_DETECTED.format(event_type=event.event_type, path=path)
         )
 
@@ -455,10 +459,26 @@ class DocumentChangeEventHandler(FileSystemEventHandler):
         self.lock = threading.Lock()
 
     def _is_relevant(self, path_str: str) -> bool:
-        """Check if file is a document we should process."""
+        """Check if file is a document we should process.
+
+        Applies .cgrignore patterns early to avoid processing excluded files.
+        """
         path = Path(path_str)
+        # Check file extension first (fast path)
         if path.suffix.lower() not in self.doc_extensions:
             return False
+
+        # Apply .cgrignore patterns via should_skip_path
+        if self.doc_updater is not None:
+            if should_skip_path(
+                path,
+                self.doc_updater.repo_path,
+                exclude_paths=self.doc_updater.exclude_paths,
+                unignore_paths=self.doc_updater.unignore_paths,
+            ):
+                return False
+
+        # Fallback to basic ignore pattern check
         return all(part not in self.ignore_patterns for part in path.parts)
 
     def dispatch(self, event: FileSystemEvent) -> None:
@@ -470,6 +490,16 @@ class DocumentChangeEventHandler(FileSystemEventHandler):
             src_path = src_path.decode()
 
         if event.is_directory or not self._is_relevant(src_path):
+            return
+
+        # Filter out read-only events early to avoid log spam
+        # Skip "opened", "closed_no_write" etc. that don't modify the file
+        relevant_events = {
+            EventType.MODIFIED,
+            EventType.CREATED,
+            EventType.DELETED,
+        }
+        if event.event_type not in relevant_events:
             return
 
         if not self.debounce_enabled:
@@ -484,7 +514,7 @@ class DocumentChangeEventHandler(FileSystemEventHandler):
         with self.lock:
             if relative_path_str not in self.first_event_time:
                 self.first_event_time[relative_path_str] = current_time
-                logger.info(
+                logger.debug(
                     f"Document change debouncing: {event.event_type} on {path.name}"
                 )
 
@@ -510,6 +540,7 @@ class DocumentChangeEventHandler(FileSystemEventHandler):
                 timer.start()
 
     def _schedule_immediate_processing(self, relative_path_str: str) -> None:
+        """Process a file change immediately (called when max wait is exceeded)."""
         timer = threading.Timer(
             0, self._process_debounced_change, args=[relative_path_str]
         )
@@ -518,12 +549,14 @@ class DocumentChangeEventHandler(FileSystemEventHandler):
         timer.start()
 
     def _process_debounced_change(self, relative_path_str: str) -> None:
+        """Process a debounced file change after the timer fires."""
         with self.lock:
             event = self.pending_events.pop(relative_path_str, None)
             self.first_event_time.pop(relative_path_str, None)
             self.timers.pop(relative_path_str, None)
 
         if event is None:
+            logger.warning(f"No event found for {relative_path_str}")
             return
 
         self._process_change(event)
@@ -540,21 +573,11 @@ class DocumentChangeEventHandler(FileSystemEventHandler):
         path = Path(src_path)
         logger.info(f"Processing document change: {path.name}")
 
-        relevant_events = {
-            EventType.MODIFIED,
-            EventType.CREATED,
-            EventType.DELETED,
-        }
-        if event.event_type not in relevant_events:
-            return
-
         try:
             if event.event_type == EventType.DELETED:
-                # Remove from document graph
-                logger.info(f"Document deleted: {path.name}")
-                # TODO: Delete from document graph
+                result = self.doc_updater.delete_file(path)
+                logger.success(f"Document deleted: {path.name} ({result})")
             else:
-                # Update document in graph
                 result = self.doc_updater.update_file(path)
                 logger.success(f"Document updated: {path.name} ({result})")
         except Exception as e:
@@ -606,6 +629,16 @@ class JSONChangeEventHandler(FileSystemEventHandler):
         if event.is_directory or not self._is_relevant(src_path):
             return
 
+        # Filter out read-only events early to avoid log spam
+        # Skip "opened", "closed_no_write" etc. that don't modify the file
+        relevant_events = {
+            EventType.MODIFIED,
+            EventType.CREATED,
+            EventType.DELETED,
+        }
+        if event.event_type not in relevant_events:
+            return
+
         if not self.debounce_enabled:
             self._process_change(event)
             return
@@ -618,7 +651,7 @@ class JSONChangeEventHandler(FileSystemEventHandler):
         with self.lock:
             if relative_path_str not in self.first_event_time:
                 self.first_event_time[relative_path_str] = current_time
-                logger.info(
+                logger.debug(
                     f"JSON change debouncing: {event.event_type} on {path.name}"
                 )
 
@@ -644,6 +677,7 @@ class JSONChangeEventHandler(FileSystemEventHandler):
                 timer.start()
 
     def _schedule_immediate_processing(self, relative_path_str: str) -> None:
+        """Process a file change immediately (called when max wait is exceeded)."""
         timer = threading.Timer(
             0, self._process_debounced_change, args=[relative_path_str]
         )
@@ -652,12 +686,14 @@ class JSONChangeEventHandler(FileSystemEventHandler):
         timer.start()
 
     def _process_debounced_change(self, relative_path_str: str) -> None:
+        """Process a debounced file change after the timer fires."""
         with self.lock:
             event = self.pending_events.pop(relative_path_str, None)
             self.first_event_time.pop(relative_path_str, None)
             self.timers.pop(relative_path_str, None)
 
         if event is None:
+            logger.warning(f"No event found for {relative_path_str}")
             return
 
         self._process_change(event)
@@ -671,31 +707,22 @@ class JSONChangeEventHandler(FileSystemEventHandler):
         path = Path(src_path)
         logger.info(f"Processing JSON change: {path.name}")
 
-        relevant_events = {
-            EventType.MODIFIED,
-            EventType.CREATED,
-            EventType.DELETED,
-        }
-        if event.event_type not in relevant_events:
-            return
-
         try:
-            # Map watchdog event type to JSON operation
-            if event.event_type == EventType.DELETED:
-                operation = "delete"
-                # For deletion, we need to identify which entities to delete
-                # This would require reading the JSON file before deletion or
-                # maintaining a mapping of file-to-entities. For now, log warning.
-                logger.warning(
-                    f"JSON file deleted: {path.name}. "
-                    f"Manual cleanup of JSON entities may be required."
-                )
-                # TODO: Implement proper JSON entity deletion tracking
-                return
-            else:
-                operation = "add" if event.event_type == EventType.CREATED else "update"
+            relative_path = str(path.relative_to(self.repo_path))
 
-            # Load JSON file and create update event
+            if event.event_type == EventType.DELETED:
+                result = delete_entities_by_source_file(
+                    dataset_id=self.dataset_id,
+                    source_file=relative_path,
+                )
+                logger.success(
+                    f"JSON file deleted: {path.name} "
+                    f"(entities deleted: {result.deleted})"
+                )
+                return
+
+            operation = "add" if event.event_type == EventType.CREATED else "update"
+
             with open(path) as f:
                 data = json.load(f)
 
@@ -705,10 +732,10 @@ class JSONChangeEventHandler(FileSystemEventHandler):
                 "relationships": data.get("relationships", []),
             }
 
-            # Use existing handler from json_ingestion.py
             result = handle_json_update_event(
                 event=update_event,
                 dataset_id=self.dataset_id,
+                metadata={"source_file": relative_path},
             )
             logger.success(
                 f"JSON updated: {path.name} "
@@ -750,9 +777,7 @@ class UnifiedChangeEventHandler(FileSystemEventHandler):
             code_updater, debounce_seconds, max_wait_seconds
         )
         self.doc_handler = (
-            DocumentChangeEventHandler(
-                doc_updater, debounce_seconds, max_wait_seconds
-            )
+            DocumentChangeEventHandler(doc_updater, debounce_seconds, max_wait_seconds)
             if doc_updater is not None
             else None
         )
@@ -764,6 +789,16 @@ class UnifiedChangeEventHandler(FileSystemEventHandler):
             src_path = src_path.decode()
 
         if event.is_directory:
+            return
+
+        # Filter out read-only events early to avoid log spam
+        # Skip "opened", "closed_no_write" etc. that don't modify the file
+        relevant_events = {
+            EventType.MODIFIED,
+            EventType.CREATED,
+            EventType.DELETED,
+        }
+        if event.event_type not in relevant_events:
             return
 
         path = Path(src_path)
@@ -891,7 +926,7 @@ class UnifiedWatcherManager:
         """Close the ingestor if it's a context manager."""
         if self.ingestor is not None:
             # If ingestor is a context manager, call __exit__
-            if hasattr(self.ingestor, '__exit__'):
+            if hasattr(self.ingestor, "__exit__"):
                 self.ingestor.__exit__(None, None, None)
             self.ingestor = None
 
