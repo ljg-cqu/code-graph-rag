@@ -406,3 +406,25 @@ class DimensionMismatchError(EmbeddingError):
 
 # Backward compatibility alias
 EmbeddingDimensionMismatchError = DimensionMismatchError
+
+
+class QueryExecutionError(Exception):
+    """Raised when a Memgraph query fails with context."""
+
+    def __init__(
+        self,
+        query: str,
+        params: dict | None,
+        original_error: Exception,
+    ):
+        self.query = query
+        self.params = params
+        self.original_error = original_error
+
+        # Truncate query for readability
+        query_preview = query[:200] + "..." if len(query) > 200 else query
+        super().__init__(
+            f"Memgraph query failed: {original_error}\n"
+            f"Query: {query_preview}\n"
+            f"Params: {params}"
+        )

@@ -34,6 +34,39 @@ def extract_tool_names(tools: list["Tool"]) -> ToolNames:
     )
 
 
+CYPHER_SCHEMA_INTROSPECTION_RULES = """
+**5. Schema Introspection Queries**
+
+When asked about graph schema, node labels, relationship types, or property information:
+
+- **Get all node labels with counts**:
+  ```cypher
+  MATCH (n)
+  RETURN DISTINCT labels(n) AS node_labels, count(*) AS count
+  ORDER BY count DESC
+  LIMIT 50
+  ```
+
+- **Get all relationship types with counts**:
+  ```cypher
+  MATCH ()-[r]->()
+  RETURN DISTINCT type(r) AS relationship_type, count(*) AS count
+  ORDER BY count DESC
+  LIMIT 50
+  ```
+
+- **Get properties for a specific node type**:
+  ```cypher
+  MATCH (n:Function)
+  RETURN DISTINCT keys(n) AS properties
+  LIMIT 1
+  ```
+
+- **IMPORTANT**: Do NOT use `CALL schema.info()` or `CALL db.schema.info()` - these procedures do not exist in Memgraph.
+- Use `CALL db.schema.visualization()` for visual schema if available.
+- Use standard MATCH queries for schema introspection.
+"""
+
 CYPHER_QUERY_RULES = """**2. Critical Cypher Query Rules**
 
 - **ALWAYS Return Specific Properties with Aliases**: Do NOT return whole nodes (e.g., `RETURN n`). You MUST return specific properties with clear aliases (e.g., `RETURN n.name AS name`).
@@ -77,6 +110,8 @@ The database contains information about a codebase, structured with the followin
 {CODE_GRAPH_SCHEMA_DEFINITION}
 
 {CYPHER_QUERY_RULES}
+
+{CYPHER_SCHEMA_INTROSPECTION_RULES}
 """
 
 

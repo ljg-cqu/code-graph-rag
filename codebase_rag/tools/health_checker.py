@@ -9,6 +9,7 @@ from pathlib import Path
 from loguru import logger
 
 import mgclient
+from ..exceptions import QueryExecutionError
 from ..services.graph_service import MemgraphIngestor
 
 from .. import constants as cs
@@ -35,13 +36,40 @@ class HealthChecker:
         query: str,
         params: dict[str, object] | None = None,
     ) -> int:
-        cursor.execute(query, params)
-        row = cursor.fetchone()
-        # Consume any remaining rows to allow safe connection close
-        HealthChecker._consume_all_results(cursor)
-        if row is None:
-            return 0
-        return int(row[0])
+        try:
+            cursor.execute(query, params)
+            row = cursor.fetchone()
+            # Consume any remaining rows to allow safe connection close
+            HealthChecker._consume_all_results(cursor)
+            if row is None:
+                return 0
+            return int(row[0])
+        except Exception as e:
+            raise QueryExecutionError(query, params, e) from e
+
+    def _fetch_embedding_dim(
+        self,
+        cursor: mgclient.Cursor,
+        embedded_labels: list[str],
+        embedding_property: str,
+    ) -> int | None:
+        """Fetch embedding dimension with error handling."""
+        query = f"""
+            MATCH (n)
+            WHERE ANY(label IN labels(n) WHERE label IN $embedded_labels)
+              AND n.{embedding_property} IS NOT NULL
+            RETURN size(n.{embedding_property}) AS dim
+            LIMIT 1
+        """
+        params = {"embedded_labels": embedded_labels}
+
+        try:
+            cursor.execute(query, params)
+            result = cursor.fetchone()
+            HealthChecker._consume_all_results(cursor)
+            return result[0] if result else None
+        except Exception as e:
+            raise QueryExecutionError(query, params, e) from e
 
     @staticmethod
     def _consume_all_results(cursor: mgclient.Cursor) -> None:
@@ -912,21 +940,10 @@ class HealthChecker:
 
             # 4. Check invalid embeddings dimension
             if missing_embeddings_count < embedded_node_count:
-                cursor.execute(
-                    f"""
-                    MATCH (n)
-                    WHERE ANY(label IN labels(n) WHERE label IN $embedded_labels)
-                      AND n.{embedding_property} IS NOT NULL
-                    RETURN size(n.{embedding_property}) AS dim
-                    LIMIT 1
-                """,
-                    {"embedded_labels": embedded_labels},
+                actual_dim = self._fetch_embedding_dim(
+                    cursor, embedded_labels, embedding_property
                 )
-                result = cursor.fetchone()
-                # Consume any remaining results to allow safe subsequent queries
-                HealthChecker._consume_all_results(cursor)
-                if result:
-                    actual_dim = result[0]
+                if actual_dim is not None:
                     dim_passed = actual_dim == vector_dim
                     results.append(
                         HealthCheckResult(

@@ -6,9 +6,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from codebase_rag.migrations.data_model_migrations import (
-    _cleanup_incomplete_test_nodes,
     _migrate_external_module_paths,
+    _migrate_json_entity_labels,
     _migrate_json_node_names,
+    _migrate_method_is_exported,
     _migrate_orphaned_builtins,
     run_migrations,
 )
@@ -129,39 +130,74 @@ class TestMigrateJsonNodeNames:
         assert mock_cursor.execute.call_count == 8  # 4 counts + 4 updates
 
 
-class TestCleanupIncompleteTestNodes:
-    """Test incomplete test node cleanup."""
+class TestMigrateMethodIsExported:
+    """Test method is_exported migration."""
 
-    def test_no_incomplete_test_nodes(self):
-        """Test when no incomplete test nodes exist."""
+    def test_no_methods_missing_is_exported(self):
+        """Test when all methods have is_exported."""
         mock_cursor = MagicMock()
         mock_cursor.fetchone.return_value = (0,)
 
-        result = _cleanup_incomplete_test_nodes(mock_cursor, dry_run=True)
+        result = _migrate_method_is_exported(mock_cursor, dry_run=True)
         assert result == 0
 
     def test_dry_run_reports_count(self):
-        """Test dry run reports count without deleting."""
+        """Test dry run reports count without making changes."""
         mock_cursor = MagicMock()
-        mock_cursor.fetchone.return_value = (2,)
+        mock_cursor.fetchone.return_value = (25,)
 
         with patch("codebase_rag.migrations.data_model_migrations.logger") as mock_logger:
-            result = _cleanup_incomplete_test_nodes(mock_cursor, dry_run=True)
+            result = _migrate_method_is_exported(mock_cursor, dry_run=True)
 
-        assert result == 2
+        assert result == 25
         assert mock_cursor.execute.call_count == 1
         mock_logger.info.assert_called_once()
 
-    def test_execute_deletes_nodes(self):
-        """Test actual migration deletes incomplete test nodes."""
+    def test_execute_sets_is_exported(self):
+        """Test actual migration sets is_exported to false."""
         mock_cursor = MagicMock()
-        mock_cursor.fetchone.return_value = (2,)
+        mock_cursor.fetchone.return_value = (25,)
 
         with patch("codebase_rag.migrations.data_model_migrations.logger"):
-            result = _cleanup_incomplete_test_nodes(mock_cursor, dry_run=False)
+            result = _migrate_method_is_exported(mock_cursor, dry_run=False)
 
-        assert result == 2
-        assert mock_cursor.execute.call_count == 2  # Count and DELETE
+        assert result == 25
+        assert mock_cursor.execute.call_count == 2  # Count and SET
+
+
+class TestMigrateJsonEntityLabels:
+    """Test JsonEntity labels property rename migration."""
+
+    def test_no_json_entities_with_labels(self):
+        """Test when no JsonEntity nodes have labels property."""
+        mock_cursor = MagicMock()
+        mock_cursor.fetchone.return_value = (0,)
+
+        result = _migrate_json_entity_labels(mock_cursor, dry_run=True)
+        assert result == 0
+
+    def test_dry_run_reports_count(self):
+        """Test dry run reports count without making changes."""
+        mock_cursor = MagicMock()
+        mock_cursor.fetchone.return_value = (100,)
+
+        with patch("codebase_rag.migrations.data_model_migrations.logger") as mock_logger:
+            result = _migrate_json_entity_labels(mock_cursor, dry_run=True)
+
+        assert result == 100
+        assert mock_cursor.execute.call_count == 1
+        mock_logger.info.assert_called_once()
+
+    def test_execute_renames_labels(self):
+        """Test actual migration renames labels to entity_labels."""
+        mock_cursor = MagicMock()
+        mock_cursor.fetchone.return_value = (100,)
+
+        with patch("codebase_rag.migrations.data_model_migrations.logger"):
+            result = _migrate_json_entity_labels(mock_cursor, dry_run=False)
+
+        assert result == 100
+        assert mock_cursor.execute.call_count == 2  # Count and SET/REMOVE
 
 
 class TestRunMigrations:
@@ -171,11 +207,14 @@ class TestRunMigrations:
         """Test dry run returns counts for all migrations."""
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
+        # Order matches run_migrations: orphaned_builtins, external_module_paths,
+        # json_node_names (4 counts), method_is_exported, json_entity_labels
         mock_cursor.fetchone.side_effect = [
             (48,),    # orphaned_builtins
             (107,),   # external_module_paths
-            (0,), (0,), (0,), (0,),  # json_node_names (4 counts)
-            (2,),     # incomplete_test_nodes
+            (10,), (5,), (20,), (15,),  # json_node_names (4 counts for 4 types)
+            (25,),    # method_is_exported
+            (100,),   # json_entity_labels
         ]
         mock_conn.cursor.return_value = mock_cursor
 
@@ -186,15 +225,18 @@ class TestRunMigrations:
 
         assert result["orphaned_builtins"] == 48
         assert result["external_module_paths"] == 107
-        assert result["json_node_names"] == 0
-        assert result["incomplete_test_nodes"] == 2
+        assert result["json_node_names"] == 50  # 10 + 5 + 20 + 15
+        assert result["method_is_exported"] == 25
+        assert result["json_entity_labels"] == 100
 
     def test_connection_cleanup_on_success(self):
         """Test cursor and connection are closed after success."""
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
+        # 8 fetchone calls: orphaned_builtins(1), external_module_paths(1),
+        # json_node_names(4), method_is_exported(1), json_entity_labels(1)
         mock_cursor.fetchone.side_effect = [
-            (0,), (0,), (0,), (0,), (0,), (0,), (0,),  # All zeros
+            (0,), (0,), (0,), (0,), (0,), (0,), (0,), (0,),
         ]
         mock_conn.cursor.return_value = mock_cursor
 

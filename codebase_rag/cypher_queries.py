@@ -92,6 +92,41 @@ RETURN n.name AS name, n.start_line AS start, n.end_line AS end, m.path AS path,
 LIMIT 1
 """
 
+# (H) Schema introspection queries
+CYPHER_SCHEMA_NODE_LABELS = """
+MATCH (n)
+RETURN DISTINCT labels(n) AS node_labels, count(*) AS count
+ORDER BY count DESC
+LIMIT 50
+"""
+
+CYPHER_SCHEMA_RELATIONSHIP_TYPES = """
+MATCH ()-[r]->()
+RETURN DISTINCT type(r) AS relationship_type, count(*) AS count
+ORDER BY count DESC
+LIMIT 50
+"""
+
+CYPHER_SCHEMA_NODE_PROPERTIES = """
+MATCH (n)
+WITH labels(n)[0] AS label, keys(n) AS props
+UNWIND props AS prop
+RETURN DISTINCT label, prop, count(*) AS occurrences
+ORDER BY label, occurrences DESC
+LIMIT 100
+"""
+
+CYPHER_SCHEMA_COMPLETE = """
+// Get all node labels with counts
+MATCH (n)
+WITH labels(n)[0] AS label, count(*) AS node_count
+ORDER BY label
+// Get all relationship types with counts
+CALL { MATCH ()-[r]->() RETURN type(r) AS rel_type, count(*) AS rel_count }
+RETURN label, node_count, collect(DISTINCT rel_type) AS relationship_types
+ORDER BY label
+"""
+
 # (H) Graph navigation queries
 CYPHER_FIND_CALLERS = """
 MATCH (caller)-[:CALLS]->(target)

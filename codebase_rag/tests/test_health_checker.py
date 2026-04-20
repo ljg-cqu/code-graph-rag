@@ -1,6 +1,9 @@
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from codebase_rag.tools.health_checker import HealthChecker
+from codebase_rag.exceptions import QueryExecutionError
 
 
 def test_consume_all_results_handles_exceptions() -> None:
@@ -384,3 +387,148 @@ def test_validate_ingestion_quality_no_stacktrace_by_default() -> None:
     assert results[0].error is not None
     assert "Test error without traceback" in results[0].error
     assert "Traceback" not in results[0].error
+
+
+class TestQueryExecutionError:
+    """Tests for QueryExecutionError exception."""
+
+    def test_error_captures_query_and_params(self):
+        """Test that QueryExecutionError captures query context."""
+        original_error = ValueError("Original error")
+        query = "MATCH (n) RETURN count(n)"
+        params = {"key": "value"}
+
+        error = QueryExecutionError(query, params, original_error)
+
+        assert error.query == query
+        assert error.params == params
+        assert error.original_error is original_error
+        assert "MATCH (n)" in str(error)
+        assert "Original error" in str(error)
+
+    def test_error_truncates_long_query(self):
+        """Test that QueryExecutionError truncates long queries."""
+        original_error = ValueError("Original error")
+        query = "MATCH (n) RETURN n" + " " * 300
+        params = None
+
+        error = QueryExecutionError(query, params, original_error)
+
+        assert "..." in str(error)
+        # Query preview should be at most 203 chars (200 + "...")
+        query_line = str(error).split("Query: ")[1].split("\n")[0]
+        assert len(query_line) <= 203
+
+    def test_error_message_format(self):
+        """Test error message contains all expected parts."""
+        original_error = RuntimeError("Connection lost")
+        query = "MATCH (n:Function) RETURN n"
+        params = {"limit": 10}
+
+        error = QueryExecutionError(query, params, original_error)
+
+        error_str = str(error)
+        assert "Memgraph query failed" in error_str
+        assert "Connection lost" in error_str
+        assert "Query: MATCH (n:Function)" in error_str
+        assert "Params: {'limit': 10}" in error_str
+
+
+class TestFetchSingleInt:
+    """Tests for _fetch_single_int error handling."""
+
+    def test_fetch_single_int_wraps_errors(self):
+        """Test that _fetch_single_int wraps errors with QueryExecutionError."""
+        mock_cursor = MagicMock()
+        mock_cursor.fetchone.side_effect = Exception(
+            "<class 'mgclient.Column'> returned a result with an exception set"
+        )
+
+        with pytest.raises(QueryExecutionError) as exc_info:
+            HealthChecker._fetch_single_int(
+                mock_cursor,
+                "MATCH (n) RETURN count(n)",
+                {"param": "value"}
+            )
+
+        assert "MATCH (n)" in str(exc_info.value)
+        assert "param" in str(exc_info.value)
+        assert "mgclient.Column" in str(exc_info.value)
+
+    def test_fetch_single_int_success_returns_int(self):
+        """Test _fetch_single_int returns integer on success."""
+        mock_cursor = MagicMock()
+        # First fetchone returns the result, second returns None for _consume_all_results
+        mock_cursor.fetchone.side_effect = [(42,), None]
+
+        result = HealthChecker._fetch_single_int(
+            mock_cursor,
+            "MATCH (n) RETURN count(n)"
+        )
+
+        assert result == 42
+
+    def test_fetch_single_int_returns_zero_for_none(self):
+        """Test _fetch_single_int returns 0 when no result."""
+        mock_cursor = MagicMock()
+        # fetchone returns None for both the query result and _consume_all_results
+        mock_cursor.fetchone.return_value = None
+
+        result = HealthChecker._fetch_single_int(
+            mock_cursor,
+            "MATCH (n:NonExistent) RETURN count(n)"
+        )
+
+        assert result == 0
+
+
+class TestFetchEmbeddingDim:
+    """Tests for _fetch_embedding_dim error handling."""
+
+    def test_fetch_embedding_dim_wraps_errors(self):
+        """Test that _fetch_embedding_dim wraps errors with QueryExecutionError."""
+        mock_cursor = MagicMock()
+        mock_cursor.fetchone.side_effect = Exception(
+            "<class 'mgclient.Column'> returned a result with an exception set"
+        )
+
+        checker = HealthChecker()
+
+        with pytest.raises(QueryExecutionError) as exc_info:
+            checker._fetch_embedding_dim(
+                mock_cursor,
+                ["Function", "Method"],
+                "embedding"
+            )
+
+        assert "size(n.embedding)" in str(exc_info.value)
+        assert "embedded_labels" in str(exc_info.value)
+
+    def test_fetch_embedding_dim_success_returns_int(self):
+        """Test _fetch_embedding_dim returns integer on success."""
+        mock_cursor = MagicMock()
+        # First fetchone returns the result, second returns None for _consume_all_results
+        mock_cursor.fetchone.side_effect = [(768,), None]
+
+        checker = HealthChecker()
+        result = checker._fetch_embedding_dim(
+            mock_cursor,
+            ["Function", "Method"],
+            "embedding"
+        )
+
+        assert result == 768
+
+    def test_fetch_embedding_dim_returns_none_for_no_results(self):
+        """Test _fetch_embedding_dim returns None when no embeddings exist."""
+        mock_cursor = MagicMock()
+        mock_cursor.fetchone.return_value = None
+
+        checker = HealthChecker()
+        result = checker._fetch_embedding_dim(
+            mock_cursor,
+            ["Function"],
+            "embedding"
+        )
+
+        assert result is None

@@ -438,6 +438,8 @@ class AppConfig(BaseSettings):
             "awk",
             "sed",
             "tee",
+            "python",
+            "python3",
         }
     )
     SHELL_READ_ONLY_COMMANDS: frozenset[str] = frozenset(
