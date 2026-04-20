@@ -175,7 +175,8 @@ HELP_DOC_WORKSPACE = (
 )
 HELP_MODE = (
     "Query routing mode. Options:\n"
-    "  - code_only: Query code graph only (default)\n"
+    "  - auto: Auto-detect based on repository content (default)\n"
+    "  - code_only: Query code graph only\n"
     "  - document_only: Query document graph only\n"
     "  - both_merged: Query both graphs, merge results with attribution\n"
     "  - code_vs_doc: Validate code against documentation (doc is truth)\n"

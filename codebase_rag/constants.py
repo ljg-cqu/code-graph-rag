@@ -1155,6 +1155,54 @@ TABLE_ROW_CODE_GRAPH = "Code Graph"
 TABLE_ROW_DOCUMENT_GRAPH = "Document Graph"
 TABLE_ROW_DOC_GRAPH_NOT_CONNECTED = "NOT CONNECTED (use --with-docs)"
 TABLE_ROW_QUERY_MODE = "Query Mode"
+TABLE_ROW_CONTENT_SUMMARY = "Content"
+
+# (H) Graph status panels
+UI_DOC_REPO_DETECTED = "Document Repository Detected"
+UI_DOC_REPO_PANEL = (
+    "This repository contains only documents (no code files).\n"
+    "Query mode has been set to document_only.\n\n"
+    "Use /mode code_only or /mode both_merged to change modes."
+)
+UI_CODE_REPO_DETECTED = "Code Repository Detected"
+UI_CODE_REPO_PANEL = (
+    "This repository contains code files only.\n"
+    "Query mode has been set to code_only.\n\n"
+    "Use /mode document_only after --index-docs to query documents."
+)
+UI_MIXED_REPO_DETECTED = "Mixed Repository Detected"
+UI_MIXED_REPO_PANEL = (
+    "This repository has both code ({code_count} entities) "
+    "and documents ({doc_count}).\n"
+    "Query mode has been set to both_merged.\n\n"
+    "Use /mode to change modes."
+)
+
+# (H) Mode command warnings
+UI_MODE_SWITCH_WARN_CODE_EMPTY = (
+    "Code graph is empty. Document graph has {doc_count} documents. "
+    "Use '/mode document_only' to search documents."
+)
+UI_MODE_SWITCH_WARN_DOC_EMPTY = (
+    "Document graph is empty. Code graph has {code_count} entities. "
+    "Use '/mode code_only' to search code."
+)
+UI_MODE_SWITCH_WARN_BOTH_EMPTY = (
+    "Both graphs are empty. Use --index-all to index your repository."
+)
+UI_MODE_SWITCH_WARN_BOTH_MERGED = (
+    "Cannot use both_merged: {missing} graph is empty. "
+    "Index the missing content first."
+)
+
+# (H) Task splitter mode mismatch
+UI_MODE_MISMATCH_TITLE = "Query Mode Mismatch"
+UI_MODE_MISMATCH = (
+    "Current mode: {current_mode}\n"
+    "No files matched this mode.\n"
+    "Suggested mode: {suggested_mode}\n"
+    "Use '/mode {suggested_mode}' to switch."
+)
 
 # (H) UI status messages
 MSG_CONNECTED_MEMGRAPH = "Successfully connected to Memgraph."

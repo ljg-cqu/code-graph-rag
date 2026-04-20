@@ -593,7 +593,7 @@ def start(
         help=ch.HELP_CHECK_FRESHNESS,
     ),
     mode: str = typer.Option(
-        "code_only",
+        "auto",
         "--mode",
         help=ch.HELP_MODE,
     ),
@@ -728,8 +728,9 @@ def start(
     # Calculate effective_with_docs
     effective_with_docs = with_docs or index_docs or index_all
 
-    # Mode validation: non-code_only modes require --with-docs
-    if mode != "code_only" and not effective_with_docs:
+    # Mode validation: non-code_only and non-auto modes require --with-docs
+    # "auto" is always allowed since it resolves after graph connection
+    if mode.lower() != "auto" and mode != "code_only" and not effective_with_docs:
         typer.echo(
             f"ERROR: Mode '{mode}' requires document graph. "
             f"Add --with-docs, --index-docs, or --index-all flag.",
@@ -739,11 +740,14 @@ def start(
 
     # Parse and validate mode
     try:
-        query_mode = QueryMode(mode.lower())
+        if mode.lower() == "auto":
+            query_mode = None  # Triggers auto-detection in main.py
+        else:
+            query_mode = QueryMode(mode.lower())
     except ValueError:
         typer.echo(
             f"ERROR: Invalid mode '{mode}'. "
-            f"Valid modes: code_only, document_only, both_merged, code_vs_doc, doc_vs_code",
+            f"Valid modes: auto, code_only, document_only, both_merged, code_vs_doc, doc_vs_code",
             err=True,
         )
         raise typer.Exit(1)

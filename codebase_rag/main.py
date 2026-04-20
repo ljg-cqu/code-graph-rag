@@ -438,6 +438,45 @@ def _setup_common_initialization(repo_path: str) -> Path:
     return project_root
 
 
+def _display_graph_status(
+    code_count: int,
+    doc_count: int,
+    console: Console,
+) -> None:
+    """Display informative graph status with repository type hint."""
+    from rich.panel import Panel
+
+    if code_count == 0 and doc_count > 0:
+        console.print(
+            Panel(
+                style(cs.UI_DOC_REPO_PANEL, cs.Color.CYAN),
+                title=cs.UI_DOC_REPO_DETECTED,
+                border_style=cs.Color.CYAN,
+            )
+        )
+    elif code_count > 0 and doc_count == 0:
+        console.print(
+            Panel(
+                style(cs.UI_CODE_REPO_PANEL, cs.Color.CYAN),
+                title=cs.UI_CODE_REPO_DETECTED,
+                border_style=cs.Color.CYAN,
+            )
+        )
+    elif code_count > 0 and doc_count > 0:
+        console.print(
+            Panel(
+                style(
+                    cs.UI_MIXED_REPO_PANEL.format(
+                        code_count=code_count, doc_count=doc_count
+                    ),
+                    cs.Color.CYAN,
+                ),
+                title=cs.UI_MIXED_REPO_DETECTED,
+                border_style=cs.Color.CYAN,
+            )
+        )
+
+
 def _create_configuration_table(
     repo_path: str,
     title: str = cs.DEFAULT_TABLE_TITLE,
@@ -445,6 +484,8 @@ def _create_configuration_table(
     doc_graph_connected: bool = False,
     query_mode: QueryMode | None = None,
     doc_workspace: str = "default",
+    code_count: int = 0,
+    doc_count: int = 0,
 ) -> Table:
     from .shared.query_router import QueryMode
 
@@ -508,6 +549,13 @@ def _create_configuration_table(
 
     # Query mode
     table.add_row(cs.TABLE_ROW_QUERY_MODE, query_mode)
+
+    # Content summary
+    if doc_graph_connected:
+        content_summary = f"Code: {code_count} entities, Docs: {doc_count}"
+    else:
+        content_summary = f"Code: {code_count} entities"
+    table.add_row(cs.TABLE_ROW_CONTENT_SUMMARY, content_summary)
 
     # Yolo mode indicator
     yolo_status = cs.YOLO_ENABLED if app_context.session.yolo_mode else cs.YOLO_DISABLED
@@ -1559,6 +1607,8 @@ def _handle_mode_command(
     command: str,
     query_router: QueryRouter | None,
     current_mode: QueryMode,
+    code_count: int = 0,
+    doc_count: int = 0,
 ) -> tuple[QueryMode, str]:
     """Handle /mode command in chat session.
 
@@ -1566,6 +1616,8 @@ def _handle_mode_command(
         command: Full command string (e.g., "/mode both_merged")
         query_router: Active QueryRouter instance (None if code-only)
         current_mode: Current query mode
+        code_count: Number of code entities in graph
+        doc_count: Number of documents in graph
 
     Returns:
         Tuple of (new_mode, status_message)
@@ -1594,6 +1646,31 @@ Available modes:
 
     try:
         new_mode = QueryMode(arg)
+
+        # Warn if switching to mode with no content
+        if new_mode == QueryMode.CODE_ONLY and code_count == 0:
+            if doc_count > 0:
+                return current_mode, cs.UI_MODE_SWITCH_WARN_CODE_EMPTY.format(
+                    doc_count=doc_count
+                )
+            return current_mode, cs.UI_MODE_SWITCH_WARN_BOTH_EMPTY
+
+        if new_mode == QueryMode.DOCUMENT_ONLY and doc_count == 0:
+            if code_count > 0:
+                return current_mode, cs.UI_MODE_SWITCH_WARN_DOC_EMPTY.format(
+                    code_count=code_count
+                )
+            return current_mode, cs.UI_MODE_SWITCH_WARN_BOTH_EMPTY
+
+        if new_mode == QueryMode.BOTH_MERGED and (code_count == 0 or doc_count == 0):
+            missing = []
+            if code_count == 0:
+                missing.append("code")
+            if doc_count == 0:
+                missing.append("documents")
+            return current_mode, cs.UI_MODE_SWITCH_WARN_BOTH_MERGED.format(
+                missing=", ".join(missing)
+            )
 
         # Validate mode is available
         if new_mode != QueryMode.CODE_ONLY and (
@@ -1753,6 +1830,8 @@ async def _run_interactive_loop(
     query_router: QueryRouter | None = None,
     current_mode: QueryMode | None = None,
     parallel_config: ParallelExecutionConfig | None = None,
+    code_count: int = 0,
+    doc_count: int = 0,
 ) -> None:
     from .shared.query_router import QueryMode
 
@@ -1771,7 +1850,12 @@ async def _run_interactive_loop(
         query_mode=current_mode,
         doc_workspace=normalized_parallel_config.doc_workspace,
     )
-    task_splitter = TaskSplitter(repo_path=str(project_root), query_mode=current_mode)
+    task_splitter = TaskSplitter(
+        repo_path=str(project_root),
+        query_mode=current_mode,
+        code_count=code_count,
+        doc_count=doc_count,
+    )
 
     # Set up signal handlers for graceful Ctrl+C handling
     # Note: We use a local flag and nested function because the processing task
@@ -1862,6 +1946,8 @@ async def _run_interactive_loop(
                         stripped_question,
                         query_router,
                         current_mode,
+                        code_count=code_count,
+                        doc_count=doc_count,
                     )
                     app_context.console.print(status_message)
                     initial_question = None
@@ -2058,6 +2144,27 @@ async def _run_interactive_loop(
                 if normalized_parallel_config.auto_split:
                     preview_subtasks = task_splitter.split_task(question_with_context)
                     preview_count = len(preview_subtasks)
+
+                    # Show mode mismatch suggestion if available
+                    if (
+                        not preview_subtasks
+                        and task_splitter.last_split_info
+                        and task_splitter.last_split_info.suggested_mode
+                    ):
+                        info = task_splitter.last_split_info
+                        app_context.console.print(
+                            Panel(
+                                style(
+                                    cs.UI_MODE_MISMATCH.format(
+                                        current_mode=current_mode.value,
+                                        suggested_mode=info.suggested_mode.value,
+                                    ),
+                                    cs.Color.YELLOW,
+                                ),
+                                title=cs.UI_MODE_MISMATCH_TITLE,
+                                border_style=cs.Color.YELLOW,
+                            )
+                        )
 
                 if normalized_parallel_config.no_parallel:
                     logger.info(
@@ -2278,6 +2385,8 @@ async def run_chat_loop(
     query_router: QueryRouter | None = None,
     current_mode: QueryMode | None = None,
     parallel_config: ParallelExecutionConfig | None = None,
+    code_count: int = 0,
+    doc_count: int = 0,
 ) -> None:
     await _run_interactive_loop(
         rag_agent,
@@ -2289,6 +2398,8 @@ async def run_chat_loop(
         query_router=query_router,
         current_mode=current_mode,
         parallel_config=parallel_config,
+        code_count=code_count,
+        doc_count=doc_count,
     )
 
 
@@ -2737,17 +2848,14 @@ def _validate_provider_config(role: cs.ModelRole, config: ModelConfig) -> None:
         raise ValueError(ex.CONFIG.format(role=role.value.title(), error=e)) from e
 
 
-def _determine_default_query_mode(
+def _get_content_availability(
     code_graph: QueryProtocol | None,
     doc_graph: QueryProtocol | None,
-) -> QueryMode:
-    """Determine default query mode based on repository content statistics.
+) -> tuple[int, int]:
+    """Return (code_count, doc_count) from graph statistics.
 
-    Priority:
-    1. If only document graph has data -> DOCUMENT_ONLY
-    2. If only code graph has data -> CODE_ONLY
-    3. If both have data -> BOTH_MERGED
-    4. If neither has data -> CODE_ONLY (fallback)
+    Code count: number of Function, Class, Method nodes.
+    Doc count: number of Document nodes.
     """
     code_count = 0
     doc_count = 0
@@ -2769,6 +2877,23 @@ def _determine_default_query_mode(
             doc_count = result[0].get("count", 0) if result else 0
         except Exception:
             pass
+
+    return code_count, doc_count
+
+
+def _determine_default_query_mode(
+    code_graph: QueryProtocol | None,
+    doc_graph: QueryProtocol | None,
+) -> QueryMode:
+    """Determine default query mode based on repository content statistics.
+
+    Priority:
+    1. If only document graph has data -> DOCUMENT_ONLY
+    2. If only code graph has data -> CODE_ONLY
+    3. If both have data -> BOTH_MERGED
+    4. If neither has data -> CODE_ONLY (fallback)
+    """
+    code_count, doc_count = _get_content_availability(code_graph, doc_graph)
 
     if code_count == 0 and doc_count > 0:
         logger.info(f"Auto-selecting DOCUMENT_ONLY mode (docs: {doc_count}, code: {code_count})")
@@ -2979,7 +3104,7 @@ async def main_unified_async(
         repo_path: Repository path
         batch_size: Batch size for graph operations
         with_docs: Enable document graph
-        query_mode: Initial query mode (defaults to CODE_ONLY)
+        query_mode: Initial query mode (None triggers auto-detection)
         doc_workspace: Document workspace identifier
         realtime_config: Optional realtime file watcher configuration
         _fallback_attempted: Internal flag to prevent infinite recursion on fallback
@@ -3010,6 +3135,12 @@ async def main_unified_async(
                     )
                 )
 
+                # Get content availability for status display and configuration
+                code_count, doc_count = _get_content_availability(code_graph, doc_graph)
+
+                # Display graph status panel
+                _display_graph_status(code_count, doc_count, app_context.console)
+
                 app_context.console.print(
                     Panel(
                         style(cs.MSG_CHAT_INSTRUCTIONS, cs.Color.YELLOW),
@@ -3032,6 +3163,8 @@ async def main_unified_async(
                     doc_graph_connected=True,
                     query_mode=query_router.current_mode if query_router else QueryMode.CODE_ONLY,
                     doc_workspace=doc_workspace,
+                    code_count=code_count,
+                    doc_count=doc_count,
                 )
                 app_context.console.print(table)
 
@@ -3054,6 +3187,8 @@ async def main_unified_async(
                         query_router=query_router,
                         current_mode=query_router.current_mode if query_router else QueryMode.CODE_ONLY,
                         parallel_config=parallel_config,
+                        code_count=code_count,
+                        doc_count=doc_count,
                     )
                 finally:
                     if watcher_manager:
@@ -3085,6 +3220,13 @@ async def main_unified_async(
         # Code graph only (existing behavior)
         async with connect_memgraph(batch_size) as ingestor:
             app_context.console.print(style(cs.MSG_CONNECTED_MEMGRAPH, cs.Color.GREEN))
+
+            # Get content availability for status display
+            code_count, doc_count = _get_content_availability(ingestor, None)
+
+            # Display graph status panel
+            _display_graph_status(code_count, doc_count, app_context.console)
+
             app_context.console.print(
                 Panel(
                     style(cs.MSG_CHAT_INSTRUCTIONS, cs.Color.YELLOW),
@@ -3103,6 +3245,7 @@ async def main_unified_async(
                 doc_graph_connected=False,
                 query_mode=query_router.current_mode if query_router else QueryMode.CODE_ONLY,
                 doc_workspace=doc_workspace,
+                code_count=code_count,
             )
             app_context.console.print(table)
 
@@ -3122,7 +3265,9 @@ async def main_unified_async(
                     project_root,
                     tool_names,
                     query_router=query_router,
+                    current_mode=query_router.current_mode if query_router else QueryMode.CODE_ONLY,
                     parallel_config=parallel_config,
+                    code_count=code_count,
                 )
             finally:
                 if watcher_manager:

@@ -835,3 +835,9 @@ MIGRATION_DRY_RUN_METHOD_EXPORTED = "[DRY RUN] Would set is_exported=false for {
 MIGRATION_METHOD_EXPORTED_DONE = "Set is_exported=false for {count} Method nodes"
 MIGRATION_DRY_RUN_ENTITY_LABELS = "[DRY RUN] Would rename labels to entity_labels for {count} JsonEntity nodes"
 MIGRATION_ENTITY_LABELS_DONE = "Renamed labels to entity_labels for {count} JsonEntity nodes"
+
+# (H) Task splitter logs
+NO_RELEVANT_FILES = (
+    "No relevant files found for query mode {mode}. "
+    "Consider switching query mode or indexing the repository."
+)

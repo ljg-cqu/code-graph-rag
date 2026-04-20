@@ -5,6 +5,7 @@ Handles splitting user requests into independent subtasks.
 
 import os
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TypedDict
 
@@ -13,6 +14,8 @@ from loguru import logger
 from codebase_rag.config import settings
 from codebase_rag.shared.query_router import QueryMode
 from codebase_rag.utils.path_utils import get_all_code_files
+
+from codebase_rag import logs as ls
 
 
 class Subtask(TypedDict, total=False):
@@ -29,15 +32,47 @@ class Subtask(TypedDict, total=False):
     target_entity: str
 
 
+@dataclass
+class SplitInfo:
+    """Metadata about the last split operation."""
+
+    subtask_count: int = 0
+    warning: str | None = None
+    suggested_mode: QueryMode | None = None
+    code_count: int = 0
+    doc_count: int = 0
+
+
 class TaskSplitter:
     """
     Splits user requests into independent parallelizable subtasks.
     Supports multiple splitting strategies: file-based, node-type, query-based, manual.
     """
 
-    def __init__(self, repo_path: str | None = None, query_mode: QueryMode = QueryMode.CODE_ONLY):
+    def __init__(
+        self,
+        repo_path: str | None = None,
+        query_mode: QueryMode = QueryMode.CODE_ONLY,
+        code_count: int = 0,
+        doc_count: int = 0,
+    ):
         self.repo_path = Path(repo_path or settings.TARGET_REPO_PATH).resolve()
         self.query_mode = query_mode
+        self.code_count = code_count
+        self.doc_count = doc_count
+        self.last_split_info: SplitInfo | None = None
+
+    def _suggest_query_mode(self) -> QueryMode | None:
+        """Suggest alternative mode when current mode has no files."""
+        has_code = self.code_count > 0
+        has_docs = self.doc_count > 0
+        if self.query_mode == QueryMode.CODE_ONLY and not has_code and has_docs:
+            return QueryMode.DOCUMENT_ONLY
+        if self.query_mode == QueryMode.DOCUMENT_ONLY and not has_docs and has_code:
+            return QueryMode.CODE_ONLY
+        if self.query_mode in (QueryMode.CODE_ONLY, QueryMode.DOCUMENT_ONLY) and has_code and has_docs:
+            return QueryMode.BOTH_MERGED
+        return None
 
     def split_task(
         self, prompt: str, strategy: str = "auto", max_subtasks: int | None = None
@@ -190,6 +225,9 @@ class TaskSplitter:
         2. File type hints inferred from prompt language/category keywords (NEW)
         3. All code files (existing fallback — no truncation)
         """
+        # Reset last_split_info at the start
+        self.last_split_info = None
+
         # Strategy 1: Extract explicit paths from prompt (unchanged from current)
         scope_paths = self._extract_scope_paths(prompt)
 
@@ -210,6 +248,7 @@ class TaskSplitter:
                 logger.info(
                     f"Scoped file split selected {len(scoped_files)} files from explicit paths"
                 )
+                self.last_split_info = SplitInfo(subtask_count=len(scoped_files))
                 return scoped_files
 
         # Strategy 2: Analyze prompt for file type hints (NEW)
@@ -230,6 +269,7 @@ class TaskSplitter:
                         f"File type hints yielded {len(hinted_files)} files "
                         f"(extensions: {extension_hints}, patterns: {name_pattern_hints})"
                     )
+                    self.last_split_info = SplitInfo(subtask_count=len(hinted_files))
                     return hinted_files
 
         # Strategy 3: Fallback to relevant files based on query mode
@@ -252,6 +292,17 @@ class TaskSplitter:
                 f"No relevant files found for query mode {self.query_mode}. "
                 f"Consider switching query mode or indexing the repository."
             )
+            # Populate last_split_info with suggestion
+            suggested = self._suggest_query_mode()
+            self.last_split_info = SplitInfo(
+                subtask_count=0,
+                warning=ls.NO_RELEVANT_FILES.format(mode=self.query_mode),
+                suggested_mode=suggested,
+                code_count=self.code_count,
+                doc_count=self.doc_count,
+            )
+        else:
+            self.last_split_info = SplitInfo(subtask_count=len(relevant_files))
 
         logger.info(
             f"Using {len(relevant_files)} relevant files for {self.query_mode} "
