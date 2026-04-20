@@ -809,6 +809,11 @@ class AppConfig(BaseSettings):
     # When True, codebase stats are computed once per agent initialization and included in the system prompt
     CGR_PARALLEL_CODEBASE_CONTEXT: bool = True
 
+    # Document Semantic Search Fallback
+    # When True, DOCUMENT_ONLY mode conceptual queries automatically route to semantic search
+    # Set to False to disable fallback (queries passed directly to agent without document context)
+    CGR_DOCUMENT_SEMANTIC_FALLBACK_ENABLED: bool = True
+
     # Worker LLM Configuration for Sub-Agents
     CGR_WORKER_LLMS: str | list[str | dict] = Field(default_factory=list)
     CGR_WORKER_LLM_ASSIGNMENT_STRATEGY: Literal["round-robin"] = "round-robin"

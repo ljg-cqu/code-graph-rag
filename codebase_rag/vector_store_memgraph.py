@@ -148,8 +148,6 @@ class MemgraphBackend(VectorBackend):
         Index is created for each embeddable label (Function, Method, etc.)
         Automatically recreates indexes if dimension mismatch is detected.
         """
-        logger.info(ls.MG_VECTOR_INIT.format(index=settings.MEMGRAPH_VECTOR_INDEX_NAME))
-        effective_dim = settings.get_effective_vector_dim()
         capabilities = self.query_generator.capabilities
 
         # Get existing index info upfront
@@ -158,6 +156,13 @@ class MemgraphBackend(VectorBackend):
             existing_indexes = self._execute_query("SHOW VECTOR INDEX INFO;")
         except Exception:
             pass  # Ignore if command fails (older Memgraph versions without vector support)
+
+        if self.is_document:
+            self._initialize_document_index(existing_indexes, capabilities)
+            return
+
+        logger.info(ls.MG_VECTOR_INIT.format(index=settings.MEMGRAPH_VECTOR_INDEX_NAME))
+        effective_dim = settings.get_effective_vector_dim()
 
         for label in self.LABELS_TO_INDEX:
             index_name = f"{label.lower()}_embedding_index"
@@ -240,6 +245,85 @@ class MemgraphBackend(VectorBackend):
                 logger.info(ls.MG_VECTOR_INDEX_EXISTS.format(index=index_name))
 
         # Check index info
+        self._check_index_info()
+
+    def _initialize_document_index(
+        self,
+        existing_indexes: list[dict[str, str | int | None]],
+        capabilities,
+    ) -> None:
+        """Create single vector index for Chunk nodes (document mode)."""
+        index_name = settings.DOC_MEMGRAPH_VECTOR_INDEX_NAME
+        effective_dim = settings.get_effective_vector_dim("document")
+
+        existing_index = _find_vector_index(existing_indexes, index_name)
+        needs_recreate = False
+
+        if existing_index:
+            current_dim = _read_vector_index_dimension(existing_index)
+            if current_dim != effective_dim:
+                logger.warning(
+                    f"Vector index {index_name} has dimension {current_dim}, but current embedding model "
+                    f"requires {effective_dim}. Recreating index and clearing old incompatible embeddings..."
+                )
+                needs_recreate = True
+
+        if not existing_index or needs_recreate:
+            try:
+                if capabilities.supports_vector_index:
+                    if needs_recreate:
+                        try:
+                            self._execute_query(
+                                "MATCH (n:Chunk) SET n.embedding = NULL, n.embedding_model = NULL, n.embedding_version = NULL"
+                            )
+                            logger.debug("Cleared old embeddings for Chunk nodes")
+                        except Exception as e:
+                            logger.warning(f"Failed to clear old embeddings for Chunk nodes: {e}")
+                        try:
+                            self._execute_query(f"DROP VECTOR INDEX {index_name};")
+                        except Exception as e:
+                            logger.debug(f"Failed to drop index {index_name}: {e}")
+
+                    cypher, params = (
+                        self.query_generator.generate_vector_index_creation_query(
+                            index_name=index_name,
+                            node_label="Chunk",
+                            vector_property="embedding",
+                            vector_dim=effective_dim,
+                            metric=settings.MEMGRAPH_VECTOR_METRIC,
+                            capacity=settings.DOC_MEMGRAPH_VECTOR_CAPACITY,
+                        )
+                    )
+                    self._execute_query(cypher, params)
+                else:
+                    logger.debug(
+                        "Vector index not supported for Chunk nodes, skipping index creation"
+                    )
+                    return
+
+                logger.info(
+                    ls.MG_VECTOR_INDEX_CREATED.format(
+                        index=index_name,
+                        label="Chunk",
+                        dim=effective_dim,
+                        capacity=settings.DOC_MEMGRAPH_VECTOR_CAPACITY,
+                    )
+                )
+            except Exception as e:
+                error_str = str(e).lower()
+                if "already exists" in error_str or "duplicate" in error_str:
+                    logger.info(ls.MG_VECTOR_INDEX_EXISTS.format(index=index_name))
+                else:
+                    logger.error(
+                        ls.MG_VECTOR_INDEX_FAILED.format(
+                            index=index_name,
+                            error=e,
+                        )
+                    )
+                    raise
+        else:
+            logger.info(ls.MG_VECTOR_INDEX_EXISTS.format(index=index_name))
+
         self._check_index_info()
 
     def _check_index_info(self) -> None:
@@ -421,6 +505,16 @@ class MemgraphBackend(VectorBackend):
             )
             return all_results
 
+        if self.is_document:
+            workspace = filters.get("workspace") if filters else None
+            return self._search_documents(
+                query_embedding=query_embedding,
+                top_k=effective_top_k,
+                workspace=workspace,
+                include_context=include_context,
+                max_context_depth=max_context_depth,
+            )
+
         # Search across all label indexes
         for label in self.LABELS_TO_INDEX:
             try:
@@ -579,6 +673,122 @@ class MemgraphBackend(VectorBackend):
             all_results.sort(key=lambda x: x[1], reverse=True)
             return all_results[:effective_top_k]
 
+    def _search_documents(
+        self,
+        query_embedding: list[float],
+        top_k: int,
+        workspace: str | None,
+        include_context: bool,
+        max_context_depth: int,
+    ) -> list[tuple[int, float]] | list[ResultRow]:
+        """Search Chunk nodes using doc_embeddings index with workspace filter."""
+        index_name = settings.DOC_MEMGRAPH_VECTOR_INDEX_NAME
+        capabilities = self.query_generator.capabilities
+        all_results: list[tuple[int, float]] | list[ResultRow] = []
+
+        try:
+            if capabilities.supports_vector_search_procedure:
+                if include_context:
+                    cypher = """
+                    WITH $embedding AS query_vec, $top_k AS top_k, $workspace AS workspace, $max_depth AS max_depth
+                    CALL vector_search.search($index_name, top_k * 2, query_vec)
+                    YIELD node AS n, similarity AS sim
+                    WITH n, sim
+                    WHERE ($workspace IS NULL OR n.workspace = $workspace)
+                    WITH n, sim, COALESCE(n.pagerank_score, 0.1) AS pr_score
+                    ORDER BY (sim * 0.7) + (pr_score * 0.3) DESC
+                    LIMIT $top_k
+                    RETURN
+                        id(n) AS node_id,
+                        n.name AS name,
+                        n.qualified_name AS qualified_name,
+                        n.path AS file_path,
+                        n.content AS docstring,
+                        n.start_line AS start_line,
+                        n.end_line AS end_line,
+                        sim AS similarity,
+                        pr_score AS pagerank_score
+                    """
+                else:
+                    cypher = """
+                    WITH $embedding AS query_vec, $top_k AS top_k, $workspace AS workspace
+                    CALL vector_search.search($index_name, top_k * 2, query_vec)
+                    YIELD node AS n, similarity AS sim
+                    WITH n, sim
+                    WHERE ($workspace IS NULL OR n.workspace = $workspace)
+                    RETURN id(n) AS node_id, sim AS similarity
+                    ORDER BY sim DESC
+                    LIMIT $top_k
+                    """
+
+                params = {
+                    "index_name": index_name,
+                    "embedding": query_embedding,
+                    "top_k": top_k,
+                    "workspace": workspace,
+                    "max_depth": max_context_depth,
+                }
+                results = self._execute_query(cypher, params)
+            else:
+                additional_filters = ""
+                if workspace:
+                    additional_filters = f"n.workspace = '{workspace}'"
+
+                if include_context:
+                    cypher = f"""
+                    MATCH (n:Chunk)
+                    {f"WHERE {additional_filters}" if additional_filters else ""}
+                    WITH n, {capabilities.vector_function_syntax}(n.embedding, $query_vector) AS sim
+                    WITH n, sim, COALESCE(n.pagerank_score, 0.1) AS pr_score
+                    ORDER BY (sim * 0.7) + (pr_score * 0.3) DESC
+                    LIMIT $top_k
+                    RETURN
+                        id(n) AS node_id,
+                        n.name AS name,
+                        n.qualified_name AS qualified_name,
+                        n.path AS file_path,
+                        n.content AS docstring,
+                        n.start_line AS start_line,
+                        n.end_line AS end_line,
+                        sim AS similarity,
+                        pr_score AS pagerank_score
+                    """
+                else:
+                    cypher = f"""
+                    MATCH (n:Chunk)
+                    {f"WHERE {additional_filters}" if additional_filters else ""}
+                    WITH n, {capabilities.vector_function_syntax}(n.embedding, $query_vector) AS sim
+                    ORDER BY sim DESC
+                    LIMIT $top_k
+                    RETURN id(n) AS node_id, sim AS similarity
+                    """
+
+                params = {
+                    "query_vector": query_embedding,
+                    "top_k": top_k,
+                }
+                results = self._execute_query(cypher, params)
+
+            for res in results:
+                node_id = int(res["node_id"])
+                if include_context:
+                    all_results.append(res)
+                else:
+                    all_results.append((node_id, float(res["similarity"])))
+
+        except Exception as e:
+            logger.debug(f"Document search failed: {e}")
+
+        if include_context:
+            all_results.sort(
+                key=lambda x: (x["similarity"] * 0.7) + (x["pagerank_score"] * 0.3),
+                reverse=True,
+            )
+            return all_results[:top_k]
+        else:
+            all_results.sort(key=lambda x: x[1], reverse=True)
+            return all_results[:top_k]
+
     def delete_batch(self, node_ids: Sequence[int]) -> int:
         """Remove embeddings from nodes (set to NULL)."""
         if not node_ids:
@@ -690,6 +900,70 @@ class MemgraphBackend(VectorBackend):
             clear_existing_embeddings: If True, removes all existing embedding properties from nodes before recreating indexes.
                 This is required when changing dimensions to avoid index creation failures from incompatible old embeddings.
         """
+        if self.is_document:
+            if new_dimension is None:
+                new_dimension = settings.get_effective_vector_dim("document")
+            logger.info(f"Recreating document vector index with dimension {new_dimension}...")
+            capabilities = self.query_generator.capabilities
+            index_name = settings.DOC_MEMGRAPH_VECTOR_INDEX_NAME
+
+            if clear_existing_embeddings:
+                logger.info("Clearing document embedding properties from Chunk nodes...")
+                try:
+                    self._execute_query(
+                        "MATCH (n:Chunk) SET n.embedding = NULL, n.embedding_model = NULL, n.embedding_version = NULL"
+                    )
+                    logger.debug("Cleared embeddings for Chunk nodes")
+                except Exception as e:
+                    logger.warning(f"Failed to clear embeddings for Chunk nodes: {e}")
+
+            try:
+                self._execute_query(f"DROP VECTOR INDEX {index_name};")
+                logger.debug(f"Dropped index {index_name}")
+            except Exception as e:
+                logger.debug(f"Could not drop index {index_name}: {e}")
+
+            try:
+                if capabilities.supports_vector_index:
+                    cypher, params = (
+                        self.query_generator.generate_vector_index_creation_query(
+                            index_name=index_name,
+                            node_label="Chunk",
+                            vector_property="embedding",
+                            vector_dim=new_dimension,
+                            metric=settings.MEMGRAPH_VECTOR_METRIC,
+                            capacity=settings.DOC_MEMGRAPH_VECTOR_CAPACITY,
+                        )
+                    )
+                    self._execute_query(cypher, params)
+                else:
+                    logger.debug(
+                        "Vector index not supported for Chunk nodes, skipping index creation"
+                    )
+                    return
+
+                logger.info(
+                    ls.MG_VECTOR_INDEX_CREATED.format(
+                        index=index_name,
+                        label="Chunk",
+                        dim=new_dimension,
+                        capacity=settings.DOC_MEMGRAPH_VECTOR_CAPACITY,
+                    )
+                )
+            except Exception as e:
+                logger.error(
+                    ls.MG_VECTOR_INDEX_FAILED.format(
+                        index=index_name,
+                        error=e,
+                    )
+                )
+                raise
+
+            logger.info(
+                f"Document vector index recreated successfully with dimension {new_dimension}"
+            )
+            return
+
         if new_dimension is None:
             new_dimension = settings.get_effective_vector_dim()
         logger.info(f"Recreating vector indexes with dimension {new_dimension}...")

@@ -1,6 +1,7 @@
 import importlib
 import subprocess
 import sys
+import threading
 import warnings
 from copy import deepcopy
 from pathlib import Path
@@ -13,6 +14,11 @@ from . import exceptions as ex
 from . import logs as ls
 from .language_spec import LANGUAGE_SPECS, LanguageSpec
 from .types_defs import LanguageImport, LanguageLoader, LanguageQueries
+
+# Module-level cache (initialized once per process)
+_cached_parsers: dict[cs.SupportedLanguage, Parser] | None = None
+_cached_queries: dict[cs.SupportedLanguage, LanguageQueries] | None = None
+_cache_lock = threading.Lock()
 
 
 def _try_load_from_submodule(lang_name: cs.SupportedLanguage) -> LanguageLoader:
@@ -346,20 +352,50 @@ def load_queries_for_language(lang: cs.SupportedLanguage) -> LanguageQueries | N
         return None
 
 
-def load_parsers() -> tuple[
-    dict[cs.SupportedLanguage, Parser], dict[cs.SupportedLanguage, LanguageQueries]
-]:
-    parsers: dict[cs.SupportedLanguage, Parser] = {}
-    queries: dict[cs.SupportedLanguage, LanguageQueries] = {}
-    available_languages: list[cs.SupportedLanguage] = []
+def load_parsers(
+    force_reload: bool = False,
+) -> tuple[dict[cs.SupportedLanguage, Parser], dict[cs.SupportedLanguage, LanguageQueries]]:
+    """Load parsers with caching for performance.
 
-    for lang_key, lang_config in deepcopy(LANGUAGE_SPECS).items():
-        lang_name = cs.SupportedLanguage(lang_key)
-        if _process_language(lang_name, lang_config, parsers, queries):
-            available_languages.append(lang_name)
+    Args:
+        force_reload: If True, bypass cache and reload all parsers
 
-    if not available_languages:
-        raise RuntimeError(ex.NO_LANGUAGES)
+    Returns:
+        Tuple of (parsers dict, queries dict)
+    """
+    global _cached_parsers, _cached_queries
 
-    logger.info(ls.INITIALIZED_PARSERS.format(languages=", ".join(available_languages)))
-    return parsers, queries
+    with _cache_lock:
+        if not force_reload:
+            if _cached_parsers is not None and _cached_queries is not None:
+                logger.debug("Returning cached parsers")
+                return _cached_parsers, _cached_queries
+
+        # Load fresh instances
+        parsers: dict[cs.SupportedLanguage, Parser] = {}
+        queries: dict[cs.SupportedLanguage, LanguageQueries] = {}
+        available_languages: list[cs.SupportedLanguage] = []
+
+        for lang_key, lang_config in deepcopy(LANGUAGE_SPECS).items():
+            lang_name = cs.SupportedLanguage(lang_key)
+            if _process_language(lang_name, lang_config, parsers, queries):
+                available_languages.append(lang_name)
+
+        if not available_languages:
+            raise RuntimeError(ex.NO_LANGUAGES)
+
+        logger.info(
+            ls.INITIALIZED_PARSERS.format(languages=", ".join(available_languages))
+        )
+
+        _cached_parsers = parsers
+        _cached_queries = queries
+        return parsers, queries
+
+
+def clear_parser_cache() -> None:
+    """Clear the parser cache. Useful for testing or forced reload."""
+    global _cached_parsers, _cached_queries
+    with _cache_lock:
+        _cached_parsers = None
+        _cached_queries = None

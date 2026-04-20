@@ -59,6 +59,7 @@ from .services import QueryProtocol
 from .services.graph_service import MemgraphIngestor
 from .services.llm import CypherGenerator, create_rag_orchestrator
 from .shared.query_router import QueryMode, QueryRouter
+from .tools import get_tools_for_mode
 from .tools.code_retrieval import CodeRetriever, create_code_retrieval_tool
 from .tools.codebase_query import create_query_tool
 from .tools.directory_lister import DirectoryLister, create_directory_lister_tool
@@ -202,6 +203,27 @@ def _context_to_message_history(context: list[dict[str, Any]]) -> list[ModelMess
         else:
             message_history.append(ModelRequest(parts=[UserPromptPart(content)]))
     return message_history
+
+
+def _build_document_context(response: object) -> str:
+    """Format document query response as context for agent."""
+    from codebase_rag.shared.query_router import QueryResponse
+
+    if not isinstance(response, QueryResponse):
+        return ""
+
+    context_parts: list[str] = []
+    for i, source in enumerate(response.sources, 1):
+        context_parts.append(
+            f"\n### Document {i}: {source.qualified_name or source.path}"
+        )
+        if source.line_range:
+            context_parts.append(
+                f"Lines: {source.line_range[0]}-{source.line_range[1]}"
+            )
+
+    context_parts.append(f"\n\n{response.answer}")
+    return "\n".join(context_parts)
 
 
 # Yolo mode warning banner
@@ -2250,21 +2272,67 @@ async def _run_interactive_loop(
                         f"Parallel execution skipped because preview split exceeded queue limit ({preview_count} > {settings.CGR_PARALLEL_MAX_QUEUE_SIZE})"
                     )
                 else:
-                    (
-                        eligible,
-                        task_type,
-                        confidence,
-                    ) = await concurrency_classifier.is_eligible(
+                    eligibility_result = await concurrency_classifier.is_eligible(
                         question_with_context,
                         subtask_count=preview_count,
                         has_write_operations=has_write_operations,
                         query_mode=current_mode,
                     )
+                    eligible = eligibility_result.eligible
+                    task_type = eligibility_result.task_type
+                    confidence = eligibility_result.confidence
 
                     if not eligible:
                         logger.info(
                             f"Parallel execution skipped: task_type={task_type}, confidence={confidence:.2f}"
                         )
+
+                        # Handle semantic search fallback for document conceptual queries
+                        if (
+                            task_type == "document_conceptual_query"
+                            and eligibility_result.fallback_action == "semantic_search"
+                            and query_router is not None
+                            and settings.CGR_DOCUMENT_SEMANTIC_FALLBACK_ENABLED
+                        ):
+                            # Check if document graph is available
+                            if query_router.doc_graph is None:
+                                logger.warning(
+                                    "Document graph not available, skipping semantic search fallback"
+                                )
+                            else:
+                                logger.info(
+                                    "Routing document conceptual query to semantic search"
+                                )
+                                try:
+                                    from codebase_rag.shared.query_router import (
+                                        QueryRequest,
+                                    )
+
+                                    request = QueryRequest(
+                                        question=question_with_context,
+                                        mode=QueryMode.DOCUMENT_ONLY,
+                                        top_k=10,
+                                    )
+                                    response = query_router.query(request)
+
+                                    if response.sources:
+                                        doc_context = _build_document_context(response)
+                                        question_with_context = (
+                                            f"{question_with_context}\n\n---\n"
+                                            f"**Retrieved Documents:**\n{doc_context}"
+                                        )
+                                        logger.info(
+                                            f"Added {len(response.sources)} document sources to context"
+                                        )
+                                    else:
+                                        logger.warning(
+                                            "Semantic search returned no results for document conceptual query"
+                                        )
+                                except Exception as e:
+                                    logger.error(
+                                        f"Semantic search fallback failed: {e}"
+                                    )
+
                         # RECORD: LLM-driven rejection for calibration
                         # Only record non-deterministic rejection types (LLM decisions).
                         # Deterministic rejections (write, safety rules) are always correct
@@ -3028,16 +3096,15 @@ def _initialize_services_and_agent(
         index_docs_tool = create_index_documents_tool()
         graph_query_tool = create_graph_query_tool(query_router)
 
-        tools.extend(
-            [
-                query_document_graph_tool,
-                query_both_graphs_tool,
-                validate_code_tool,
-                validate_doc_tool,
-                index_docs_tool,
-                graph_query_tool,
-            ]
-        )
+        doc_tools = [
+            query_document_graph_tool,
+            query_both_graphs_tool,
+            validate_code_tool,
+            validate_doc_tool,
+            index_docs_tool,
+            graph_query_tool,
+        ]
+        tools.extend(get_tools_for_mode(query_mode, doc_tools))
 
     confirmation_tool_names = ConfirmationToolNames(
         replace_code=file_editor_tool.name,

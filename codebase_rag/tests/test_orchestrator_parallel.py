@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from codebase_rag.orchestrator.concurrency_eligibility_classifier import (
     ConcurrencyEligibilityClassifier,
+    EligibilityResult,
 )
 from codebase_rag.orchestrator.dynamic_concurrency_controller import (
     DynamicConcurrencyController,
@@ -15,6 +16,7 @@ from codebase_rag.orchestrator.dynamic_concurrency_controller import (
 from codebase_rag.orchestrator.result_aggregator import ResultAggregator
 from codebase_rag.orchestrator.subagent_orchestrator import SubAgentOrchestrator
 from codebase_rag.orchestrator.task_splitter import TaskSplitter
+from codebase_rag.shared.query_router import QueryMode
 
 
 class TestConcurrencyEligibilityClassifier:
@@ -97,6 +99,51 @@ class TestConcurrencyEligibilityClassifier:
         assert eligible is False
         assert task_type == "user_requested_sequential"
         assert confidence == 0.0
+
+    def test_document_conceptual_query_returns_semantic_search_fallback(self):
+        classifier = ConcurrencyEligibilityClassifier()
+        result = asyncio.run(
+            classifier.is_eligible(
+                prompt="Why is categorical thinking important?",
+                has_write_operations=False,
+                query_mode=QueryMode.DOCUMENT_ONLY,
+            )
+        )
+        assert isinstance(result, EligibilityResult)
+        assert result.eligible is False
+        assert result.task_type == "document_conceptual_query"
+        assert result.confidence == 0.0
+        assert result.fallback_action == "semantic_search"
+
+    def test_document_conceptual_query_code_mode_not_blocked(self):
+        """Conceptual questions in CODE_ONLY mode should not be blocked."""
+        classifier = ConcurrencyEligibilityClassifier()
+        classifier._get_llm_eligibility = AsyncMock(
+            return_value=(0.8, "code_search")
+        )
+        result = asyncio.run(
+            classifier.is_eligible(
+                prompt="Why is categorical thinking important?",
+                has_write_operations=False,
+                query_mode=QueryMode.CODE_ONLY,
+            )
+        )
+        # Should not be blocked as document_conceptual_query
+        assert result.task_type != "document_conceptual_query"
+
+    def test_document_specific_query_not_conceptual(self):
+        classifier = ConcurrencyEligibilityClassifier()
+        eligible, task_type, confidence = asyncio.run(
+            classifier.is_eligible(
+                prompt="What does the auth module do in main.py?",
+                has_write_operations=False,
+                query_mode=QueryMode.DOCUMENT_ONLY,
+            )
+        )
+        assert eligible is True or task_type in (
+            "llm_rejected",
+            "safety_rule_blocked",
+        )
 
 
 class TestDynamicConcurrencyController:

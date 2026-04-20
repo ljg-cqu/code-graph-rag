@@ -531,13 +531,25 @@ class DocumentGraphUpdater:
                     logger.warning(f"Could not close embedding provider cleanly: {e}")
 
     def _ensure_vector_index(self, ingestor: MemgraphIngestor) -> None:
-        """Create vector index for Chunk embeddings.
+        """Ensure vector index for Chunk embeddings exists.
+
+        Uses the shared document vector backend for index creation.
+        This provides consistent index management with clear separation of concerns:
+        - VectorBackend handles all vector index creation/management
+        - DocumentGraphUpdater handles graph structure only
 
         Raises:
             ExtractionException: If embedding dimension is invalid (0 or negative).
         """
-        dimension = settings.get_effective_vector_dim("document")
-        ensure_document_vector_index(ingestor, dimension)
+        from ..vector_backend import get_shared_backend_for_documents
+
+        # Get the shared document backend - this will initialize and create the index
+        # if it doesn't exist. The backend manages all vector index creation.
+        backend = get_shared_backend_for_documents()
+        logger.debug(
+            f"Document vector backend initialized for index management "
+            f"(backend type: {type(backend).__name__})"
+        )
 
     def _ensure_document_indexes(self, ingestor: MemgraphIngestor) -> None:
         """Create indexes for document graph queries.

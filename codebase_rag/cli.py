@@ -13,7 +13,6 @@ from . import cli_help as ch
 from . import constants as cs
 from . import logs as ls
 from .config import load_cgrignore_patterns, settings
-from .document.document_updater import ensure_document_vector_index
 from .graph_updater import GraphUpdater
 from .json_ingestion import recreate_json_vector_index
 from .main import (
@@ -93,14 +92,11 @@ def vector_recreate_indexes(
 
     if docs:
         _info("Recreating vector indexes for document graph...")
-        effective_dim = dimension or settings.get_effective_vector_dim("document")
-        with connect_doc_memgraph(settings.DOC_MEMGRAPH_BATCH_SIZE) as doc_ingestor:
-            ensure_document_vector_index(
-                doc_ingestor,
-                effective_dim,
-                clear_existing_embeddings=clear_embeddings,
-                force_recreate=True,
-            )
+        doc_backend = MemgraphBackend(is_document=True)
+        doc_backend.recreate_vector_indexes(
+            new_dimension=dimension, clear_existing_embeddings=clear_embeddings
+        )
+        doc_backend.close()
 
     if json:
         _info("Recreating vector indexes for JSON graph...")

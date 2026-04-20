@@ -96,12 +96,15 @@ def create_query_both_graphs_tool(
 
     async def query_both_graphs(
         natural_language_query: str,
+        mode: str = "auto",
         top_k: int = 5,
     ) -> str:
         """Query both code and document graphs with merged results.
 
         Args:
             natural_language_query: Question spanning code and docs
+            mode: Query mode - "auto" (use current mode), "code_only",
+                  "document_only", or "both_merged"
             top_k: Maximum results per graph
 
         Returns:
@@ -116,9 +119,19 @@ def create_query_both_graphs_tool(
             if router is None:
                 return f"Graph connections not available for: {natural_language_query}"
 
+        # Resolve mode parameter
+        if mode == "auto":
+            resolved_mode = router.current_mode
+        else:
+            try:
+                resolved_mode = QueryMode(mode)
+            except ValueError:
+                logger.warning(f"Invalid mode '{mode}', defaulting to BOTH_MERGED")
+                resolved_mode = QueryMode.BOTH_MERGED
+
         request = QueryRequest(
             question=natural_language_query,
-            mode=QueryMode.BOTH_MERGED,
+            mode=resolved_mode,
             top_k=top_k,
         )
 

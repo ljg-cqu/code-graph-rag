@@ -6,6 +6,8 @@ Determines if a task can be safely parallelized without explicit user request.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
@@ -17,6 +19,20 @@ from codebase_rag.config import settings
 from codebase_rag.providers import get_provider_from_config
 from codebase_rag.shared.query_router import QueryMode
 from codebase_rag.utils.path_utils import get_all_code_files
+
+
+@dataclass
+class EligibilityResult:
+    """Result of eligibility classification with fallback suggestion."""
+
+    eligible: bool
+    task_type: str
+    confidence: float
+    fallback_action: str | None = None
+
+    def __iter__(self) -> Iterator[bool | str | float]:
+        """Support backward-compatible 3-tuple unpacking."""
+        return iter((self.eligible, self.task_type, self.confidence))
 
 
 class ConcurrencyEligibilityClassifier:
@@ -331,7 +347,7 @@ Safety Rules:
         subtask_count: int | None = None,
         has_write_operations: bool = False,
         query_mode: QueryMode = QueryMode.CODE_ONLY,
-    ) -> tuple[bool, str, float]:
+    ) -> EligibilityResult:
         """
         Determine if a task is eligible for automatic parallel execution (priority order enforced).
 
@@ -342,17 +358,17 @@ Safety Rules:
             query_mode: Current query mode (affects eligibility for document queries)
 
         Returns:
-            Tuple of (eligible: bool, task_type: str, confidence: float)
+            EligibilityResult with eligible, task_type, confidence, and fallback_action
         """
         if not self.enabled:
-            return False, "concurrency_disabled", 0.0
+            return EligibilityResult(False, "concurrency_disabled", 0.0)
 
         # 1. HIGHEST PRIORITY: Explicit write operation check
         if has_write_operations:
             logger.debug(
                 "Task not eligible for parallel execution: contains write operations"
             )
-            return False, "write_operation", 0.0
+            return EligibilityResult(False, "write_operation", 0.0)
 
         # DOCUMENT_ONLY mode for conceptual questions should NOT use parallel file analysis
         if query_mode == QueryMode.DOCUMENT_ONLY:
@@ -360,9 +376,14 @@ Safety Rules:
             if self._is_conceptual_question(prompt):
                 logger.info(
                     "Task not eligible for parallel execution: DOCUMENT_ONLY mode "
-                    "with conceptual question - use semantic search instead"
+                    "with conceptual question - routing to semantic search"
                 )
-                return False, "document_conceptual_query", 0.0
+                return EligibilityResult(
+                    False,
+                    "document_conceptual_query",
+                    0.0,
+                    fallback_action="semantic_search",
+                )
 
         # 2. Check for explicit user overrides
         lower_prompt = prompt.lower()
@@ -372,7 +393,7 @@ Safety Rules:
                 logger.debug(
                     "Task not eligible for parallel execution: explicit user request for sequential"
                 )
-                return False, "user_requested_sequential", 0.0
+                return EligibilityResult(False, "user_requested_sequential", 0.0)
 
         explicitly_parallel = any(
             re.search(pattern, lower_prompt, flags=re.IGNORECASE)
@@ -383,18 +404,18 @@ Safety Rules:
         for pattern, confidence in self.SAFETY_NON_ELIGIBLE_PATTERNS:
             if re.search(pattern, lower_prompt, flags=re.IGNORECASE):
                 logger.debug(f"Task matches safety non-eligible pattern '{pattern}'")
-                return False, "safety_rule_blocked", confidence
+                return EligibilityResult(False, "safety_rule_blocked", confidence)
 
         # 4. Check minimum subtask count if provided
         if subtask_count is not None and subtask_count < self.min_subtask_count:
             logger.debug(
                 f"Task not eligible for parallel execution: only {subtask_count} subtasks (min {self.min_subtask_count})"
             )
-            return False, "insufficient_subtasks", 0.0
+            return EligibilityResult(False, "insufficient_subtasks", 0.0)
 
         if explicitly_parallel:
             logger.info("Task eligible for parallel execution: explicit user request")
-            return True, "user_requested_parallel", 1.0
+            return EligibilityResult(True, "user_requested_parallel", 1.0)
 
         # 5. LLM intent analysis (primary eligibility detection)
         confidence, task_type = await self._get_llm_eligibility(prompt)
@@ -408,12 +429,12 @@ Safety Rules:
             logger.info(
                 f"Task eligible for parallel execution: type={task_type}, confidence={confidence:.2f}, effective_threshold={effective_threshold:.2f}"
             )
-            return True, task_type, confidence
+            return EligibilityResult(True, task_type, confidence)
 
         logger.debug(
             f"Task not eligible for parallel execution: LLM confidence {confidence:.2f} below effective threshold {effective_threshold:.2f} (base: {self.threshold:.2f})"
         )
-        return False, "llm_rejected", confidence
+        return EligibilityResult(False, "llm_rejected", confidence)
 
     def record_execution_result(self, task_type: str, success: bool) -> None:
         """Record execution result for dynamic threshold calibration."""

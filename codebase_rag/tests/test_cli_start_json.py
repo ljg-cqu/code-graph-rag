@@ -43,13 +43,11 @@ def test_start_forwards_json_exclude_to_indexing(tmp_path: Path) -> None:
 
 def test_vector_recreate_indexes_uses_doc_and_json_helpers() -> None:
     with (
-        patch("codebase_rag.cli.ensure_document_vector_index") as mock_doc_helper,
+        patch("codebase_rag.cli.MemgraphBackend") as mock_backend_class,
         patch("codebase_rag.cli.recreate_json_vector_index") as mock_json_helper,
-        patch("codebase_rag.cli.connect_doc_memgraph") as mock_connect_doc,
     ):
-        mock_ingestor = MagicMock()
-        mock_connect_doc.return_value.__enter__.return_value = mock_ingestor
-        mock_connect_doc.return_value.__exit__.return_value = False
+        mock_doc_backend = MagicMock()
+        mock_backend_class.return_value = mock_doc_backend
 
         result = runner.invoke(
             app,
@@ -63,6 +61,8 @@ def test_vector_recreate_indexes_uses_doc_and_json_helpers() -> None:
         )
 
     assert result.exit_code == 0, result.output
-    mock_doc_helper.assert_called_once()
-    assert mock_doc_helper.call_args.args[0] is mock_ingestor
+    # Verify document backend was created with is_document=True
+    mock_backend_class.assert_called_once_with(is_document=True)
+    mock_doc_backend.recreate_vector_indexes.assert_called_once()
+    mock_doc_backend.close.assert_called_once()
     mock_json_helper.assert_called_once()

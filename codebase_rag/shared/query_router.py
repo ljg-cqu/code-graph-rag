@@ -403,6 +403,15 @@ class QueryRouter:
 
         CRITICAL: Document graph must NOT be touched.
         """
+        if self.current_mode == QueryMode.DOCUMENT_ONLY:
+            logger.warning("Code query called in DOCUMENT_ONLY mode, returning empty")
+            return QueryResponse(
+                answer="Code queries are disabled in DOCUMENT_ONLY mode.",
+                sources=[],
+                mode=request.mode,
+                warnings=["Code queries disabled in DOCUMENT_ONLY mode"],
+            )
+
         if not self.code_graph:
             return QueryResponse(
                 answer="Code graph is not available.",
@@ -654,6 +663,15 @@ class QueryRouter:
 
         CRITICAL: Code graph must NOT be touched.
         """
+        if self.current_mode == QueryMode.CODE_ONLY:
+            logger.warning("Document query called in CODE_ONLY mode, returning empty")
+            return QueryResponse(
+                answer="Document queries are disabled in CODE_ONLY mode.",
+                sources=[],
+                mode=request.mode,
+                warnings=["Document queries disabled in CODE_ONLY mode"],
+            )
+
         if not self.doc_graph:
             return QueryResponse(
                 answer="Document graph is not available.",
