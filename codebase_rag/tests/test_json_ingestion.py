@@ -196,7 +196,8 @@ def test_load_json_files_directory_skips_artifacts_and_non_ingestion_json() -> N
         assert files[0][0] == valid_path
 
 
-def test_load_json_files_single_non_ingestion_file_is_loaded_for_validation() -> None:
+def test_load_json_files_metadata_only_file_is_skipped_with_guidance() -> None:
+    """Verify metadata-only JSON files are skipped with helpful guidance message."""
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".json", delete=False
     ) as json_file:
@@ -205,9 +206,40 @@ def test_load_json_files_single_non_ingestion_file_is_loaded_for_validation() ->
 
     try:
         files = load_json_files(str(temp_path))
-        assert len(files) == 1
-        assert files[0][0] == temp_path
-        assert files[0][1] == {"metadata": {"workspace": "default"}}
+        # Metadata-only files should be skipped, not loaded
+        assert len(files) == 0
+    finally:
+        temp_path.unlink()
+
+
+def test_load_json_files_schema_definition_is_skipped() -> None:
+    """Verify JSON Schema files are skipped with guidance message."""
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", delete=False
+    ) as json_file:
+        json.dump({"$schema": "http://json-schema.org/draft-07/schema#", "properties": {}}, json_file)
+        temp_path = Path(json_file.name)
+
+    try:
+        files = load_json_files(str(temp_path))
+        # Schema definition files should be skipped
+        assert len(files) == 0
+    finally:
+        temp_path.unlink()
+
+
+def test_load_json_files_config_file_is_skipped() -> None:
+    """Verify configuration-like JSON files are skipped with guidance message."""
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", delete=False
+    ) as json_file:
+        json.dump({"config": {"setting": "value"}}, json_file)
+        temp_path = Path(json_file.name)
+
+    try:
+        files = load_json_files(str(temp_path))
+        # Configuration files should be skipped
+        assert len(files) == 0
     finally:
         temp_path.unlink()
 
