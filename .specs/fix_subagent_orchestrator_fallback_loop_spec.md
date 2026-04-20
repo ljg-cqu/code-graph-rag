@@ -529,16 +529,16 @@ async def test_graceful_degradation_with_unavailable_models():
 
 ## Success Criteria
 
-- [ ] Fallback never attempts to use the same model that just failed
-- [ ] Complete fallback chain for all Claude model variants
-- [ ] Failed models are tracked and not retried within same session
-- [ ] Clear error message when all models are unavailable
-- [ ] `_failed_models` is an instance attribute, not a class attribute
-- [ ] `_has_validated_models` flag correctly reflects validation state
-- [ ] Early termination when all models in the expanded universe have failed
-- [ ] No wasted API calls retrying known-unavailable models
-- [ ] Parallel execution either succeeds with valid model or fails fast with clear error
-- [ ] Unit tests cover fallback exclusion, failed-model tracking, and instance isolation
+- [x] Fallback never attempts to use the same model that just failed
+- [x] Complete fallback chain for all Claude model variants
+- [x] Failed models are tracked and not retried within same session
+- [x] Clear error message when all models are unavailable
+- [x] `_failed_models` is an instance attribute, not a class attribute
+- [x] `_has_validated_models` flag correctly reflects validation state
+- [x] Early termination when all models in the expanded universe have failed
+- [x] No wasted API calls retrying known-unavailable models
+- [x] Parallel execution either succeeds with valid model or fails fast with clear error
+- [x] Unit tests cover fallback exclusion, failed-model tracking, and instance isolation
 
 ## Related Files
 
