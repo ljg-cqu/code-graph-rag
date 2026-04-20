@@ -267,6 +267,8 @@ class TestSubAgentOrchestrator:
             orchestrator = SubAgentOrchestrator(
                 worker_count=1, agent_factory=lambda *args, **kwargs: HangingAgent()
             )
+            # Mock validation to avoid actual model creation
+            orchestrator._validate_model_config = Mock()
             orchestrator.initialize_agents()
 
             start_time = time.time()
@@ -294,6 +296,8 @@ class TestSubAgentOrchestrator:
             orchestrator = SubAgentOrchestrator(
                 worker_count=1, agent_factory=lambda *args, **kwargs: mock_agent
             )
+            # Mock validation to avoid actual model creation
+            orchestrator._validate_model_config = Mock()
 
             result = orchestrator.execute_tasks(
                 [{"id": "test_task", "prompt": "test", "relative_path": "test.py"}],
@@ -331,6 +335,8 @@ class TestSubAgentOrchestrator:
             orchestrator = SubAgentOrchestrator(
                 worker_count=1, agent_factory=lambda *args, **kwargs: agent
             )
+            # Mock validation to avoid actual model creation
+            orchestrator._validate_model_config = Mock()
             orchestrator.initialize_agents()
 
             result = orchestrator.execute_tasks([{"id": "test_task", "prompt": "test"}])

@@ -10,7 +10,6 @@ import io
 import time
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from dataclasses import replace
 from typing import Any
 
 from loguru import logger
@@ -283,20 +282,9 @@ class SubAgentOrchestrator:
     """
     Orchestrates parallel execution of sub-agent tasks.
     Manages full lifecycle of sub-agents, execution guarantees, and cleanup.
-    """
 
-    # Model fallback chain for when primary model is unavailable
-    MODEL_FALLBACK_CHAIN: dict[str, list[str]] = {
-        # Custom/preview models
-        "k2.6-code-preview": ["claude-sonnet-4-6", "claude-opus-4-7", "claude-haiku-4-5"],
-        "k2.5-code-preview": ["claude-sonnet-4-6", "claude-opus-4-7", "claude-haiku-4-5"],
-        "kimi-k2.6": ["claude-sonnet-4-6", "claude-opus-4-7", "claude-haiku-4-5"],
-        "kimi-k2.5": ["claude-sonnet-4-6", "claude-opus-4-7", "claude-haiku-4-5"],
-        # Standard Claude models (cascading fallback)
-        "claude-sonnet-4-6": ["claude-opus-4-7", "claude-haiku-4-5"],
-        "claude-opus-4-7": ["claude-sonnet-4-6", "claude-haiku-4-5"],
-        "claude-haiku-4-5": ["claude-sonnet-4-6", "claude-opus-4-7"],
-    }
+    Fail-fast behavior: Uses only explicitly configured models. No fallback to alternative models.
+    """
 
     def __init__(
         self,
@@ -322,9 +310,6 @@ class SubAgentOrchestrator:
         self.running = AtomicBoolean(False)
         self._shutdown_called = AtomicBoolean(False)
         self._llm_assignment_index = 0
-        self._current_model_config: ModelConfig | None = None
-        self._failed_models: set[str] = set()  # Track models that have failed
-        self._has_validated_models: bool = False  # Track if any models passed validation
 
         valid_strategies = {"fifo", "round-robin"}
         scheduling_strategy = scheduling_strategy.lower()
@@ -349,159 +334,66 @@ class SubAgentOrchestrator:
             worker_index=worker_index,
         )
 
-    def _validate_model_availability(self, model_config: ModelConfig) -> bool:
+    def _validate_model_config(self, model_config: ModelConfig) -> None:
         """
-        Check if the specified model is available before spawning sub-agents.
-        Returns True if model is available, False otherwise.
+        Validate that the model configuration can create a model.
+        Raises RuntimeError if validation fails (fail-fast behavior).
         """
         try:
             provider = get_provider_from_config(model_config)
-            # Attempt to create the model - this will fail if model is unavailable
             provider.create_model(model_config.model_id)
-            return True
         except Exception as e:
-            logger.warning(
-                f"Model '{model_config.model_id}' is not available: {e}"
-            )
-            return False
-
-    def _get_fallback_model_config(self, original_config: ModelConfig) -> ModelConfig | None:
-        """
-        Get a fallback model configuration when the primary model is unavailable.
-        Returns None if no fallback is available.
-        """
-        original_model_id = original_config.model_id
-        fallback_chain = self.MODEL_FALLBACK_CHAIN.get(original_model_id, [])
-
-        if not fallback_chain:
-            # Try generic fallbacks - EXCLUDE the current model
-            fallback_chain = [
-                m for m in ["claude-sonnet-4-6", "claude-opus-4-7", "claude-haiku-4-5"]
-                if m != original_model_id
-            ]
-
-        # Filter out models that have already failed and the original model
-        available_fallbacks = [
-            m for m in fallback_chain
-            if m != original_model_id and m not in self._failed_models
-        ]
-
-        for fallback_model_id in available_fallbacks:
-            fallback_config = replace(original_config, model_id=fallback_model_id)
-
-            if self._validate_model_availability(fallback_config):
-                logger.info(
-                    f"Using fallback model '{fallback_model_id}' instead of '{original_model_id}'"
-                )
-                return fallback_config
-            else:
-                # Mark this model as failed
-                self._failed_models.add(fallback_model_id)
-
-        # Mark the original as failed
-        self._failed_models.add(original_model_id)
-        return None
-
-    def _classify_error(self, error_msg: str) -> str:
-        """Classify error type to determine appropriate retry strategy."""
-        error_lower = error_msg.lower()
-
-        if "404" in error_msg or "resource_not_found" in error_lower or "not found" in error_lower:
-            return "model_unavailable"
-        elif "connection" in error_lower or "timeout" in error_lower or "network" in error_lower:
-            return "network_error"
-        elif "rate_limit" in error_lower or "rate limit" in error_lower or "429" in error_msg:
-            return "rate_limit"
-        elif "auth" in error_lower or "401" in error_msg or "403" in error_msg:
-            return "auth_error"
-        else:
-            return "unknown"
-
-    def _get_all_possible_models(self) -> set[str]:
-        """Return the universe of all models that could be used for fallback."""
-        all_models: set[str] = set()
-        # Models from the static fallback chain
-        for chain in self.MODEL_FALLBACK_CHAIN.values():
-            all_models.update(chain)
-        all_models.update(self.MODEL_FALLBACK_CHAIN.keys())
-        # Models from worker LLM configuration
-        for cfg in settings.active_worker_llms:
-            if cfg.model_id:
-                all_models.add(cfg.model_id)
-        # Orchestrator config model
-        orch_cfg = settings.active_orchestrator_config
-        if orch_cfg.model_id:
-            all_models.add(orch_cfg.model_id)
-        return all_models
+            raise RuntimeError(
+                f"Model '{model_config.model_id}' from provider '{model_config.provider}' is not available: {e}"
+            ) from e
 
     def initialize_agents(self) -> None:
+        """Initialize sub-agents with configured LLMs. Fails fast if any model is unavailable."""
         logger.info(f"Initializing {self.worker_count} sub-agents")
         worker_llms = settings.active_worker_llms
-        num_worker_llms = len(worker_llms)
 
-        # Validate and potentially fallback model configurations
-        validated_worker_llms: list[ModelConfig] = []
-        for llm_config in worker_llms:
-            if self._validate_model_availability(llm_config):
-                validated_worker_llms.append(llm_config)
-            else:
-                self._failed_models.add(llm_config.model_id)
-                # Try to find a fallback model
-                fallback_config = self._get_fallback_model_config(llm_config)
-                if fallback_config:
-                    validated_worker_llms.append(fallback_config)
-                else:
-                    logger.error(
-                        f"Model '{llm_config.model_id}' is unavailable and no fallback found. "
-                        f"This worker configuration will be skipped."
-                    )
+        # Determine which LLM configs to use
+        llm_configs: list[ModelConfig]
+        if worker_llms:
+            llm_configs = worker_llms
+        else:
+            llm_configs = [settings.active_orchestrator_config]
 
-        # If no valid models, try orchestrator config as fallback
-        if not validated_worker_llms:
-            orchestrator_config = settings.active_orchestrator_config
-            if self._validate_model_availability(orchestrator_config):
-                logger.warning(
-                    "No valid worker LLMs found. Using orchestrator config as fallback."
-                )
-                validated_worker_llms = [orchestrator_config]
-            else:
-                self._failed_models.add(orchestrator_config.model_id)
-                # Try fallback for orchestrator config too
-                fallback_config = self._get_fallback_model_config(orchestrator_config)
-                if fallback_config:
-                    logger.warning(
-                        f"Using fallback model '{fallback_config.model_id}' for orchestrator."
-                    )
-                    validated_worker_llms = [fallback_config]
+        # Validate all configs upfront - fail fast
+        for llm_config in llm_configs:
+            self._validate_model_config(llm_config)
 
-        # Track whether any models passed validation
-        self._has_validated_models = len(validated_worker_llms) > 0
+        num_llms = len(llm_configs)
 
-        num_valid_llms = len(validated_worker_llms)
+        # Adjust worker count if fewer LLMs than workers
+        if num_llms == 1 and self.worker_count > 1:
+            logger.warning(
+                f"Only 1 LLM config available. Reducing worker_count from "
+                f"{self.worker_count} to 1 to avoid false parallelism contention."
+            )
+            self.worker_count = 1
+        elif num_llms < self.worker_count:
+            logger.info(
+                f"Distributing {num_llms} LLM configs across {self.worker_count} workers"
+            )
 
+        # Clean up excess workers
         for worker in self.workers[self.worker_count :]:
             worker.shutdown()
         self.workers = self.workers[: self.worker_count]
 
+        # Create workers with round-robin LLM assignment
         for index in range(len(self.workers), self.worker_count):
-            if num_valid_llms > 0:
-                llm_config = validated_worker_llms[self._llm_assignment_index % num_valid_llms]
-                self._llm_assignment_index += 1
-                agent = self.agent_factory(llm_config=llm_config, worker_index=index)
-            else:
-                agent = self.agent_factory(worker_index=index)
+            llm_config = llm_configs[self._llm_assignment_index % num_llms]
+            self._llm_assignment_index += 1
+            agent = self.agent_factory(llm_config=llm_config, worker_index=index)
             self.workers.append(
                 SubAgentWorker(worker_id=self._build_worker_id(index), agent=agent)
             )
 
-        if num_valid_llms > 0:
-            logger.info(
-                f"Sub-agent pool initialized with {num_valid_llms} worker LLMs (round-robin assignment)"
-            )
-        else:
-            logger.warning(
-                "Sub-agent pool initialized without validated LLMs - using default orchestrator LLM"
-            )
+        logger.info(
+            f"Sub-agent pool initialized with {num_llms} worker LLMs (round-robin assignment)"
+        )
 
     def execute_tasks(
         self,
@@ -516,7 +408,7 @@ class SubAgentOrchestrator:
         Args:
             subtasks: List of subtasks to execute
             result_aggregator: Optional aggregator to use for results
-            retry_attempts: Number of retries for failed tasks
+            retry_attempts: Number of retries for failed tasks (for transient errors only)
             dry_run: If True, emit execution plan metadata without running sub-agents
         """
         if len(subtasks) > settings.CGR_PARALLEL_MAX_QUEUE_SIZE:
@@ -566,22 +458,6 @@ class SubAgentOrchestrator:
             raise RuntimeError("Orchestrator is shutting down")
 
         self.initialize_agents()
-
-        # Check if we have any validated models before starting
-        if not self._has_validated_models:
-            logger.error(
-                "No valid sub-agents available. All models failed validation. "
-                f"Failed models: {self._failed_models}"
-            )
-            # Return immediately with all tasks marked as failed
-            for subtask in subtasks:
-                result_aggregator.add_error(
-                    subtask,
-                    "No LLM models available for parallel execution. "
-                    "Check model configuration and API availability.",
-                    execution_time=0,
-                )
-            return result_aggregator
 
         self.running.set(True)
         start_time = time.time()
@@ -648,105 +524,18 @@ class SubAgentOrchestrator:
                             retry_count = retry_counts.get(subtask["id"], 0)
                             error_type = self._classify_error(error_msg)
 
-                            if error_type == "model_unavailable":
-                                # Don't retry same model - switch to fallback immediately
-                                current_config = getattr(worker.agent, "llm_config", None)
-                                if current_config:
-                                    current_model_id = current_config.model_id
-                                    self._failed_models.add(current_model_id)
-                                    fallback_config = self._get_fallback_model_config(current_config)
-                                    if fallback_config:
-                                        logger.warning(
-                                            f"Subtask {subtask['id']} failed with model error. "
-                                            f"Switching to fallback model '{fallback_config.model_id}' and retrying..."
-                                        )
-                                        # Recreate worker agent with fallback model
-                                        worker.reset_agent(
-                                            self.agent_factory(
-                                                llm_config=fallback_config,
-                                                worker_index=int(worker.worker_id.split("-")[-1])
-                                                if "-" in worker.worker_id
-                                                else 0
-                                            )
-                                        )
-                                        retry_counts[subtask["id"]] = retry_count + 1
-                                        remaining_tasks.insert(0, subtask)
-                                        continue
-                                # If no fallback, mark subtask as failed after checking all models
-
-                            elif error_type == "network_error":
-                                # Retry same model once, then try fallback
-                                if retry_count < 1:
-                                    # Retry same model
-                                    retry_counts[subtask["id"]] = retry_count + 1
-                                    logger.warning(
-                                        f"Subtask {subtask['id']} failed with network error (attempt {retry_count + 1}/{retry_attempts + 1}). Retrying..."
-                                    )
-                                    remaining_tasks.insert(0, subtask)
-                                    continue
-                                else:
-                                    # Try fallback after network retry exhausted
-                                    current_config = getattr(worker.agent, "llm_config", None)
-                                    if current_config:
-                                        self._failed_models.add(current_config.model_id)
-                                        fallback_config = self._get_fallback_model_config(current_config)
-                                        if fallback_config:
-                                            logger.warning(
-                                                f"Subtask {subtask['id']} network error persisted. "
-                                                f"Switching to fallback model '{fallback_config.model_id}'."
-                                            )
-                                            worker.reset_agent(
-                                                self.agent_factory(
-                                                    llm_config=fallback_config,
-                                                    worker_index=int(worker.worker_id.split("-")[-1])
-                                                    if "-" in worker.worker_id
-                                                    else 0
-                                                )
-                                            )
-                                            retry_counts[subtask["id"]] = retry_count + 1
-                                            remaining_tasks.insert(0, subtask)
-                                            continue
-
-                            elif error_type == "rate_limit":
-                                # Wait and retry
-                                time.sleep(2 ** retry_count)
+                            # Only retry for transient network/rate-limit errors
+                            if error_type in ("network_error", "rate_limit") and retry_count < retry_attempts:
                                 retry_counts[subtask["id"]] = retry_count + 1
+                                if error_type == "rate_limit":
+                                    time.sleep(2 ** retry_count)
                                 logger.warning(
-                                    f"Subtask {subtask['id']} rate limited (attempt {retry_count + 1}/{retry_attempts + 1}). Waiting and retrying..."
-                                )
-                                remaining_tasks.insert(0, subtask)
-                                continue
-
-                            # For auth errors or unknown errors, or if no fallback available
-                            # Mark current model as failed if we have a config
-                            current_config = getattr(worker.agent, "llm_config", None)
-                            if current_config:
-                                self._failed_models.add(current_config.model_id)
-
-                            # Check if all models have failed
-                            all_possible_models = self._get_all_possible_models()
-                            if self._failed_models >= all_possible_models:
-                                logger.error(
-                                    f"All models have failed. Terminating parallel execution early. "
-                                    f"Failed models: {self._failed_models}"
-                                )
-                                # Mark all remaining tasks as failed
-                                for remaining in remaining_tasks:
-                                    result_aggregator.add_error(
-                                        remaining,
-                                        "All LLM models exhausted. No models available for execution.",
-                                        execution_time=0,
-                                    )
-                                remaining_tasks.clear()
-                                break
-
-                            if retry_count < retry_attempts:
-                                retry_counts[subtask["id"]] = retry_count + 1
-                                logger.warning(
-                                    f"Subtask {subtask['id']} failed (attempt {retry_count + 1}/{retry_attempts + 1}): {error_msg}. Retrying..."
+                                    f"Subtask {subtask['id']} failed with {error_type} "
+                                    f"(attempt {retry_count + 1}/{retry_attempts + 1}). Retrying..."
                                 )
                                 remaining_tasks.insert(0, subtask)
                             else:
+                                # Fail fast - no model fallback
                                 result_aggregator.add_error(
                                     subtask,
                                     error_msg,
@@ -758,7 +547,7 @@ class SubAgentOrchestrator:
                                     },
                                 )
                                 logger.error(
-                                    f"Subtask {subtask['id']} failed permanently after {retry_attempts + 1} attempts: {error_msg}"
+                                    f"Subtask {subtask['id']} failed: {error_msg}"
                                 )
 
         finally:
@@ -785,7 +574,6 @@ class SubAgentOrchestrator:
         start_time = time.time()
         timeout = settings.CGR_SUBAGENT_TIMEOUT
 
-        # Use standard ThreadPoolExecutor for subtask timeout (simpler than ManagedThreadPoolExecutor for this use case)
         with ThreadPoolExecutor(max_workers=1) as task_executor:
             future = task_executor.submit(worker.execute, subtask)
 
@@ -797,6 +585,21 @@ class SubAgentOrchestrator:
             except TimeoutError as e:
                 future.cancel()
                 raise TimeoutError(f"Subtask exceeded timeout of {timeout}s") from e
+
+    def _classify_error(self, error_msg: str) -> str:
+        """Classify error type to determine if retry is appropriate."""
+        error_lower = error_msg.lower()
+
+        if "404" in error_msg or "resource_not_found" in error_lower or "not found" in error_lower:
+            return "model_unavailable"
+        elif "connection" in error_lower or "timeout" in error_lower or "network" in error_lower:
+            return "network_error"
+        elif "rate_limit" in error_lower or "rate limit" in error_lower or "429" in error_msg:
+            return "rate_limit"
+        elif "auth" in error_lower or "401" in error_msg or "403" in error_msg:
+            return "auth_error"
+        else:
+            return "unknown"
 
     def _handle_shutdown(self, signum: int, frame: Any) -> None:
         """Handle shutdown signals to gracefully terminate all workers."""
