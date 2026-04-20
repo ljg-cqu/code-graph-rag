@@ -43,10 +43,7 @@ def has_embedding_provider() -> bool:
         from ..embeddings import get_embedding_provider
 
         config = settings.active_embedding_config
-        provider = get_embedding_provider(
-            provider=config.provider,
-            model_id=config.model_id,
-        )
+        provider = get_embedding_provider(config=config)
         # Test with simple embedding
         provider.embed("test")
         return True

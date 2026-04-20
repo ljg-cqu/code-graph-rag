@@ -615,7 +615,7 @@ def _entity_properties(
     properties["name"] = name
     properties["type"] = entity_type
     properties["dataset_id"] = dataset_id
-    properties["labels"] = labels
+    properties["entity_labels"] = labels
 
     if entity.get("last_updated"):
         properties["last_updated"] = str(entity["last_updated"])
@@ -1340,7 +1340,7 @@ def ingest_json_data(
 ) -> IngestionResult:
     del conflict_resolution
 
-    result = IngestionResult(dataset_id=dataset_id or "", dry_run=dry_run)
+    result = IngestionResult(dataset_ids=[dataset_id] if dataset_id else [], dry_run=dry_run)
 
     try:
         load_errors: list[str] = []
@@ -1375,8 +1375,9 @@ def ingest_json_data(
             result.files_processed += 1
             result.entities_processed += len(prepared_file.entities)
             result.relationships_processed += len(prepared_file.relationships)
-            if not result.dataset_id:
-                result.dataset_id = prepared_file.dataset_id
+
+        # Collect all unique dataset IDs from prepared files
+        result.dataset_ids = sorted({pf.dataset_id for pf in prepared_files})
 
         batch_errors = _validate_prepared_files(prepared_files)
         if batch_errors:

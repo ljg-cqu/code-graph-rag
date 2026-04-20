@@ -28,7 +28,8 @@ def run_migrations(dry_run: bool = True) -> dict[str, int]:
         results["orphaned_builtins"] = _migrate_orphaned_builtins(cursor, dry_run)
         results["external_module_paths"] = _migrate_external_module_paths(cursor, dry_run)
         results["json_node_names"] = _migrate_json_node_names(cursor, dry_run)
-        results["incomplete_test_nodes"] = _cleanup_incomplete_test_nodes(cursor, dry_run)
+        results["method_is_exported"] = _migrate_method_is_exported(cursor, dry_run)
+        results["json_entity_labels"] = _migrate_json_entity_labels(cursor, dry_run)
     finally:
         cursor.close()
         conn.close()
@@ -153,12 +154,12 @@ def _migrate_json_node_names(cursor: mgclient.Cursor, dry_run: bool) -> int:
     return total
 
 
-def _cleanup_incomplete_test_nodes(cursor: mgclient.Cursor, dry_run: bool) -> int:
-    """Delete incomplete Test nodes."""
+def _migrate_method_is_exported(cursor: mgclient.Cursor, dry_run: bool) -> int:
+    """Set is_exported=false for Method nodes where it's missing."""
     cursor.execute("""
-        MATCH (t:Test)
-        WHERE t.name IS NULL AND t.qualified_name IS NULL
-        RETURN count(t)
+        MATCH (m:Method)
+        WHERE m.is_exported IS NULL
+        RETURN count(m)
     """)
     count = cursor.fetchone()[0]
 
@@ -166,14 +167,41 @@ def _cleanup_incomplete_test_nodes(cursor: mgclient.Cursor, dry_run: bool) -> in
         return 0
 
     if dry_run:
-        logger.info(ls.MIGRATION_DRY_RUN_TEST_NODES.format(count=count))
+        logger.info(ls.MIGRATION_DRY_RUN_METHOD_EXPORTED.format(count=count))
         return count
 
     cursor.execute("""
-        MATCH (t:Test)
-        WHERE t.name IS NULL AND t.qualified_name IS NULL
-        DETACH DELETE t
+        MATCH (m:Method)
+        WHERE m.is_exported IS NULL
+        SET m.is_exported = false
     """)
 
-    logger.info(ls.MIGRATION_TEST_NODES_DONE.format(count=count))
+    logger.info(ls.MIGRATION_METHOD_EXPORTED_DONE.format(count=count))
+    return count
+
+
+def _migrate_json_entity_labels(cursor: mgclient.Cursor, dry_run: bool) -> int:
+    """Rename labels to entity_labels on JsonEntity nodes."""
+    cursor.execute("""
+        MATCH (n:JsonEntity)
+        WHERE n.labels IS NOT NULL
+        RETURN count(n)
+    """)
+    count = cursor.fetchone()[0]
+
+    if count == 0:
+        return 0
+
+    if dry_run:
+        logger.info(ls.MIGRATION_DRY_RUN_ENTITY_LABELS.format(count=count))
+        return count
+
+    cursor.execute("""
+        MATCH (n:JsonEntity)
+        WHERE n.labels IS NOT NULL
+        SET n.entity_labels = n.labels
+        REMOVE n.labels
+    """)
+
+    logger.info(ls.MIGRATION_ENTITY_LABELS_DONE.format(count=count))
     return count

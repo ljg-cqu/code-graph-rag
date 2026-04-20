@@ -104,6 +104,7 @@ def ingest_method(
     method_qualified_name: str | None = None,
     file_path: Path | None = None,
     repo_path: Path | None = None,
+    is_exported: bool = False,
 ) -> None:
     if language == cs.SupportedLanguage.CPP:
         from .cpp import utils as cpp_utils
@@ -129,6 +130,7 @@ def ingest_method(
         cs.KEY_START_LINE: method_node.start_point[0] + 1,
         cs.KEY_END_LINE: method_node.end_point[0] + 1,
         cs.KEY_DOCSTRING: get_docstring_func(method_node),
+        cs.KEY_IS_EXPORTED: is_exported,
     }
     if file_path is not None and repo_path is not None:
         method_props[cs.KEY_PATH] = file_path.relative_to(repo_path).as_posix()

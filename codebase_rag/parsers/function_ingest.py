@@ -174,6 +174,7 @@ class FunctionIngestMixin:
             extract_decorators_func=self._extract_decorators,
             file_path=file_path,
             repo_path=self.repo_path,
+            is_exported=False,
         )
 
         return True

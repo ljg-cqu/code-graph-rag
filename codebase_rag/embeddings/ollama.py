@@ -45,6 +45,17 @@ class OllamaEmbeddingProvider(EmbeddingProvider):
         dimension: int | None = None,
         endpoint: str | None = None,
         keep_alive: str | None = None,
+        # Additional config parameters that may be passed by factory (ignored)
+        api_key: str | None = None,
+        project_id: str | None = None,
+        region: str | None = None,
+        provider_type: str | None = None,
+        service_account_file: str | None = None,
+        device: str | None = None,
+        ssl_verify: bool = True,
+        proxy: str | None = None,
+        fallback_to_local: bool = True,
+        fallback_model: str = "BAAI/bge-large-en-v1.5",
     ) -> None:
         # Determine dimension from known models or default
         if dimension is None:

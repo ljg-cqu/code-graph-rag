@@ -735,10 +735,7 @@ class QueryMethodOrchestrator:
         from ..embeddings import get_embedding_provider
 
         config = settings.active_embedding_config
-        provider = get_embedding_provider(
-            provider=config.provider,
-            model_id=config.model_id,
-        )
+        provider = get_embedding_provider(config=config)
         # Wrap synchronous calls in asyncio.to_thread for async-native execution
         embedding = await asyncio.to_thread(provider.embed, query)
         pairs = await asyncio.to_thread(self.code_vector.search, embedding, top_k)

@@ -139,7 +139,7 @@ class JSONMetadata(BaseModel):
 
 
 class IngestionResult(BaseModel):
-    dataset_id: str
+    dataset_ids: list[str] = Field(default_factory=list)
     # New fields for file tracking
     files_processed: int = 0
     files_skipped: int = 0

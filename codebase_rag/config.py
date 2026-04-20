@@ -231,6 +231,18 @@ class EmbeddingConfig:
         del result["dimension"]
         return EmbeddingConfigKwargs(**result)
 
+    def to_provider_kwargs(self) -> dict:
+        """Convert to kwargs for get_embedding_provider().
+
+        Returns:
+            Dict with all fields except provider, model_id, and dimension.
+        """
+        result = asdict(self)
+        del result[cs.FIELD_PROVIDER]
+        del result[cs.FIELD_MODEL_ID]
+        del result["dimension"]
+        return result
+
 
 @dataclass
 class HybridRetrievalConfig:

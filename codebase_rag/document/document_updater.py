@@ -234,18 +234,7 @@ class DocumentGraphUpdater:
 
         # Cache embedding provider to avoid recreation per document
         config = settings.active_embedding_config
-        self._embedding_provider = get_embedding_provider(
-            provider=config.provider,
-            model_id=config.model_id,
-            api_key=config.api_key,
-            endpoint=config.endpoint,
-            keep_alive=config.keep_alive,
-            project_id=config.project_id,
-            region=config.region,
-            provider_type=config.provider_type,
-            service_account_file=config.service_account_file,
-            device=config.device,
-        )
+        self._embedding_provider = get_embedding_provider(config=config)
 
         # Cache supported extensions from config
         self._supported_extensions = set(settings.DOC_SUPPORTED_EXTENSIONS)

@@ -207,7 +207,7 @@ class GraphAlgorithms:
         WITH $start_id AS start_id, $max_depth AS max_depth
         MATCH (start) WHERE id(start) = start_id
         // Fixed Memgraph BFS syntax
-        MATCH path = (start)-[:CALLS|:DEFINES|:IMPORTS *BFS 1 TO max_depth]-(related)
+        MATCH path = (start)-[:CALLS|:DEFINES|:IMPORTS *BFS 1..max_depth]-(related)
         WHERE related:Function OR related:Class OR related:Module
         WITH DISTINCT related, length(path) AS depth
         RETURN

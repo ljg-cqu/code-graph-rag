@@ -850,19 +850,29 @@ class MemgraphIngestor:
         self._execute_query(CYPHER_DELETE_PROJECT, {KEY_PROJECT_NAME: project_name})
         logger.info(ls.MG_PROJECT_DELETED.format(project_name=project_name))
 
-    def ensure_constraints(self) -> None:
+    def ensure_constraints(self, labels: tuple[str, ...] | None = None) -> None:
         logger.info(ls.MG_ENSURING_CONSTRAINTS)
-        for label, prop in NODE_UNIQUE_CONSTRAINTS.items():
+        targets = (
+            {k: v for k, v in NODE_UNIQUE_CONSTRAINTS.items() if k in labels}
+            if labels
+            else NODE_UNIQUE_CONSTRAINTS
+        )
+        for label, prop in targets.items():
             try:
                 self._execute_query(build_constraint_query(label, prop))
             except Exception:
                 pass
         logger.info(ls.MG_CONSTRAINTS_DONE)
-        self._ensure_indexes()
+        self._ensure_indexes(labels)
 
-    def _ensure_indexes(self) -> None:
+    def _ensure_indexes(self, labels: tuple[str, ...] | None = None) -> None:
         logger.info(ls.MG_ENSURING_INDEXES)
-        for label, prop in NODE_UNIQUE_CONSTRAINTS.items():
+        targets = (
+            {k: v for k, v in NODE_UNIQUE_CONSTRAINTS.items() if k in labels}
+            if labels
+            else NODE_UNIQUE_CONSTRAINTS
+        )
+        for label, prop in targets.items():
             try:
                 self._execute_query(build_index_query(label, prop))
             except Exception:

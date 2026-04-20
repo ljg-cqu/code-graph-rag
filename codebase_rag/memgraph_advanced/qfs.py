@@ -140,10 +140,7 @@ class CommunityQFS:
                 raise
 
         config = settings.active_embedding_config
-        embed_provider = get_embedding_provider(
-            provider=config.provider,
-            model_id=config.model_id,
-        )
+        embed_provider = get_embedding_provider(config=config)
 
         summaries = []
         for record in records:
@@ -226,10 +223,7 @@ class CommunityQFS:
     ) -> list[CommunitySummary]:
         """Rank communities by semantic similarity + keyword overlap."""
         config = settings.active_embedding_config
-        embed_provider = get_embedding_provider(
-            provider=config.provider,
-            model_id=config.model_id,
-        )
+        embed_provider = get_embedding_provider(config=config)
         query_embedding = embed_provider.embed(question)
 
         keywords = extract_keywords(question, max_keywords=5)

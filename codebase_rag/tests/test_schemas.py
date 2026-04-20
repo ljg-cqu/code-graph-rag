@@ -226,8 +226,14 @@ class TestRelationshipSchemas:
         assert set(belongs_to_section_schema.sources) == {NodeLabel.CHUNK}
         assert set(belongs_to_section_schema.targets) == {NodeLabel.SECTION}
 
-    def test_references_code_is_not_declared_in_split_graph_schema(self) -> None:
-        assert all(
-            schema.rel_type != RelationshipType.REFERENCES_CODE
-            for schema in RELATIONSHIP_SCHEMAS
-        )
+    def test_all_node_labels_have_unique_keys(self) -> None:
+        """Every NodeLabel MUST have a corresponding entry in _NODE_LABEL_UNIQUE_KEYS."""
+        from codebase_rag.constants import _NODE_LABEL_UNIQUE_KEYS
+        missing = set(NodeLabel) - set(_NODE_LABEL_UNIQUE_KEYS.keys())
+        assert not missing, f"NodeLabel(s) missing unique keys: {missing}"
+
+    def test_all_relationship_types_have_schemas(self) -> None:
+        """Every RelationshipType used in ingestion MUST have a schema entry."""
+        schema_rel_types = {schema.rel_type for schema in RELATIONSHIP_SCHEMAS}
+        missing = set(RelationshipType) - schema_rel_types
+        assert not missing, f"RelationshipType(s) missing schemas: {missing}"

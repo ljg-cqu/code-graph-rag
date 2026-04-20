@@ -35,10 +35,7 @@ def get_shared_embedding_provider() -> EmbeddingProviderProtocol:
                 from ..embeddings import get_embedding_provider
 
                 config = settings.active_embedding_config
-                _SHARED_EMBEDDING_PROVIDER = get_embedding_provider(
-                    provider=config.provider,
-                    model_id=config.model_id,
-                )
+                _SHARED_EMBEDDING_PROVIDER = get_embedding_provider(config=config)
 
     return _SHARED_EMBEDDING_PROVIDER
 
@@ -178,6 +175,40 @@ class HybridRetriever:
             self._is_healthy = False
             return False
 
+    def _record_to_result(
+        self, record: dict, cfg: "HybridRetrievalConfig"
+    ) -> HybridSearchResult:
+        """Convert a Cypher result record to HybridSearchResult."""
+        context = record.get("context")
+        pagerank_score = _coerce_float(record.get("pagerank_score"), 0.1)
+        community_score = _coerce_float(record.get("community_score"), 0.0)
+        graph_weight = cfg.pagerank_weight + cfg.community_weight
+        graph_score = (
+            (
+                pagerank_score * cfg.pagerank_weight
+                + community_score * cfg.community_weight
+            )
+            / graph_weight
+            if graph_weight > 0
+            else pagerank_score
+        )
+        return HybridSearchResult(
+            node_id=_coerce_int(record.get("node_id"), 0),
+            name=_coerce_str(record.get("name")),
+            qualified_name=_coerce_str(record.get("qualified_name")),
+            node_type=_coerce_str(record.get("node_type")),
+            file_path=_coerce_str(record.get("file_path")),
+            start_line=_coerce_int(record.get("start_line"), 0),
+            end_line=_coerce_int(record.get("end_line"), 0),
+            vector_score=_coerce_float(record.get("vector_score"), 0.0),
+            text_score=_coerce_float(record.get("text_score"), 0.0),
+            pagerank_score=pagerank_score,
+            community_score=community_score,
+            graph_score=graph_score,
+            combined_score=_coerce_float(record.get("combined_score"), 0.0),
+            context=context if isinstance(context, list) else None,
+        )
+
     def _search_atomic(
         self,
         query: str,
@@ -190,9 +221,11 @@ class HybridRetriever:
         atomic_cypher = """
         CALL vector_search.search($index_name, $overfetch, $embedding)
         YIELD node AS seed, similarity AS vec_sim
+        WITH seed, vec_sim
         WHERE vec_sim >= $min_similarity
 
-        OPTIONAL MATCH path = (seed)-[:CALLS|:DEFINES|:IMPORTS *BFS 1 TO $max_depth]-(context_node)
+        WITH seed, vec_sim, $max_depth AS max_depth
+        OPTIONAL MATCH path = (seed)-[:CALLS|:DEFINES|:IMPORTS *BFS 1..max_depth]-(context_node)
         WHERE context_node:Function OR context_node:Class OR context_node:Method OR context_node:Module
 
         WITH seed, vec_sim, context_node,
@@ -235,61 +268,43 @@ class HybridRetriever:
                [c IN context WHERE c IS NOT NULL] AS context
         """
 
-        params = {
-            "index_name": settings.MEMGRAPH_VECTOR_INDEX_NAME,
-            "embedding": query_embedding,
-            "overfetch": top_k * 3,
-            "min_similarity": cfg.min_similarity_threshold,
-            "max_depth": cfg.max_context_depth,
-            "keywords": [kw.lower() for kw in query_keywords],
-            "top_k": top_k,
-            "vector_weight": cfg.vector_weight,
-            "pagerank_weight": cfg.pagerank_weight,
-            "community_weight": cfg.community_weight,
-            "text_weight": cfg.text_weight,
-        }
+        all_results: list[HybridSearchResult] = []
+        seen_node_ids: set[int] = set()
 
-        try:
-            records = self.graph_ingestor.fetch_all(atomic_cypher, params)
-        except Exception as e:
-            logger.debug(f"Atomic hybrid query failed: {e}")
+        for label in self.vector_backend.LABELS_TO_INDEX:
+            index_name = f"{label.lower()}_embedding_index"
+            params = {
+                "index_name": index_name,
+                "embedding": query_embedding,
+                "overfetch": top_k * 3,
+                "min_similarity": cfg.min_similarity_threshold,
+                "max_depth": cfg.max_context_depth,
+                "keywords": [kw.lower() for kw in query_keywords],
+                "top_k": top_k,
+                "vector_weight": cfg.vector_weight,
+                "pagerank_weight": cfg.pagerank_weight,
+                "community_weight": cfg.community_weight,
+                "text_weight": cfg.text_weight,
+            }
+
+            try:
+                records = self.graph_ingestor.fetch_all(atomic_cypher, params)
+            except Exception as e:
+                logger.debug(f"Atomic hybrid query failed for label {label}: {e}")
+                continue
+
+            for record in records:
+                node_id = _coerce_int(record.get("node_id"), 0)
+                if node_id in seen_node_ids:
+                    continue
+                seen_node_ids.add(node_id)
+                all_results.append(self._record_to_result(record, cfg))
+
+        if not all_results:
             return None
 
-        results: list[HybridSearchResult] = []
-        graph_weight = cfg.pagerank_weight + cfg.community_weight
-        for record in records:
-            context = record.get("context")
-            pagerank_score = _coerce_float(record.get("pagerank_score"), 0.1)
-            community_score = _coerce_float(record.get("community_score"), 0.0)
-            graph_score = (
-                (
-                    pagerank_score * cfg.pagerank_weight
-                    + community_score * cfg.community_weight
-                )
-                / graph_weight
-                if graph_weight > 0
-                else pagerank_score
-            )
-            results.append(
-                HybridSearchResult(
-                    node_id=_coerce_int(record.get("node_id"), 0),
-                    name=_coerce_str(record.get("name")),
-                    qualified_name=_coerce_str(record.get("qualified_name")),
-                    node_type=_coerce_str(record.get("node_type")),
-                    file_path=_coerce_str(record.get("file_path")),
-                    start_line=_coerce_int(record.get("start_line"), 0),
-                    end_line=_coerce_int(record.get("end_line"), 0),
-                    vector_score=_coerce_float(record.get("vector_score"), 0.0),
-                    text_score=_coerce_float(record.get("text_score"), 0.0),
-                    pagerank_score=pagerank_score,
-                    community_score=community_score,
-                    graph_score=graph_score,
-                    combined_score=_coerce_float(record.get("combined_score"), 0.0),
-                    context=context if isinstance(context, list) else None,
-                )
-            )
-
-        return results
+        all_results.sort(key=lambda r: r.combined_score, reverse=True)
+        return all_results[:top_k]
 
     def _search_separate(
         self,

@@ -422,7 +422,7 @@ def test_handle_json_update_event_basic() -> None:
 
     assert result.event_id == "evt_123"
     assert result.operation == "add"
-    assert result.dataset_id == "test_dataset"
+    assert result.dataset_ids == ["test_dataset"]
     assert result.dry_run is True
     assert result.errors == []
 

@@ -708,10 +708,7 @@ class HealthChecker:
         try:
             # Get embedding provider
             config = settings.active_embedding_config
-            provider = get_embedding_provider(
-                provider=config.provider,
-                model_id=config.model_id,
-            )
+            provider = get_embedding_provider(config=config)
 
             # Generate test embedding
             test_embedding = provider.embed("test query")

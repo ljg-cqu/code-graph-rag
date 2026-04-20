@@ -423,9 +423,9 @@ class MemgraphBackend(VectorBackend):
                         WITH $embedding AS query_vec, $top_k AS top_k, $project_prefix AS project_prefix, $max_depth AS max_depth
                         CALL vector_search.search($index_name, top_k * 3, query_vec)
                         YIELD node AS start_node, similarity AS sim
+                        WITH start_node, sim, max_depth
                         WHERE ($project_prefix IS NULL OR start_node.qualified_name STARTS WITH $project_prefix)
-
-                        MATCH path = (start_node)-[:CALLS|:DEFINES|:IMPORTS *BFS 1 TO max_depth]-(related)
+                        MATCH path = (start_node)-[:CALLS|:DEFINES|:IMPORTS *BFS 1..max_depth]-(related)
                         WHERE related:Function OR related:Class OR related:Module
 
                         WITH
@@ -434,7 +434,7 @@ class MemgraphBackend(VectorBackend):
                             COALESCE(related.pagerank_score, 0.1) AS pr_score,
                             collect(DISTINCT [n IN nodes(path) | n.qualified_name]) AS context_paths
                         ORDER BY (sim * 0.7) + (pr_score * 0.3) DESC
-                        LIMIT top_k
+                        LIMIT $top_k
 
                         RETURN
                             id(related) AS node_id,
@@ -453,10 +453,11 @@ class MemgraphBackend(VectorBackend):
                         WITH $embedding AS query_vec, $top_k AS top_k, $project_prefix AS project_prefix
                         CALL vector_search.search($index_name, top_k * 2, query_vec)
                         YIELD node AS n, similarity AS sim
+                        WITH n, sim
                         WHERE ($project_prefix IS NULL OR n.qualified_name STARTS WITH $project_prefix)
                         WITH n, sim, COALESCE(n.pagerank_score, 0.1) AS pr_score
                         ORDER BY (sim * 0.7) + (pr_score * 0.3) DESC
-                        LIMIT top_k
+                        LIMIT $top_k
                         RETURN id(n) AS node_id, sim AS similarity
                         """
 
@@ -494,11 +495,11 @@ class MemgraphBackend(VectorBackend):
                         WITH $embedding AS query_vec, $top_k AS top_k, $project_prefix AS project_prefix, $max_depth AS max_depth
                         MATCH (start_node:{label})
                         {f"WHERE {additional_filters}" if additional_filters else ""}
-                        WITH start_node, {capabilities.vector_function_syntax}(start_node.embedding, query_vec) AS sim
+                        WITH start_node, {capabilities.vector_function_syntax}(start_node.embedding, query_vec) AS sim, max_depth
                         ORDER BY sim DESC
-                        LIMIT top_k * 3
+                        LIMIT $top_k * 3
 
-                        MATCH path = (start_node)-[:CALLS|:DEFINES|:IMPORTS *BFS 1 TO max_depth]-(related)
+                        MATCH path = (start_node)-[:CALLS|:DEFINES|:IMPORTS *BFS 1..max_depth]-(related)
                         WHERE related:Function OR related:Class OR related:Module
 
                         WITH
@@ -507,7 +508,7 @@ class MemgraphBackend(VectorBackend):
                             COALESCE(related.pagerank_score, 0.1) AS pr_score,
                             collect(DISTINCT [n IN nodes(path) | n.qualified_name]) AS context_paths
                         ORDER BY (sim * 0.7) + (pr_score * 0.3) DESC
-                        LIMIT top_k
+                        LIMIT $top_k
 
                         RETURN
                             id(related) AS node_id,

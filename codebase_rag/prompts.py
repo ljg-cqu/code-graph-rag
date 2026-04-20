@@ -51,10 +51,10 @@ CYPHER_QUERY_RULES = """**2. Critical Cypher Query Rules**
   - Never return multiple semicolon-separated queries - only return a single query per request
 - **Index syntax**: Use Memgraph index syntax: `CREATE INDEX ON :Label(property)` not Neo4j's `CREATE INDEX ... FOR (n:Label) ON (n.property)`
 - **Traversal optimization**: Use Memgraph's built-in traversal syntax. CORRECT syntax:
-      - BFS: `*BFS 1 TO 3` (NOT `*BFS 1..3` — Neo4j syntax is wrong)
-      - DFS: `*DFS 1 TO 3`
-      - K-Shortest: `*KSHORTEST 5 1 TO 10` (finds up to 5 shortest paths, max length 10)
-      - Example: `MATCH path = (a)-[:CALLS *BFS 1 TO 3]->(b) RETURN path`
+      - BFS: `*BFS 1..3` (NOT `*BFS 1 TO 3` — invalid in Memgraph 3.8.1+)
+      - DFS: `*DFS 1..3` (NOT `*DFS 1 TO 3`)
+      - K-Shortest: `*KSHORTEST 5 1 TO 10` (finds up to 5 shortest paths, max length 10; availability depends on Memgraph version)
+      - Example: `MATCH path = (a)-[:CALLS *BFS 1..3]->(b) RETURN path`
       - Example: `MATCH path = (a)-[:CALLS *KSHORTEST 3 1 TO 5]->(b) RETURN path`
 - **Type checking**: Use `valueType()` function instead of `IS :: TYPE` type predicate expressions
 - **Query hints**: Add index hints to complex queries to improve performance: e.g., `USING INDEX :Function(qualified_name)`

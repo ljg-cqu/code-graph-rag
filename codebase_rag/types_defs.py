@@ -85,7 +85,6 @@ class NodeType(StrEnum):
     HOTSTRING = "Hotstring"
     LABEL = "Label"
     CLASS_AHK = "AhkClass"
-    CODE_CHUNK = "CodeChunk"
 
 
 type TrieNode = dict[str, TrieNode | QualifiedName | NodeType]
@@ -504,31 +503,31 @@ NODE_SCHEMAS: tuple[NodeSchema, ...] = (
     ),
     NodeSchema(
         NodeLabel.CLASS,
-        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string, is_exported: bool, path: string, absolute_path: string}",
+        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string, is_exported: bool, path: string, absolute_path: string, embedding: list[float] | null, embedding_model: string | null, embedding_version: int | null}",
     ),
     NodeSchema(
         NodeLabel.FUNCTION,
-        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string, is_exported: bool, path: string, absolute_path: string}",
+        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string, is_exported: bool, path: string, absolute_path: string, embedding: list[float] | null, embedding_model: string | null, embedding_version: int | null}",
     ),
     NodeSchema(
         NodeLabel.METHOD,
-        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string, path: string, absolute_path: string}",
+        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string, is_exported: bool, path: string, absolute_path: string, embedding: list[float] | null, embedding_model: string | null, embedding_version: int | null}",
     ),
     NodeSchema(
         NodeLabel.INTERFACE,
-        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string, is_exported: bool, path: string, absolute_path: string}",
+        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string, is_exported: bool, path: string, absolute_path: string, embedding: list[float] | null, embedding_model: string | null, embedding_version: int | null}",
     ),
     NodeSchema(
         NodeLabel.ENUM,
-        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string, is_exported: bool, path: string, absolute_path: string}",
+        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string, is_exported: bool, path: string, absolute_path: string, embedding: list[float] | null, embedding_model: string | null, embedding_version: int | null}",
     ),
     NodeSchema(
         NodeLabel.TYPE,
-        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string, is_exported: bool, path: string, absolute_path: string}",
+        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string, is_exported: bool, path: string, absolute_path: string, embedding: list[float] | null, embedding_model: string | null, embedding_version: int | null}",
     ),
     NodeSchema(
         NodeLabel.UNION,
-        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string, is_exported: bool, path: string, absolute_path: string}",
+        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string, is_exported: bool, path: string, absolute_path: string, embedding: list[float] | null, embedding_model: string | null, embedding_version: int | null}",
     ),
     NodeSchema(
         NodeLabel.MODULE_INTERFACE,
@@ -542,27 +541,27 @@ NODE_SCHEMAS: tuple[NodeSchema, ...] = (
     # Solidity-specific node schemas
     NodeSchema(
         NodeLabel.CONTRACT,
-        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string, is_exported: bool, is_abstract: bool, path: string, absolute_path: string}",
+        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string, is_exported: bool, is_abstract: bool, path: string, absolute_path: string, embedding: list[float] | null, embedding_model: string | null, embedding_version: int | null}",
     ),
     NodeSchema(
         NodeLabel.LIBRARY,
-        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string, is_exported: bool, path: string, absolute_path: string}",
+        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string, is_exported: bool, path: string, absolute_path: string, embedding: list[float] | null, embedding_model: string | null, embedding_version: int | null}",
     ),
     NodeSchema(
         NodeLabel.EVENT,
-        "{qualified_name: string, name: string, parameters: list[string], is_anonymous: bool, indexed_count: int, path: string, absolute_path: string, start_line: int, end_line: int}",
+        "{qualified_name: string, name: string, parameters: list[string], is_anonymous: bool, indexed_count: int, path: string, absolute_path: string, start_line: int, end_line: int, embedding: list[float] | null, embedding_model: string | null, embedding_version: int | null}",
     ),
     NodeSchema(
         NodeLabel.MODIFIER,
-        "{qualified_name: string, name: string, parameters: list[string], path: string, absolute_path: string, start_line: int, end_line: int}",
+        "{qualified_name: string, name: string, parameters: list[string], path: string, absolute_path: string, start_line: int, end_line: int, embedding: list[float] | null, embedding_model: string | null, embedding_version: int | null}",
     ),
     NodeSchema(
         NodeLabel.STATE_VARIABLE,
-        "{qualified_name: string, name: string, type: string, visibility: string, is_constant: bool, is_immutable: bool, is_mapped: bool, path: string, absolute_path: string, start_line: int, end_line: int}",
+        "{qualified_name: string, name: string, type: string, visibility: string, is_constant: bool, is_immutable: bool, is_mapped: bool, path: string, absolute_path: string, start_line: int, end_line: int, embedding: list[float] | null, embedding_model: string | null, embedding_version: int | null}",
     ),
     NodeSchema(
         NodeLabel.CUSTOM_ERROR,
-        "{qualified_name: string, name: string, parameters: list[string], path: string, absolute_path: string, start_line: int, end_line: int}",
+        "{qualified_name: string, name: string, parameters: list[string], path: string, absolute_path: string, start_line: int, end_line: int, embedding: list[float] | null, embedding_model: string | null, embedding_version: int | null}",
     ),
     # Document GraphRAG node schemas
     NodeSchema(
@@ -578,6 +577,8 @@ NODE_SCHEMAS: tuple[NodeSchema, ...] = (
         "{qualified_name: string, workspace: string, content: string, token_count: int, section_title: string, start_line: int, end_line: int, code_references: list[string], resolved_code_references: list[string], resolved_code_reference_count: int, embedding: list[float], embedding_model: string, embedding_version: int, indexed_at: string}",
     ),
     # JSON content node schemas
+    # NOTE: `path` on JSON nodes is the relative filesystem path of the source file,
+    # identical to code-graph nodes. The JSON document path is encoded in `qualified_name`.
     NodeSchema(
         NodeLabel.JSON_OBJECT,
         "{qualified_name: string, name: string, path: string, depth: int}",
@@ -596,7 +597,7 @@ NODE_SCHEMAS: tuple[NodeSchema, ...] = (
     ),
     NodeSchema(
         NodeLabel.JSON_ENTITY,
-        "{unique_id: string, entity_id: string, name: string, type: string, dataset_id: string, labels: list[string], embedding: list[float], embedding_model: string, embedding_version: int}",
+        "{unique_id: string, entity_id: string, name: string, type: string, dataset_id: string, entity_labels: list[string], embedding: list[float], embedding_model: string, embedding_version: int}",
     ),
 )
 
@@ -825,9 +826,5 @@ RELATIONSHIP_SCHEMAS: tuple[RelationshipSchema, ...] = (
         RelationshipType.HAS_ELEMENT,
         (NodeLabel.JSON_VALUE, NodeLabel.JSON_OBJECT, NodeLabel.JSON_ARRAY),
     ),
-    RelationshipSchema(
-        (NodeLabel.JSON_ENTITY,),
-        RelationshipType.RELATES_TO,
-        (NodeLabel.JSON_ENTITY,),
-    ),
+    # Note: RELATES_TO removed - no ingestion code creates this relationship
 )

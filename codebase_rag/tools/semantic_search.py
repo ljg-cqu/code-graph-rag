@@ -169,10 +169,7 @@ def _search_direct_vector(query: str, top_k: int) -> list[SemanticSearchResult]:
     from ..vector_backend import get_shared_backend
 
     config = settings.active_embedding_config
-    provider = get_embedding_provider(
-        provider=config.provider,
-        model_id=config.model_id,
-    )
+    provider = get_embedding_provider(config=config)
 
     query_embedding = provider.embed(query)
     backend = get_shared_backend()

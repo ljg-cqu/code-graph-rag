@@ -451,7 +451,6 @@ class NodeLabel(StrEnum):
     MODIFIER = "Modifier"
     STATE_VARIABLE = "StateVariable"
     CUSTOM_ERROR = "CustomError"
-    CODE_CHUNK = "CodeChunk"
     # Document GraphRAG nodes
     DOCUMENT = "Document"
     SECTION = "Section"
@@ -491,7 +490,6 @@ _NODE_LABEL_UNIQUE_KEYS: dict[NodeLabel, UniqueKeyType] = {
     NodeLabel.MODIFIER: UniqueKeyType.QUALIFIED_NAME,
     NodeLabel.STATE_VARIABLE: UniqueKeyType.QUALIFIED_NAME,
     NodeLabel.CUSTOM_ERROR: UniqueKeyType.QUALIFIED_NAME,
-    NodeLabel.CODE_CHUNK: UniqueKeyType.QUALIFIED_NAME,
     # Document GraphRAG nodes
     NodeLabel.DOCUMENT: UniqueKeyType.PATH,
     NodeLabel.SECTION: UniqueKeyType.QUALIFIED_NAME,
@@ -548,28 +546,11 @@ class RelationshipType(StrEnum):
     READS_STATE = "READS_STATE"
     WRITES_STATE = "WRITES_STATE"
     REVERTS_WITH = "REVERTS_WITH"
-    # Chunking relationships
-    HAS_CHUNK = "HAS_CHUNK"
     # Document GraphRAG relationships
     CONTAINS_SECTION = "CONTAINS_SECTION"
     HAS_SUBSECTION = "HAS_SUBSECTION"
     CONTAINS_CHUNK = "CONTAINS_CHUNK"
     BELONGS_TO_SECTION = "BELONGS_TO_SECTION"
-    REFERENCES_CODE = "REFERENCES_CODE"
-    # AutoHotkey-specific relationships
-    DEFINES_HOTKEY = "DEFINES_HOTKEY"
-    DEFINES_HOTSTRING = "DEFINES_HOTSTRING"
-    DEFINES_LABEL = "DEFINES_LABEL"
-    TRIGGERS_HOTKEY = "TRIGGERS_HOTKEY"
-    CALLS_COMMAND = "CALLS_COMMAND"
-    CREATES_COM_OBJECT = "CREATES_COM_OBJECT"
-    SENDS_KEYS = "SENDS_KEYS"
-    CLICKS_ELEMENT = "CLICKS_ELEMENT"
-    CREATES_GUI = "CREATES_GUI"
-    CONTROLS_GUI = "CONTROLS_GUI"
-    INCLUDES_FILE = "INCLUDES_FILE"
-    # Generic/dynamic relationships
-    RELATES_TO = "RELATES_TO"
     # JSON content relationships
     CONTAINS_JSON = "CONTAINS_JSON"
     HAS_FIELD = "HAS_FIELD"
@@ -624,7 +605,6 @@ EMBEDDABLE_CODE_NODE_LABELS = (
     "Hotstring",
     "Label",
     "AhkClass",
-    "CodeChunk",
 )
 
 # (H) Method signature formatting
@@ -763,12 +743,6 @@ UNION
 MATCH (m:Module)
 WHERE m.qualified_name STARTS WITH ($project_name + '.')
 MATCH (m)-[:DEFINES]->(n:AhkClass)
-RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
-       n.start_line AS start_line, n.end_line AS end_line, n.path AS path
-UNION
-MATCH (m:Module)
-WHERE m.qualified_name STARTS WITH ($project_name + '.')
-MATCH (m)-[:DEFINES]->(n:CodeChunk)
 RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
        n.start_line AS start_line, n.end_line AS end_line, n.path AS path
 """
@@ -4092,7 +4066,7 @@ MATCH (n)
 WHERE (n:Function OR n:Method OR n:Class OR n:Interface OR n:Enum OR n:Type
        OR n:Union OR n:Contract OR n:Library OR n:Event OR n:Modifier
        OR n:StateVariable OR n:CustomError OR n:Hotkey OR n:Hotstring
-       OR n:Label OR n:AhkClass OR n:Test)
+       OR n:Label OR n:AhkClass)
   AND (n.name IS NULL OR n.qualified_name IS NULL OR n.path IS NULL
        OR n.start_line IS NULL OR n.end_line IS NULL)
 RETURN count(n) AS total_invalid"""

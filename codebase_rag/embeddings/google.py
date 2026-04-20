@@ -64,6 +64,10 @@ class GoogleEmbeddingProvider(EmbeddingProvider):
         # Additional config parameters that may be passed by factory (ignored)
         keep_alive: str | None = None,
         device: str | None = None,
+        ssl_verify: bool = True,
+        proxy: str | None = None,
+        fallback_to_local: bool = True,
+        fallback_model: str = "BAAI/bge-large-en-v1.5",
     ) -> None:
         # Determine dimension from known models or default
         if dimension is None:

@@ -431,25 +431,8 @@ def get_embedding_provider_instance() -> EmbeddingProvider:
         from .embeddings import get_embedding_provider
 
         config = settings.active_embedding_config
-        dimension = config.dimension or settings.get_effective_vector_dim()
 
-        _embedding_provider = get_embedding_provider(
-            provider=config.provider,
-            model_id=config.model_id,
-            dimension=dimension,
-            api_key=config.api_key,
-            endpoint=config.endpoint,
-            keep_alive=config.keep_alive,
-            project_id=config.project_id,
-            region=config.region,
-            provider_type=config.provider_type,
-            service_account_file=config.service_account_file,
-            device=config.device,
-            ssl_verify=config.ssl_verify,
-            proxy=config.proxy,
-            fallback_to_local=config.fallback_to_local,
-            fallback_model=config.fallback_model,
-        )
+        _embedding_provider = get_embedding_provider(config=config)
         _embedding_provider.validate_config()
 
     return _embedding_provider

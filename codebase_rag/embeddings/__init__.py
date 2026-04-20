@@ -10,6 +10,7 @@ from ..config import settings
 from ..exceptions import EmbeddingProviderNotFoundError
 
 if TYPE_CHECKING:
+    from ..config import EmbeddingConfig
     from .base import EmbeddingProvider
     from .local import LocalEmbeddingProvider
 
@@ -44,10 +45,11 @@ def get_embedding_provider_class(provider: str) -> type[EmbeddingProvider]:
 
 
 def get_embedding_provider(
-    provider: str,
-    model_id: str,
+    provider: str | None = None,
+    model_id: str | None = None,
     dimension: int | None = None,
-    **config: str | int | None,
+    config: "EmbeddingConfig | None" = None,
+    **kwargs: str | int | None,
 ) -> EmbeddingProvider:
     """Factory function to create an embedding provider.
 
@@ -55,19 +57,38 @@ def get_embedding_provider(
         provider: Provider name (local, openai, google, ollama).
         model_id: Model identifier.
         dimension: Optional dimension override.
-        **config: Additional provider-specific configuration.
+        config: Optional EmbeddingConfig object. If provided, provider and
+            model_id are extracted from it and other fields are used as kwargs.
+        **kwargs: Additional provider-specific configuration.
 
     Returns:
         Configured embedding provider instance.
 
     Raises:
         EmbeddingProviderNotFoundError: If provider is not registered.
+        ValueError: If neither provider/model_id nor config is provided.
     """
+    if config is not None:
+        provider = config.provider
+        model_id = config.model_id
+        dimension = dimension or config.dimension
+        # Get all config fields, excluding provider, model_id, dimension
+        # dimension is passed separately, not in kwargs
+        provider_kwargs = config.to_provider_kwargs()
+        # Allow explicit kwargs to override config values
+        provider_kwargs.update(kwargs)
+        kwargs = provider_kwargs
+
+    if provider is None or model_id is None:
+        raise ValueError(
+            "Either provider and model_id must be provided, or config must be set"
+        )
+
     cls = get_embedding_provider_class(provider)
     effective_dimension = (
         dimension if dimension is not None else settings.get_effective_vector_dim()
     )
-    return cls(model_id=model_id, dimension=effective_dimension, **config)
+    return cls(model_id=model_id, dimension=effective_dimension, **kwargs)
 
 
 def _bootstrap_providers() -> None:
