@@ -72,6 +72,45 @@ def _validate_model_availability(self, model_config: ModelConfig) -> bool:
 
 The `create_model()` call may not actually validate against the API, leading to a false positive.
 
+**Evidence from logs:**
+```
+2026-04-20 19:16:53.259 | INFO | subagent_orchestrator:initialize_agents:442 - Sub-agent pool initialized with 1 worker LLMs (round-robin assignment)
+```
+
+This shows initialization succeeded with 1 worker LLM, but then:
+```
+2026-04-20 19:16:53.503 | INFO | subagent_orchestrator:_get_fallback_model_config:379 - Using fallback model 'claude-sonnet-4-6' instead of 'claude-sonnet-4-6'
+```
+
+The model passed validation but fails when actually making API calls during task execution.
+
+### Bug 5: Wasted Retry Resources
+
+When all models fail, the system wastes resources on redundant retries:
+
+**From supplementary logs:**
+- 9 subtasks x 3 attempts = 27 API calls
+- All 27 calls fail with same 404 error
+- Total time wasted: 3.84 seconds for zero useful work
+- No early termination when all models are known to be unavailable
+
+### Bug 6: Connection Errors Mixed with 404s
+
+The logs show different error types that should be handled differently:
+
+```
+2026-04-20 19:16:56.861 | WARNING | subtask_5 failed (attempt 2/3): Connection error.
+```
+
+vs
+
+```
+2026-04-20 19:16:56.845 | WARNING | subtask_6 failed (attempt 2/3): status_code: 404
+```
+
+- **404 errors**: Model doesn't exist - should try different model immediately
+- **Connection errors**: Network issue - should retry with same model, then try different model
+
 ## Proposed Solution
 
 ### Fix 1: Exclude Current Model from Fallback Chain
@@ -125,49 +164,29 @@ MODEL_FALLBACK_CHAIN: dict[str, list[str]] = {
 }
 ```
 
-### Fix 3: Improve Model Validation with Actual API Check
+**Note:** The bidirectional cycle (e.g., sonnet -> opus -> sonnet) is safe only because Fix 4 tracks failed models and prevents re-trying them.
 
-Add a lightweight API call to truly validate model availability:
+### Fix 3: Add Failed Model Tracking to Avoid Repeated Attempts
 
-```python
-def _validate_model_availability(self, model_config: ModelConfig) -> bool:
-    """
-    Check if the specified model is available before spawning sub-agents.
-    Performs a lightweight API call to verify availability.
-    Returns True if model is available, False otherwise.
-    """
-    try:
-        provider = get_provider_from_config(model_config)
-        model = provider.create_model(model_config.model_id)
-
-        # Perform a minimal test request to verify the model actually works
-        # This catches 404 errors that create_model() doesn't
-        if hasattr(model, 'validate_availability'):
-            return model.validate_availability()
-
-        # Fallback: try a minimal request if no validate_availability method
-        # Use a simple ping-style request if the provider supports it
-        if hasattr(provider, 'ping_model'):
-            return provider.ping_model(model_config.model_id)
-
-        # Last resort: assume available if we got this far
-        return True
-
-    except Exception as e:
-        logger.warning(
-            f"Model '{model_config.model_id}' is not available: {e}"
-        )
-        return False
-```
-
-### Fix 4: Add Failed Model Tracking to Avoid Repeated Attempts
-
-Track failed models to avoid retrying the same model multiple times:
+Track failed models as an **instance attribute** to avoid retrying the same model multiple times:
 
 ```python
 class SubagentOrchestrator:
-    # ... existing attributes ...
-    _failed_models: set[str] = set()  # Track models that have failed
+    # ... existing class attributes ...
+
+    def __init__(
+        self,
+        worker_count: int | None = None,
+        agent_factory: Callable | None = None,
+        scheduling_strategy: str = "round-robin",
+        repo_path: str | None = None,
+        enable_document_graph: bool = False,
+        query_mode: QueryMode = QueryMode.CODE_ONLY,
+        doc_workspace: str = "default",
+    ):
+        # ... existing __init__ code ...
+        self._failed_models: set[str] = set()  # Track models that have failed
+        self._has_validated_models: bool = False
 
     def _get_fallback_model_config(self, original_config: ModelConfig) -> ModelConfig | None:
         original_model_id = original_config.model_id
@@ -179,7 +198,7 @@ class SubagentOrchestrator:
                 if m != original_model_id
             ]
 
-        # Filter out models that have already failed
+        # Filter out models that have already failed and the original model
         available_fallbacks = [
             m for m in fallback_chain
             if m != original_model_id and m not in self._failed_models
@@ -197,12 +216,101 @@ class SubagentOrchestrator:
                 # Mark this model as failed
                 self._failed_models.add(fallback_model_id)
 
-        # Also mark the original as failed
+        # Mark the original as failed
         self._failed_models.add(original_model_id)
         return None
 ```
 
-### Fix 5: Clear Error Propagation When All Models Fail
+### Fix 4: Differentiate Error Types for Better Retry Strategy
+
+Handle different error types appropriately:
+
+```python
+def _classify_error(self, error_msg: str) -> str:
+    """Classify error type to determine appropriate retry strategy."""
+    error_lower = error_msg.lower()
+    
+    if "404" in error_msg or "resource_not_found" in error_lower or "not found" in error_lower:
+        return "model_unavailable"
+    elif "connection" in error_lower or "timeout" in error_lower or "network" in error_lower:
+        return "network_error"
+    elif "rate_limit" in error_lower or "429" in error_msg:
+        return "rate_limit"
+    elif "auth" in error_lower or "401" in error_msg or "403" in error_msg:
+        return "auth_error"
+    else:
+        return "unknown"
+
+# In execute_tasks error handling:
+error_type = self._classify_error(error_msg)
+
+if error_type == "model_unavailable":
+    # Don't retry same model - switch to fallback immediately
+    self._failed_models.add(current_model_id)
+    fallback_config = self._get_fallback_model_config(current_config)
+    # ... switch to fallback
+    
+elif error_type == "network_error":
+    # Retry same model once, then try fallback
+    if retry_count < 1:
+        # Retry same model
+        remaining_tasks.insert(0, subtask)
+    else:
+        # Try fallback
+        fallback_config = self._get_fallback_model_config(current_config)
+        # ... switch to fallback
+
+elif error_type == "rate_limit":
+    # Wait and retry
+    await asyncio.sleep(2 ** retry_count)
+    remaining_tasks.insert(0, subtask)
+```
+
+### Fix 5: Early Termination When All Models Known Unavailable
+
+Stop retrying once all models in the fallback chain have failed:
+
+```python
+def _get_all_possible_models(self) -> set[str]:
+    """Return the universe of all models that could be used for fallback."""
+    all_models: set[str] = set()
+    # Models from the static fallback chain
+    for chain in self.MODEL_FALLBACK_CHAIN.values():
+        all_models.update(chain)
+    all_models.update(self.MODEL_FALLBACK_CHAIN.keys())
+    # Models from worker LLM configuration
+    for cfg in settings.active_worker_llms:
+        if cfg.model_id:
+            all_models.add(cfg.model_id)
+    # Orchestrator config model
+    orch_cfg = settings.active_orchestrator_config
+    if orch_cfg.model_id:
+        all_models.add(orch_cfg.model_id)
+    return all_models
+
+# In execute_tasks:
+# After a model fails permanently:
+self._failed_models.add(failed_model_id)
+
+# Check if all possible models have failed
+all_possible_models = self._get_all_possible_models()
+if self._failed_models >= all_possible_models:
+    logger.error(
+        f"All models have failed. Terminating parallel execution early. "
+        f"Failed models: {self._failed_models}"
+    )
+    # Mark all remaining tasks as failed
+    for remaining in remaining_tasks:
+        result_aggregator.add_error(
+            remaining,
+            "All LLM models exhausted. No models available for execution.",
+            execution_time=0,
+        )
+    remaining_tasks.clear()
+    break
+```
+
+### Fix 6: Clear Error Propagation When All Models Fail
 
 When no models are available, fail fast with a clear error:
 
@@ -215,7 +323,7 @@ async def execute_tasks(
     dry_run: bool = False,
 ) -> ResultAggregator:
     # Check if we have any validated models before starting
-    if not self.workers or not any(w.agent for w in self.workers):
+    if not self._has_validated_models:
         logger.error(
             "No valid sub-agents available. All models failed validation. "
             f"Failed models: {self._failed_models}"
@@ -233,25 +341,93 @@ async def execute_tasks(
     # ... rest of method
 ```
 
+**Note:** `initialize_agents()` must set `self._has_validated_models = True` when at least one model passes validation.
+
+### Fix 7: Update initialize_agents to Track Validation State
+
+```python
+def initialize_agents(self) -> None:
+    logger.info(f"Initializing {self.worker_count} sub-agents")
+    worker_llms = settings.active_worker_llms
+    num_worker_llms = len(worker_llms)
+
+    # Validate and potentially fallback model configurations
+    validated_worker_llms: list[ModelConfig] = []
+    for llm_config in worker_llms:
+        if self._validate_model_availability(llm_config):
+            validated_worker_llms.append(llm_config)
+        else:
+            self._failed_models.add(llm_config.model_id)
+            # Try to find a fallback model
+            fallback_config = self._get_fallback_model_config(llm_config)
+            if fallback_config:
+                validated_worker_llms.append(fallback_config)
+            else:
+                logger.error(
+                    f"Model '{llm_config.model_id}' is unavailable and no fallback found. "
+                    f"This worker configuration will be skipped."
+                )
+
+    # If no valid models, try orchestrator config as fallback
+    if not validated_worker_llms:
+        orchestrator_config = settings.active_orchestrator_config
+        if self._validate_model_availability(orchestrator_config):
+            logger.warning(
+                "No valid worker LLMs found. Using orchestrator config as fallback."
+            )
+            validated_worker_llms = [orchestrator_config]
+        else:
+            self._failed_models.add(orchestrator_config.model_id)
+            # Try fallback for orchestrator config too
+            fallback_config = self._get_fallback_model_config(orchestrator_config)
+            if fallback_config:
+                logger.warning(
+                    f"Using fallback model '{fallback_config.model_id}' for orchestrator."
+                )
+                validated_worker_llms = [fallback_config]
+
+    # Track whether any models passed validation
+    self._has_validated_models = len(validated_worker_llms) > 0
+
+    # ... rest of existing method
+```
+
 ## Implementation Plan
 
 **File:** `codebase_rag/orchestrator/subagent_orchestrator.py`
 
 1. **Line ~289**: Update `MODEL_FALLBACK_CHAIN` with complete entries for all models
 
-2. **Line ~296** (in `__init__`): Add `_failed_models: set[str] = set()`
+2. **Line ~296** (in `__init__`): Add instance attributes:
+   - `self._failed_models: set[str] = set()`
+   - `self._has_validated_models: bool = False`
 
 3. **Line ~361-384**: Replace `_get_fallback_model_config()` with improved version
 
-4. **Line ~345-359**: Update `_validate_model_availability()` for actual API validation
+4. **Line ~386-448**: Update `initialize_agents()` to track failed models and set `_has_validated_models`
 
-5. **Line ~450**: Add early check for no valid agents in `execute_tasks()`
+5. **Line ~450+**: Add `_get_all_possible_models()` helper method
+
+6. **Line ~450+**: Add `_classify_error()` helper method
+
+7. **Line ~574-627**: Update error handling in `execute_tasks()` to use error classification and early termination
+
+8. **Line ~512**: Add early check for `_has_validated_models` in `execute_tasks()`
 
 ## Testing Strategy
+
+**Test file:** `tests/test_subagent_orchestrator.py`
 
 ### Unit Tests
 
 ```python
+import pytest
+from unittest.mock import patch
+
+from codebase_rag.config import ModelConfig, settings
+from codebase_rag.orchestrator.subagent_orchestrator import SubagentOrchestrator
+
+
 def test_fallback_excludes_current_model():
     """Verify fallback never returns the same model that failed."""
     orchestrator = SubagentOrchestrator()
@@ -292,25 +468,52 @@ def test_all_models_failed_clear_error():
     """Verify clear error when all models fail."""
     orchestrator = SubagentOrchestrator()
     orchestrator._failed_models = {"claude-sonnet-4-6", "claude-opus-4-7", "claude-haiku-4-5"}
+    orchestrator._has_validated_models = False
 
-    # initialize_agents should log error and not create workers
-    with patch.object(settings, 'active_worker_llms', []):
-        orchestrator.initialize_agents()
+    # Should report no validated models
+    assert not orchestrator._has_validated_models
 
-        # Should have no valid workers
-        assert len(orchestrator.workers) == 0 or all(w.agent is None for w in orchestrator.workers)
+
+def test_failed_models_is_instance_level():
+    """Verify failed_models is not shared across instances."""
+    orch1 = SubagentOrchestrator()
+    orch2 = SubagentOrchestrator()
+
+    orch1._failed_models.add("claude-sonnet-4-6")
+
+    assert "claude-sonnet-4-6" in orch1._failed_models
+    assert "claude-sonnet-4-6" not in orch2._failed_models
+
+
+def test_get_all_possible_models_includes_worker_llms():
+    """Verify _get_all_possible_models includes configured worker LLMs."""
+    orchestrator = SubagentOrchestrator()
+
+    with patch.object(settings, 'active_worker_llms', [
+        ModelConfig(model_id="gpt-4o", provider="openai")
+    ]):
+        all_models = orchestrator._get_all_possible_models()
+        assert "gpt-4o" in all_models
 ```
 
 ### Integration Test
 
 ```python
+import pytest
+from unittest.mock import patch
+
+from codebase_rag.orchestrator.subagent_orchestrator import SubagentOrchestrator
+
+
+@pytest.mark.asyncio
 async def test_graceful_degradation_with_unavailable_models():
     """Test that parallel execution fails gracefully when all models 404."""
     orchestrator = SubagentOrchestrator(worker_count=2)
 
     # Mock all models returning 404
-    with patch('codebase_rag.providers.get_provider_from_config') as mock_provider:
-        mock_provider.return_value.create_model.side_effect = Exception("404: Not found")
+    with patch('codebase_rag.orchestrator.subagent_orchestrator.get_provider_from_config') as mock_get_provider:
+        mock_provider = mock_get_provider.return_value
+        mock_provider.create_model.side_effect = Exception("404: Not found")
 
         orchestrator.initialize_agents()
 
@@ -330,25 +533,30 @@ async def test_graceful_degradation_with_unavailable_models():
 - [ ] Complete fallback chain for all Claude model variants
 - [ ] Failed models are tracked and not retried within same session
 - [ ] Clear error message when all models are unavailable
-- [ ] Model validation performs actual API check (not just object creation)
-- [ ] Logs clearly show which model is being tried and why
+- [ ] `_failed_models` is an instance attribute, not a class attribute
+- [ ] `_has_validated_models` flag correctly reflects validation state
+- [ ] Early termination when all models in the expanded universe have failed
+- [ ] No wasted API calls retrying known-unavailable models
 - [ ] Parallel execution either succeeds with valid model or fails fast with clear error
+- [ ] Unit tests cover fallback exclusion, failed-model tracking, and instance isolation
 
 ## Related Files
 
 - `codebase_rag/orchestrator/subagent_orchestrator.py` - Main file to modify
-- `codebase_rag/providers/__init__.py` - May need `ping_model` method
-- `codebase_rag/config.py` - Model configuration
+- `codebase_rag/config.py` - Model configuration and `settings`
+- `tests/test_subagent_orchestrator.py` - New test file to create
 
 ## Migration Notes
 
 This fix is backward compatible. The only behavior change is:
 1. Better fallback logic (no self-referential fallbacks)
-2. Clearer error messages when models fail
-3. No functional changes to the API or configuration
+2. Failed-model tracking prevents redundant attempts
+3. Clearer error messages when models fail
+4. No functional changes to the API or configuration
 
 ## Out of Scope
 
 - Adding new LLM providers
 - Changing the retry count or timeout values
 - Modifying the sub-agent prompt or tool set
+- **True API ping validation**: The existing `create_model()` + `validate_config()` approach is retained. A future spec may add lightweight HTTP pings to provider endpoints, but that requires changes to `codebase_rag/providers/base.py` across all provider implementations and is deferred to keep this fix minimal and low-risk.
