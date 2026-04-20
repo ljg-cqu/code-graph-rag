@@ -236,6 +236,7 @@ class ClassIngestMixin:
                 language,
                 file_path=file_path,
                 repo_path=self.repo_path,
+                is_exported=False,
             )
 
     def _ingest_class_methods(
@@ -284,6 +285,7 @@ class ClassIngestMixin:
                 method_qualified_name,
                 file_path=file_path,
                 repo_path=self.repo_path,
+                is_exported=False,
             )
 
     def _process_inline_modules(

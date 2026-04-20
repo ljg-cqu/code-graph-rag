@@ -116,3 +116,41 @@ def memgraph_ingestor(
 
     ingestor._execute_query("MATCH (n) DETACH DELETE n")
     ingestor.__exit__(None, None, None)
+
+
+@pytest.fixture(scope="function")
+def mock_memgraph_backend():
+    """Mock vector backend for hybrid retrieval tests."""
+    from unittest.mock import MagicMock
+
+    backend = MagicMock()
+    # search returns tuples of (node_id, similarity_score)
+    backend.search.return_value = [
+        (1, 0.9),
+        (2, 0.8),
+        (3, 0.7),
+    ]
+    backend.health_check.return_value = True
+    backend.LABELS_TO_INDEX = ["Function", "Method", "Class"]
+    return backend
+
+
+@pytest.fixture(scope="function")
+def mock_graph_ingestor():
+    """Mock graph ingestor for hybrid retrieval tests."""
+    from unittest.mock import MagicMock
+
+    ingestor = MagicMock()
+    ingestor.get_pagerank_scores.return_value = {"n1": 0.5, "n2": 0.4, "n3": 0.3}
+    ingestor.get_community_scores.return_value = {"n1": 0.6, "n2": 0.5, "n3": 0.4}
+    return ingestor
+
+
+@pytest.fixture(scope="function")
+def mock_embedding_provider():
+    """Mock embedding provider for hybrid retrieval tests."""
+    from unittest.mock import MagicMock
+
+    provider = MagicMock()
+    provider.embed.return_value = [0.1] * 768
+    return provider

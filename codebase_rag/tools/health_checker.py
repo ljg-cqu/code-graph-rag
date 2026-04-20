@@ -989,6 +989,20 @@ class HealthChecker:
                 )
             )
 
+        except QueryExecutionError as e:
+            # Handle query execution errors with full context
+            error_detail = str(e)
+            logger.warning(
+                f"Quality validation query failed: {error_detail}"
+            )
+            results.append(
+                HealthCheckResult(
+                    name=cs.HEALTH_CHECK_INGESTION_VALIDATION_FAILED,
+                    passed=False,
+                    message=cs.HEALTH_CHECK_INGESTION_VALIDATION_ERROR_MSG,
+                    error=error_detail,
+                )
+            )
         except Exception as e:
             error_detail = str(e)
             if settings.LOG_QUALITY_CHECK_STACKTRACES:

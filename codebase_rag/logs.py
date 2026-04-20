@@ -235,6 +235,14 @@ MG_NODES_SKIPPED = (
 )
 MG_CALLS_FAILED = "Failed to create {count} CALLS relationships - nodes may not exist"
 MG_CALLS_SAMPLE = "  Sample {index}: {from_label}.{from_val} -> {to_label}.{to_val}"
+MG_REL_FLUSH_FAILURES = (
+    "Relationship flush failures for {rel_type}: {failed}/{total} failed "
+    "({from_label} -> {to_label})"
+)
+MG_REL_FLUSH_FAILURE_SAMPLE = (
+    "  Sample failure {index}: {from_label}.{from_val} -> {to_label}.{to_val} "
+    "(props: {props})"
+)
 MG_RELS_FLUSHED = (
     "Flushed {total} relationships ({success} successful, {failed} failed)."
 )

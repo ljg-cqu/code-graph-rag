@@ -1106,25 +1106,56 @@ class MemgraphIngestor:
                 target_conn, query, params_list
             )
         batch_successful = 0
-        for r in results:
+        failed_indices: list[int] = []
+        for i, r in enumerate(results):
             created = r.get(KEY_CREATED, 0)
             if isinstance(created, int):
                 batch_successful += created
+            else:
+                failed_indices.append(i)
 
-        if rel_type == REL_TYPE_CALLS:
-            failed = len(params_list) - batch_successful
-            if failed > 0:
-                logger.debug(ls.MG_CALLS_FAILED.format(count=failed))
-                for i, sample in enumerate(params_list[:3]):
-                    logger.debug(
-                        ls.MG_CALLS_SAMPLE.format(
-                            index=i + 1,
-                            from_label=from_label,
-                            from_val=sample[KEY_FROM_VAL],
-                            to_label=to_label,
-                            to_val=sample[KEY_TO_VAL],
-                        )
+        # Log failures for all relationship types (not just CALLS)
+        failed = len(params_list) - batch_successful
+        if failed > 0:
+            failure_rate = failed / len(params_list)
+            # Log at WARNING if high failure rate, DEBUG otherwise
+            log_fn = logger.warning if failure_rate > 0.1 else logger.debug
+            log_fn(
+                ls.MG_REL_FLUSH_FAILURES.format(
+                    rel_type=rel_type,
+                    failed=failed,
+                    total=len(params_list),
+                    from_label=from_label,
+                    to_label=to_label,
+                )
+            )
+            # Log sample failures for diagnosis (up to 3)
+            for idx, failed_idx in enumerate(failed_indices[:3]):
+                sample = params_list[failed_idx]
+                log_fn(
+                    ls.MG_REL_FLUSH_FAILURE_SAMPLE.format(
+                        index=idx + 1,
+                        from_label=from_label,
+                        from_val=sample[KEY_FROM_VAL],
+                        to_label=to_label,
+                        to_val=sample[KEY_TO_VAL],
+                        props=sample.get(KEY_PROPS, {}),
                     )
+                )
+
+        # Keep existing CALLS-specific debug logging for backward compatibility
+        if rel_type == REL_TYPE_CALLS and failed > 0:
+            logger.debug(ls.MG_CALLS_FAILED.format(count=failed))
+            for i, sample in enumerate(params_list[:3]):
+                logger.debug(
+                    ls.MG_CALLS_SAMPLE.format(
+                        index=i + 1,
+                        from_label=from_label,
+                        from_val=sample[KEY_FROM_VAL],
+                        to_label=to_label,
+                        to_val=sample[KEY_TO_VAL],
+                    )
+                )
 
         return len(params_list), batch_successful
 

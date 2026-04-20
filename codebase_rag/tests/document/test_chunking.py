@@ -34,9 +34,12 @@ class TestDocumentChunk:
         assert chunk.token_count == 10
 
     def test_qualified_name(self):
-        """Test qualified_name property."""
+        """Test qualified_name property includes content hash."""
+        import hashlib
+
+        content = "Content"
         chunk = DocumentChunk(
-            content="Content",
+            content=content,
             section_title="Getting Started",
             start_line=0,
             end_line=10,
@@ -44,7 +47,8 @@ class TestDocumentChunk:
             document_path="/test/doc.md",
             chunk_index=2,
         )
-        assert chunk.qualified_name == "/test/doc.md#chunk_2"
+        expected_hash = hashlib.sha256(content.encode()).hexdigest()[:8]
+        assert chunk.qualified_name == f"/test/doc.md#chunk_{expected_hash}_2"
 
 
 class TestSemanticDocumentChunker:
@@ -1056,9 +1060,12 @@ class TestChunkIndexUniqueness:
             f"Duplicate qualified_name values: {qualified_names}"
         )
 
-        # Verify format: path#chunk_N
+        # Verify format: path#chunk_{hash}_{index}
+        import hashlib
+
         for chunk in chunks:
-            expected = f"{chunk.document_path}#chunk_{chunk.chunk_index}"
+            content_hash = hashlib.sha256(chunk.content.encode()).hexdigest()[:8]
+            expected = f"{chunk.document_path}#chunk_{content_hash}_{chunk.chunk_index}"
             assert chunk.qualified_name == expected, (
                 f"qualified_name mismatch: {chunk.qualified_name} != {expected}"
             )

@@ -2,11 +2,15 @@
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from codebase_rag.shared.query_router import ValidationReport
 from codebase_rag.shared.validation.cache import (
     CachedValidation,
     ValidationCache,
 )
+
+pytestmark = [pytest.mark.anyio]
 
 
 class TestCachedValidation:
@@ -59,10 +63,10 @@ class TestCachedValidation:
 class TestValidationCache:
     """Tests for ValidationCache class."""
 
-    def test_init(self):
+    async def test_init(self):
         """Cache initializes empty."""
         cache = ValidationCache()
-        assert cache.size() == 0
+        assert await cache.size() == 0
 
     def test_compute_key(self):
         """Key computation is deterministic."""
@@ -102,7 +106,7 @@ class TestValidationCache:
         )
         assert key1 != key2
 
-    def test_set_and_get(self):
+    async def test_set_and_get(self):
         """Set and get cached validation."""
         cache = ValidationCache()
         report = ValidationReport(
@@ -111,7 +115,7 @@ class TestValidationCache:
             failed=0,
             direction="CODE_VS_DOC",
         )
-        cache.set(
+        await cache.set(
             document_path="/docs/api.md",
             document_hash="abc",
             code_graph_hash="def",
@@ -119,9 +123,9 @@ class TestValidationCache:
             scope="all",
             report=report,
         )
-        assert cache.size() == 1
+        assert await cache.size() == 1
 
-        cached = cache.get(
+        cached = await cache.get(
             document_path="/docs/api.md",
             document_hash="abc",
             code_graph_hash="def",
@@ -131,7 +135,7 @@ class TestValidationCache:
         assert cached is not None
         assert cached.report.total == 5
 
-    def test_get_expired_returns_none(self):
+    async def test_get_expired_returns_none(self):
         """Expired cache entries return None."""
         cache = ValidationCache()
         report = ValidationReport(
@@ -141,7 +145,7 @@ class TestValidationCache:
             direction="CODE_VS_DOC",
         )
         # Set with normal TTL
-        cache.set(
+        await cache.set(
             document_path="/docs/api.md",
             document_hash="abc",
             code_graph_hash="def",
@@ -152,7 +156,7 @@ class TestValidationCache:
         )
 
         # Get the cached entry
-        cached = cache.get(
+        cached = await cache.get(
             document_path="/docs/api.md",
             document_hash="abc",
             code_graph_hash="def",
@@ -163,7 +167,7 @@ class TestValidationCache:
         assert cached is not None
         assert cached.expires_at > datetime.now(UTC)
 
-    def test_invalidate_document(self):
+    async def test_invalidate_document(self):
         """Invalidate all cached validations for a document."""
         cache = ValidationCache()
         report = ValidationReport(
@@ -174,7 +178,7 @@ class TestValidationCache:
         )
 
         # Add multiple entries for same document
-        cache.set(
+        await cache.set(
             document_path="/docs/api.md",
             document_hash="abc",
             code_graph_hash="def",
@@ -182,7 +186,7 @@ class TestValidationCache:
             scope="all",
             report=report,
         )
-        cache.set(
+        await cache.set(
             document_path="/docs/api.md",
             document_hash="abc2",
             code_graph_hash="def",
@@ -190,7 +194,7 @@ class TestValidationCache:
             scope="sections",
             report=report,
         )
-        cache.set(
+        await cache.set(
             document_path="/docs/other.md",
             document_hash="xyz",
             code_graph_hash="def",
@@ -199,12 +203,12 @@ class TestValidationCache:
             report=report,
         )
 
-        assert cache.size() == 3
-        removed = cache.invalidate_document("/docs/api.md")
+        assert await cache.size() == 3
+        removed = await cache.invalidate_document("/docs/api.md")
         assert removed == 2
-        assert cache.size() == 1
+        assert await cache.size() == 1
 
-    def test_invalidate_code_graph(self):
+    async def test_invalidate_code_graph(self):
         """Invalidate all CODE_VS_DOC results when code graph changes."""
         cache = ValidationCache()
         report = ValidationReport(
@@ -215,7 +219,7 @@ class TestValidationCache:
         )
 
         # Add entries for both modes
-        cache.set(
+        await cache.set(
             document_path="/docs/a.md",
             document_hash="abc",
             code_graph_hash="old",
@@ -223,7 +227,7 @@ class TestValidationCache:
             scope="all",
             report=report,
         )
-        cache.set(
+        await cache.set(
             document_path="/docs/b.md",
             document_hash="def",
             code_graph_hash="old",
@@ -232,12 +236,12 @@ class TestValidationCache:
             report=report,
         )
 
-        assert cache.size() == 2
-        removed = cache.invalidate_code_graph()
+        assert await cache.size() == 2
+        removed = await cache.invalidate_code_graph()
         assert removed == 1
-        assert cache.size() == 1
+        assert await cache.size() == 1
 
-    def test_clear(self):
+    async def test_clear(self):
         """Clear all cached entries."""
         cache = ValidationCache()
         report = ValidationReport(
@@ -248,7 +252,7 @@ class TestValidationCache:
         )
 
         for i in range(5):
-            cache.set(
+            await cache.set(
                 document_path=f"/docs/{i}.md",
                 document_hash=f"hash{i}",
                 code_graph_hash="graph",
@@ -257,11 +261,11 @@ class TestValidationCache:
                 report=report,
             )
 
-        assert cache.size() == 5
-        cache.clear()
-        assert cache.size() == 0
+        assert await cache.size() == 5
+        await cache.clear()
+        assert await cache.size() == 0
 
-    def test_get_stats(self):
+    async def test_get_stats(self):
         """Get cache statistics."""
         cache = ValidationCache()
         report = ValidationReport(
@@ -271,7 +275,7 @@ class TestValidationCache:
             direction="CODE_VS_DOC",
         )
 
-        cache.set(
+        await cache.set(
             document_path="/docs/api.md",
             document_hash="abc",
             code_graph_hash="def",
@@ -280,12 +284,12 @@ class TestValidationCache:
             report=report,
         )
 
-        stats = cache.get_stats()
+        stats = await cache.get_stats()
         assert stats["total_entries"] == 1
         assert stats["valid_entries"] == 1
         assert stats["expired_entries"] == 0
 
-    def test_evict_oldest(self):
+    async def test_evict_oldest(self):
         """Cache evicts oldest entries when over limit."""
         cache = ValidationCache()
         # Temporarily lower limit for testing
@@ -299,7 +303,7 @@ class TestValidationCache:
 
         # Add more entries than limit
         for i in range(10):
-            cache.set(
+            await cache.set(
                 document_path=f"/docs/{i}.md",
                 document_hash=f"hash{i}",
                 code_graph_hash="graph",
@@ -309,16 +313,17 @@ class TestValidationCache:
             )
 
         # Cache should have evicted some entries
-        assert cache.size() <= 10  # May have evicted or not depending on timing
+        size = await cache.size()
+        assert size <= 10  # May have evicted or not depending on timing
 
 
 class TestValidationCacheEdgeCases:
     """Edge case tests for ValidationCache."""
 
-    def test_get_nonexistent_key(self):
+    async def test_get_nonexistent_key(self):
         """Getting nonexistent key returns None."""
         cache = ValidationCache()
-        result = cache.get(
+        result = await cache.get(
             document_path="/nonexistent.md",
             document_hash="abc",
             code_graph_hash="def",
@@ -327,10 +332,10 @@ class TestValidationCacheEdgeCases:
         )
         assert result is None
 
-    def test_invalidate_nonexistent_document(self):
+    async def test_invalidate_nonexistent_document(self):
         """Invalidating nonexistent document returns 0."""
         cache = ValidationCache()
-        removed = cache.invalidate_document("/nonexistent.md")
+        removed = await cache.invalidate_document("/nonexistent.md")
         assert removed == 0
 
     def test_custom_backend(self):
