@@ -107,12 +107,16 @@ _RESOURCE_EXHAUSTION_MARKERS = frozenset(
 _TRANSIENT_NETWORK_MARKERS = frozenset(
     {
         "broken pipe",
+        "bad session",
         "connection reset",
+        "connection aborted",
         "connection refused",
         "connection closed",
         "server closed the connection",
         "network is unreachable",
         "temporarily unavailable",
+        "socket",
+        "transport",
         "failed to send chunk data",
         "failed to send message end marker",
     }
@@ -122,6 +126,16 @@ _TRANSIENT_NETWORK_MARKERS = frozenset(
 def classify_memgraph_failure(error: Exception) -> FailureClassification:
     """Classify a Memgraph failure and determine recovery strategy."""
     message = str(error).lower()
+
+    # Not connected errors (ingestor not initialized, don't retry)
+    if "not connected" in message:
+        return FailureClassification(
+            failure_type=FailureType.UNKNOWN,
+            message="Not connected to Memgraph",
+            should_retry=False,
+            max_retries=0,
+            recovery_action="connect",
+        )
 
     # Check syntax errors first (most specific)
     if any(m in message for m in _SYNTAX_ERROR_MARKERS):

@@ -260,6 +260,12 @@ MG_NO_CONN_NODES = "No database connection for label '{label}', skipping flush."
 MG_NO_CONN_RELS = (
     "No database connection for relationship group '{pattern}', skipping flush."
 )
+MG_FLUSH_TIMEOUT = (
+    "Flush timed out after {timeout}s ({pending} of {total} groups still pending)"
+)
+MG_FLUSH_NO_PROGRESS = (
+    "No flush progress for {interval}s, {pending} groups pending"
+)
 MG_FETCH_QUERY = "Executing fetch query: {query} with params: {params}"
 MG_WRITE_QUERY = "Executing write query: {query} with params: {params}"
 MG_EXPORTING = "Exporting graph data..."

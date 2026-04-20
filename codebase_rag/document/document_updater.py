@@ -433,104 +433,94 @@ class DocumentGraphUpdater:
             await asyncio.to_thread(self._refresh_code_reference_index)
 
             try:
-                async with MemgraphIngestor(
-                    host=self.host,
-                    port=self.port,
-                    batch_size=self.batch_size,
-                    connection_timeout=settings.DOC_MEMGRAPH_CONNECTION_TIMEOUT,
-                ) as ingestor:
-                    await asyncio.to_thread(ingestor.ensure_constraints)
-                    await asyncio.to_thread(self._ensure_vector_index, ingestor)
-                    await asyncio.to_thread(self._ensure_document_indexes, ingestor)
-                    await asyncio.to_thread(self._refresh_code_reference_index)
-                    documents = await asyncio.to_thread(self._collect_documents)
-                    await asyncio.to_thread(
-                        self._delete_stale_documents, documents, ingestor
+                documents = await asyncio.to_thread(self._collect_documents)
+                await asyncio.to_thread(
+                    self._delete_stale_documents, documents, ingestor
+                )
+                stats["total_documents"] = len(documents)
+
+                total_documents = len(documents)
+                logger.info(f"Found {total_documents} documents to index")
+
+                for index, doc_path in enumerate(documents, start=1):
+                    logger.info(
+                        f"Indexing document {index}/{total_documents}: {doc_path}"
                     )
-                    stats["total_documents"] = len(documents)
-
-                    total_documents = len(documents)
-                    logger.info(f"Found {total_documents} documents to index")
-
-                    for index, doc_path in enumerate(documents, start=1):
-                        logger.info(
-                            f"Indexing document {index}/{total_documents}: {doc_path}"
-                        )
-                        try:
-                            result = await self._process_document_async(
-                                doc_path, ingestor, force=force
-                            )
-                            if result == "indexed":
-                                stats["indexed"] += 1
-                            elif result == "skipped":
-                                stats["skipped"] += 1
-                        except ExtractionException as e:
-                            logger.error(
-                                f"Failed to process {doc_path}: {type(e).__name__}: {e}"
-                            )
-                            stats["failed"] += 1
-                            self.version_cache.remove(str(doc_path))
-                            try:
-                                self.dead_letter_queue.enqueue(e.to_extraction_error())
-                            except Exception as dlq_error:
-                                logger.warning(
-                                    f"Could not enqueue error for {doc_path}: {dlq_error}"
-                                )
-                        except Exception as e:
-                            logger.error(
-                                f"Failed to process {doc_path}: {type(e).__name__}: {e}"
-                            )
-                            stats["failed"] += 1
-                            self.version_cache.remove(str(doc_path))
-                            try:
-                                self.dead_letter_queue.enqueue(
-                                    ExtractionError(
-                                        path=str(doc_path),
-                                        error_type=self._map_error_type(e),
-                                        message=str(e),
-                                    )
-                                )
-                            except Exception as dlq_error:
-                                logger.warning(
-                                    f"Could not enqueue error for {doc_path}: {dlq_error}"
-                                )
-
                     try:
-                        await asyncio.to_thread(ingestor.flush_all)
+                        result = await self._process_document_async(
+                            doc_path, ingestor, force=force
+                        )
+                        if result == "indexed":
+                            stats["indexed"] += 1
+                        elif result == "skipped":
+                            stats["skipped"] += 1
+                    except ExtractionException as e:
+                        logger.error(
+                            f"Failed to process {doc_path}: {type(e).__name__}: {e}"
+                        )
+                        stats["failed"] += 1
+                        self.version_cache.remove(str(doc_path))
+                        try:
+                            self.dead_letter_queue.enqueue(e.to_extraction_error())
+                        except Exception as dlq_error:
+                            logger.warning(
+                                f"Could not enqueue error for {doc_path}: {dlq_error}"
+                            )
                     except Exception as e:
                         logger.error(
-                            f"Failed to flush batch to graph: {type(e).__name__}: {e}"
+                            f"Failed to process {doc_path}: {type(e).__name__}: {e}"
                         )
-                        stats["failed"] += stats["indexed"]
-                        stats["indexed"] = 0
-                        self.version_cache.clear()
-                        raise
-
-                    try:
-                        section_result = await asyncio.to_thread(
-                            ingestor.fetch_all,
-                            "MATCH (s:Section {workspace: $ws}) RETURN count(s) as count",
-                            {"ws": self.workspace},
-                        )
-                        chunk_result = await asyncio.to_thread(
-                            ingestor.fetch_all,
-                            "MATCH (c:Chunk {workspace: $ws}) RETURN count(c) as count",
-                            {"ws": self.workspace},
-                        )
-                        if section_result and len(section_result) > 0:
-                            stats["sections_created"] = section_result[0].get(
-                                "count", 0
+                        stats["failed"] += 1
+                        self.version_cache.remove(str(doc_path))
+                        try:
+                            self.dead_letter_queue.enqueue(
+                                ExtractionError(
+                                    path=str(doc_path),
+                                    error_type=self._map_error_type(e),
+                                    message=str(e),
+                                )
                             )
-                        if chunk_result and len(chunk_result) > 0:
-                            stats["chunks_created"] = chunk_result[0].get("count", 0)
-                    except Exception as e:
-                        logger.warning(f"Could not query stats from graph: {e}")
+                        except Exception as dlq_error:
+                            logger.warning(
+                                f"Could not enqueue error for {doc_path}: {dlq_error}"
+                            )
 
-                    try:
-                        logger.debug("Saving version cache to disk")
-                        await asyncio.to_thread(self.version_cache.save)
-                    except Exception as e:
-                        logger.warning(f"Could not save version cache: {e}")
+                try:
+                    await asyncio.to_thread(ingestor.flush_all)
+                except Exception as e:
+                    logger.error(
+                        f"Failed to flush batch to graph: {type(e).__name__}: {e}"
+                    )
+                    stats["failed"] += stats["indexed"]
+                    stats["indexed"] = 0
+                    self.version_cache.clear()
+                    raise
+
+                try:
+                    section_result = await asyncio.to_thread(
+                        ingestor.fetch_all,
+                        "MATCH (s:Section {workspace: $ws}) RETURN count(s) as count",
+                        {"ws": self.workspace},
+                    )
+                    chunk_result = await asyncio.to_thread(
+                        ingestor.fetch_all,
+                        "MATCH (c:Chunk {workspace: $ws}) RETURN count(c) as count",
+                        {"ws": self.workspace},
+                    )
+                    if section_result and len(section_result) > 0:
+                        stats["sections_created"] = section_result[0].get(
+                            "count", 0
+                        )
+                    if chunk_result and len(chunk_result) > 0:
+                        stats["chunks_created"] = chunk_result[0].get("count", 0)
+                except Exception as e:
+                    logger.warning(f"Could not query stats from graph: {e}")
+
+                try:
+                    logger.debug("Saving version cache to disk")
+                    await asyncio.to_thread(self.version_cache.save)
+                except Exception as e:
+                    logger.warning(f"Could not save version cache: {e}")
 
                 logger.info(f"Document indexing complete: {stats}")
                 return stats

@@ -530,6 +530,11 @@ class AppConfig(BaseSettings):
 
     FLUSH_THREAD_POOL_SIZE: int = Field(default=4, gt=0)
     FILE_FLUSH_INTERVAL: int = Field(default=500, gt=0)
+    FLUSH_OPERATION_TIMEOUT: int = Field(default=60, gt=0)
+    """Timeout in seconds for parallel flush operations (nodes/relationships).
+    Prevents indefinite blocking when Memgraph is unresponsive or deadlocked."""
+    FLUSH_PROGRESS_LOG_INTERVAL: float = Field(default=5.0, gt=0)
+    """Interval in seconds between progress warnings during long-running flushes."""
 
     # Parallel indexing settings
     PARALLEL_INDEXING_WORKERS: int = Field(default=30, gt=0)

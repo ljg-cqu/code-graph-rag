@@ -7,7 +7,7 @@ import time
 import types
 from collections import defaultdict
 from collections.abc import Generator, Sequence
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextlib import contextmanager, nullcontext
 from datetime import UTC, datetime
 
@@ -132,7 +132,7 @@ class MemgraphIngestor:
             raise ValueError(ex.BATCH_SIZE)
         self.batch_size = batch_size
         self._use_merge = use_merge
-        self._conn_lock = threading.Lock()
+        self._conn_lock = threading.RLock()
         self._executor: ThreadPoolExecutor | None = None
         self.conn: mgclient.Connection | None = None
         self.node_buffer: list[tuple[str, dict[str, PropertyValue]]] = []
@@ -142,7 +142,7 @@ class MemgraphIngestor:
         ] = defaultdict(list)
         self._dynamic_algorithms_supported: bool | None = None
         self._connection_timeout = connection_timeout
-        self._last_health_check = 0.0
+        self._last_health_check = time.time()
         self._health_check_interval = 30.0  # Check connection health every 30 seconds
 
     @property
@@ -331,12 +331,16 @@ class MemgraphIngestor:
             return True
 
         try:
-            # Simple health check query
-            with self._get_cursor() as cursor:
+            # Simple health check query — use cursor directly to avoid
+            # recursion through _get_cursor() → _ensure_connection().
+            cursor = self.conn.cursor()
+            try:
                 cursor.execute("RETURN 1")
-                results = cursor.fetchall()
+                cursor.fetchall()
                 self._last_health_check = current_time
-                return bool(results and results[0][0] == 1)
+                return True
+            finally:
+                cursor.close()
         except Exception:
             # Connection is unhealthy
             self._last_health_check = current_time
@@ -344,13 +348,14 @@ class MemgraphIngestor:
 
     def _ensure_connection(self) -> None:
         """Ensure we have a healthy connection, reconnecting if necessary."""
-        if not self.conn or not self._check_connection_health():
-            if self.conn:
-                try:
-                    self.conn.close()
-                except Exception:
-                    pass
-            self.conn = self._create_connection_with_timeout()  # <-- CHANGED
+        if not self.conn:
+            return
+        if not self._check_connection_health():
+            try:
+                self.conn.close()
+            except Exception:
+                pass
+            self.conn = self._create_connection_with_timeout()
 
     @classmethod
     def _is_retryable_memgraph_error(cls, error: Exception) -> bool:
@@ -377,10 +382,17 @@ class MemgraphIngestor:
         attempt: int,
         max_attempts: int,
     ) -> bool:
-        from .failure_classifier import classify_memgraph_failure
+        from .failure_classifier import FailureType, classify_memgraph_failure
 
         classification = classify_memgraph_failure(error)
         if not classification.should_retry:
+            return False
+        # Only retry known transient error types, not generic unknown errors
+        if classification.failure_type not in (
+            FailureType.TRANSIENT_NETWORK,
+            FailureType.TRANSIENT_TIMEOUT,
+            FailureType.RESOURCE_EXHAUSTION,
+        ):
             return False
         return attempt < min(max_attempts, classification.max_retries + 1)
 
@@ -451,12 +463,11 @@ class MemgraphIngestor:
                     logger.error(f"Authentication/permission failure: {e}")
                     raise
 
-                if (
-                    classification.should_retry
-                    and attempt < min(max_attempts, classification.max_retries + 1)
+                if self._should_retry_shared_connection_error(
+                    e, attempt, max_attempts
                 ):
                     logger.warning(
-                        f"Retryable error (attempt {attempt}/{classification.max_retries}): {e}"
+                        f"Retryable error (attempt {attempt}/{max_attempts}): {e}"
                     )
                     try:
                         self._reset_shared_connection()
@@ -585,13 +596,35 @@ class MemgraphIngestor:
     def _create_connection_with_timeout(self) -> mgclient.Connection:
         """Create connection with timeout enforcement.
 
-        Uses threading to enforce connection timeout since mgclient.connect()
-        doesn't support a timeout parameter natively. If the connection attempt
-        times out, any connection object that may have been created by the
-        background thread is closed to prevent connection leaks.
+        Worker threads inside ThreadPoolExecutor must not spawn child threads,
+        as nested thread creation causes futex deadlocks on Linux. When called
+        from the main thread (or a process worker), the original threaded
+        timeout is preserved. When called from a worker thread, a socket
+        pre-check is used instead.
         """
         timeout = self._get_connection_timeout()
 
+        if threading.current_thread() is not threading.main_thread():
+            # Worker thread: use socket pre-check to avoid nested threads
+            try:
+                with socket.create_connection(
+                    (self._host, self._port),
+                    timeout=min(timeout, 30.0),
+                ):
+                    pass
+            except socket.timeout as e:
+                raise TimeoutError(
+                    f"Connection to Memgraph at {self._host}:{self._port} "
+                    f"timed out after {timeout}s. Check if Memgraph is running "
+                    f"and accessible."
+                ) from e
+            except OSError as e:
+                raise ConnectionError(
+                    f"Cannot connect to Memgraph at {self._host}:{self._port}: {e}"
+                ) from e
+            return self._create_connection()
+
+        # Main thread: safe to use threaded timeout
         result: list[mgclient.Connection | None] = [None]
         error: list[Exception | None] = [None]
 
@@ -1072,16 +1105,52 @@ class MemgraphIngestor:
                 ): label
                 for label, props_list in nodes_by_label.items()
             }
-            for future in as_completed(futures):
-                label = futures[future]
-                try:
-                    flushed, skipped = future.result()
-                    flushed_total += flushed
-                    skipped_total += skipped
-                except Exception as e:
-                    logger.error(ls.MG_LABEL_FLUSH_ERROR.format(label=label, error=e))
-                    if first_error is None:
-                        first_error = e
+            pending = set(futures.keys())
+            start_time = time.monotonic()
+
+            while pending:
+                elapsed = time.monotonic() - start_time
+                remaining = settings.FLUSH_OPERATION_TIMEOUT - elapsed
+                if remaining <= 0:
+                    for future in pending:
+                        future.cancel()
+                    raise ex.FlushTimeoutError(
+                        ls.MG_FLUSH_TIMEOUT.format(
+                            timeout=settings.FLUSH_OPERATION_TIMEOUT,
+                            pending=len(pending),
+                            total=len(futures),
+                        )
+                    )
+
+                done, pending = wait(
+                    pending,
+                    timeout=min(
+                        remaining, settings.FLUSH_PROGRESS_LOG_INTERVAL
+                    ),
+                    return_when=FIRST_COMPLETED,
+                )
+
+                if not done:
+                    logger.warning(
+                        ls.MG_FLUSH_NO_PROGRESS.format(
+                            interval=settings.FLUSH_PROGRESS_LOG_INTERVAL,
+                            pending=len(pending),
+                        )
+                    )
+                    continue
+
+                for future in done:
+                    label = futures[future]
+                    try:
+                        flushed, skipped = future.result()
+                        flushed_total += flushed
+                        skipped_total += skipped
+                    except Exception as e:
+                        logger.error(
+                            ls.MG_LABEL_FLUSH_ERROR.format(label=label, error=e)
+                        )
+                        if first_error is None:
+                            first_error = e
         else:
             for label, props_list in nodes_by_label.items():
                 try:
@@ -1206,16 +1275,52 @@ class MemgraphIngestor:
                 ): pattern
                 for pattern, params_list in self._rel_groups.items()
             }
-            for future in as_completed(futures):
-                pattern = futures[future]
-                try:
-                    attempted, successful = future.result()
-                    total_attempted += attempted
-                    total_successful += successful
-                except Exception as e:
-                    logger.error(ls.MG_REL_FLUSH_ERROR.format(pattern=pattern, error=e))
-                    if first_error is None:
-                        first_error = e
+            pending = set(futures.keys())
+            start_time = time.monotonic()
+
+            while pending:
+                elapsed = time.monotonic() - start_time
+                remaining = settings.FLUSH_OPERATION_TIMEOUT - elapsed
+                if remaining <= 0:
+                    for future in pending:
+                        future.cancel()
+                    raise ex.FlushTimeoutError(
+                        ls.MG_FLUSH_TIMEOUT.format(
+                            timeout=settings.FLUSH_OPERATION_TIMEOUT,
+                            pending=len(pending),
+                            total=len(futures),
+                        )
+                    )
+
+                done, pending = wait(
+                    pending,
+                    timeout=min(
+                        remaining, settings.FLUSH_PROGRESS_LOG_INTERVAL
+                    ),
+                    return_when=FIRST_COMPLETED,
+                )
+
+                if not done:
+                    logger.warning(
+                        ls.MG_FLUSH_NO_PROGRESS.format(
+                            interval=settings.FLUSH_PROGRESS_LOG_INTERVAL,
+                            pending=len(pending),
+                        )
+                    )
+                    continue
+
+                for future in done:
+                    pattern = futures[future]
+                    try:
+                        attempted, successful = future.result()
+                        total_attempted += attempted
+                        total_successful += successful
+                    except Exception as e:
+                        logger.error(
+                            ls.MG_REL_FLUSH_ERROR.format(pattern=pattern, error=e)
+                        )
+                        if first_error is None:
+                            first_error = e
         else:
             for pattern, params_list in self._rel_groups.items():
                 try:

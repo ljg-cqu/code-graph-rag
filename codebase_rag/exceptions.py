@@ -408,6 +408,19 @@ class DimensionMismatchError(EmbeddingError):
 EmbeddingDimensionMismatchError = DimensionMismatchError
 
 
+class CodebaseRAGError(Exception):
+    """Base exception for Code Graph RAG errors."""
+
+    pass
+
+
+class FlushTimeoutError(CodebaseRAGError):
+    """Raised when a flush operation exceeds its configured timeout."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+
+
 class QueryExecutionError(Exception):
     """Raised when a Memgraph query fails with context."""
 
