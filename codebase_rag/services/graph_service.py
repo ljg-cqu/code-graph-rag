@@ -297,12 +297,21 @@ class MemgraphIngestor:
                     cursor.close()
 
     def _cursor_to_results(self, cursor: CursorProtocol) -> list[ResultRow]:
-        if not cursor.description:
+        try:
+            if not cursor.description:
+                return []
+            column_names = [desc.name for desc in cursor.description]
+            return [
+                dict[str, ResultValue](zip(column_names, row)) for row in cursor.fetchall()
+            ]
+        except Exception as e:
+            # Consume any pending results to clear exception state
+            try:
+                cursor.fetchall()
+            except Exception:
+                pass
+            logger.error(f"Cursor result conversion failed: {e}")
             return []
-        column_names = [desc.name for desc in cursor.description]
-        return [
-            dict[str, ResultValue](zip(column_names, row)) for row in cursor.fetchall()
-        ]
 
     def _check_connection_health(self) -> bool:
         """Check if the current connection is still healthy.

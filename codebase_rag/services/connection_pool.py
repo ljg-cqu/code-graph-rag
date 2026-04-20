@@ -201,10 +201,18 @@ class PooledMemgraphProxy:
     ) -> list[ResultRow]:
         with self._get_cursor() as cursor:
             cursor.execute(query, params or {})
-            if not cursor.description:
+            try:
+                if not cursor.description:
+                    return []
+                column_names = [desc.name for desc in cursor.description]
+                return [dict[str, Any](zip(column_names, row)) for row in cursor.fetchall()]
+            except Exception as e:
+                try:
+                    cursor.fetchall()
+                except Exception:
+                    pass
+                logger.error(f"Cursor result conversion failed: {e}")
                 return []
-            column_names = [desc.name for desc in cursor.description]
-            return [dict[str, Any](zip(column_names, row)) for row in cursor.fetchall()]
 
     async def fetch_all_async(
         self, query: str, params: PropertyDict | None = None

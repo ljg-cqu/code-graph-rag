@@ -70,10 +70,18 @@ class WorkerConnection:
             cursor = conn.cursor()
             try:
                 cursor.execute(query, params)
-                if not cursor.description:
+                try:
+                    if not cursor.description:
+                        return []
+                    columns = [desc.name for desc in cursor.description]
+                    return [dict(zip(columns, row)) for row in cursor.fetchall()]
+                except Exception as e:
+                    try:
+                        cursor.fetchall()
+                    except Exception:
+                        pass
+                    logger.error(f"Cursor result conversion failed: {e}")
                     return []
-                columns = [desc.name for desc in cursor.description]
-                return [dict(zip(columns, row)) for row in cursor.fetchall()]
             finally:
                 cursor.close()
 

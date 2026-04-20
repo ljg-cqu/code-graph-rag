@@ -687,7 +687,7 @@ class GraphUpdater:
                                     count=buffered_node_count_since_flush
                                 )
                             )
-                            self.ingestor.flush_all()
+                            self.ingestor.flush_nodes()
                             buffered_node_count_since_flush = 0
 
                         # Log progress every 10% of chunks
@@ -711,7 +711,7 @@ class GraphUpdater:
                                 count=buffered_node_count_since_flush
                             )
                         )
-                        self.ingestor.flush_all()
+                        self.ingestor.flush_nodes()
 
         if deleted_keys:
             logger.info(ls.INCREMENTAL_DELETED, count=len(deleted_keys))
@@ -743,6 +743,7 @@ class GraphUpdater:
         """Worker process method to process a chunk of files in isolation.
         Fix: No unpickleable Parser/Query instances passed across process boundaries - parsers/queries initialized per worker.
         Fix: Returns only serializable data, no Tree-sitter Node objects passed back to main process.
+        Fix: Workers only process definitions and structural relationships. Call processing happens in main process after all nodes are flushed.
 
         Args:
             file_chunk: List of files to process by this worker
@@ -751,7 +752,7 @@ class GraphUpdater:
             project_name: Name of the project
 
         Returns:
-            Tuple of (definition results list, call edges list)
+            Tuple of (nodes list, structural relationships list) - call relationships are processed separately in main process
         """
         from tree_sitter import Parser
 
@@ -808,7 +809,6 @@ class GraphUpdater:
 
         all_nodes: list[dict] = []
         all_relationships: list[dict] = []
-        ast_results: list[tuple[Path, Node, cs.SupportedLanguage]] = []
 
         for filepath in file_chunk:
             nodes_offset = len(worker_ingestor.nodes)
@@ -836,7 +836,6 @@ class GraphUpdater:
                 if result:
                     root_node, language = result
                     worker_ast_cache[filepath] = (root_node, language)
-                    ast_results.append((filepath, root_node, language))
 
             elif (
                 filepath.name.lower() in cs.DEPENDENCY_FILES
@@ -878,39 +877,6 @@ class GraphUpdater:
                 to_key,
             ), rel_list in worker_ingestor.relationships.items():
                 old_offset = rel_offsets.get(
-                    (from_label, from_key, rel_type, to_label, to_key), 0
-                )
-                for rel_data in rel_list[old_offset:]:
-                    all_relationships.append(
-                        {
-                            "from_label": str(from_label),
-                            "from_key": from_key,
-                            "rel_type": rel_type,
-                            "to_label": str(to_label),
-                            "to_key": to_key,
-                            "from_val": rel_data["from_val"],
-                            "to_val": rel_data["to_val"],
-                            "props": dict(rel_data.get("props") or {}),
-                            "file_path": str(filepath),
-                        }
-                    )
-
-        for filepath, root_node, language in ast_results:
-            call_rel_offsets: dict[tuple[str, str, str, str, str], int] = {
-                pattern: len(rel_list)
-                for pattern, rel_list in worker_ingestor.relationships.items()
-            }
-            worker_factory.call_processor.process_calls_in_file(
-                filepath, root_node, language, queries
-            )
-            for (
-                from_label,
-                from_key,
-                rel_type,
-                to_label,
-                to_key,
-            ), rel_list in worker_ingestor.relationships.items():
-                old_offset = call_rel_offsets.get(
                     (from_label, from_key, rel_type, to_label, to_key), 0
                 )
                 for rel_data in rel_list[old_offset:]:
