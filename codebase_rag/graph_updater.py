@@ -299,6 +299,7 @@ class GraphUpdater:
         self.ast_cache = BoundedASTCache()
         self.unignore_paths = unignore_paths
         self.exclude_paths = exclude_paths
+        self._deferred_relationships: list[dict] = []  # Cross-file relationships deferred until all nodes flushed
 
         self.factory = ProcessorFactory(
             ingestor=self.ingestor,
@@ -329,6 +330,10 @@ class GraphUpdater:
 
         logger.info(ls.PASS_2_FILES)
         self._process_files(force=force)
+
+        # Process deferred cross-file relationships (INHERITS, IMPLEMENTS, IMPORTS, OVERRIDES)
+        # after all nodes are flushed to ensure target nodes exist
+        self._process_deferred_relationships()
 
         logger.info(ls.FOUND_FUNCTIONS, count=len(self.function_registry))
         logger.info(ls.PASS_3_CALLS)
@@ -607,11 +612,14 @@ class GraphUpdater:
                 # Collect results as they complete with timeout
                 completed_count = 0
                 total_chunks = len(futures)
+                # Reset deferred relationships collection for this run
+                self._deferred_relationships = []
+
                 try:
                     for future in as_completed(futures, timeout=worker_timeout):
                         completed_count += 1
                         try:
-                            node_results, rel_results = future.result()
+                            node_results, rel_results, deferred_rels = future.result()
                         except Exception as e:
                             # Log individual worker error but continue processing other futures
                             logger.error(
@@ -628,6 +636,9 @@ class GraphUpdater:
 
                         processed_node_count = 0
                         processed_file_count = futures[future]
+
+                        # Collect deferred relationships for later processing
+                        self._deferred_relationships.extend(deferred_rels)
 
                         for node_result in node_results:
                             label = node_result["label"]
@@ -739,11 +750,12 @@ class GraphUpdater:
         repo_path: Path,
         structural_elements: dict,
         project_name: str,
-    ) -> tuple[list[dict], list[dict]]:
+    ) -> tuple[list[dict], list[dict], list[dict]]:
         """Worker process method to process a chunk of files in isolation.
         Fix: No unpickleable Parser/Query instances passed across process boundaries - parsers/queries initialized per worker.
         Fix: Returns only serializable data, no Tree-sitter Node objects passed back to main process.
         Fix: Workers only process definitions and structural relationships. Call processing happens in main process after all nodes are flushed.
+        Fix: Cross-file relationships (INHERITS, IMPLEMENTS, IMPORTS, OVERRIDES) are deferred until all nodes are flushed.
 
         Args:
             file_chunk: List of files to process by this worker
@@ -809,6 +821,7 @@ class GraphUpdater:
 
         all_nodes: list[dict] = []
         all_relationships: list[dict] = []
+        deferred_relationships: list[dict] = []  # Cross-file relationships deferred until all nodes flushed
 
         for filepath in file_chunk:
             nodes_offset = len(worker_ingestor.nodes)
@@ -880,21 +893,24 @@ class GraphUpdater:
                     (from_label, from_key, rel_type, to_label, to_key), 0
                 )
                 for rel_data in rel_list[old_offset:]:
-                    all_relationships.append(
-                        {
-                            "from_label": str(from_label),
-                            "from_key": from_key,
-                            "rel_type": rel_type,
-                            "to_label": str(to_label),
-                            "to_key": to_key,
-                            "from_val": rel_data["from_val"],
-                            "to_val": rel_data["to_val"],
-                            "props": dict(rel_data.get("props") or {}),
-                            "file_path": str(filepath),
-                        }
-                    )
+                    rel_entry = {
+                        "from_label": str(from_label),
+                        "from_key": from_key,
+                        "rel_type": rel_type,
+                        "to_label": str(to_label),
+                        "to_key": to_key,
+                        "from_val": rel_data["from_val"],
+                        "to_val": rel_data["to_val"],
+                        "props": dict(rel_data.get("props") or {}),
+                        "file_path": str(filepath),
+                    }
+                    # Defer cross-file relationships until all nodes are flushed
+                    if rel_type in cs.DEFERRED_RELATIONSHIP_TYPES:
+                        deferred_relationships.append(rel_entry)
+                    else:
+                        all_relationships.append(rel_entry)
 
-        return all_nodes, all_relationships
+        return all_nodes, all_relationships, deferred_relationships
 
     @staticmethod
     def _is_canonical_json_ingestion_payload(data: object) -> bool:
@@ -931,6 +947,40 @@ class GraphUpdater:
             self.factory.definition_processor.process_dependencies(filepath)
 
         self.factory.structure_processor.process_generic_file(filepath, filepath.name)
+
+    def _process_deferred_relationships(self) -> None:
+        """Process cross-file relationships deferred until all nodes are flushed.
+
+        This method creates INHERITS, IMPLEMENTS, IMPORTS, and OVERRIDES relationships
+        that reference nodes created by other workers. By deferring these until after
+        all nodes are flushed, we ensure the target nodes exist before attempting
+        to create relationships to them.
+        """
+        if not self._deferred_relationships:
+            logger.debug("No deferred relationships to process")
+            return
+
+        logger.info(f"Processing {len(self._deferred_relationships)} deferred cross-file relationships...")
+
+        processed_count = 0
+        for rel in self._deferred_relationships:
+            self.ingestor.ensure_relationship_batch(
+                (
+                    rel["from_label"],
+                    rel["from_key"],
+                    rel["from_val"],
+                ),
+                rel["rel_type"],
+                (
+                    rel["to_label"],
+                    rel["to_key"],
+                    rel["to_val"],
+                ),
+                rel["props"] or None,
+            )
+            processed_count += 1
+
+        logger.info(f"Deferred relationships buffered: {processed_count}")
 
     def _process_function_calls(self) -> None:
         ast_cache_items = list(self.ast_cache.items())

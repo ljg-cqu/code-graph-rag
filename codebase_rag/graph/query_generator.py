@@ -13,6 +13,27 @@ from loguru import logger
 
 from ..exceptions import MemgraphCompatibilityError
 
+
+def _safe_get_column(row: tuple | None, index: int = 0) -> object | None:
+    """Safely extract a column value from a row.
+
+    Handles mgclient.Column objects that may have an exception set.
+    Direct indexing like row[0] can fail with confusing errors.
+    """
+    if row is None:
+        return None
+    try:
+        return row[index]
+    except Exception:
+        if hasattr(row, '__iter__'):
+            try:
+                values = list(row)
+                if 0 <= index < len(values):
+                    return values[index]
+            except Exception:
+                pass
+        return None
+
 if TYPE_CHECKING:
     import mgclient
 
@@ -420,15 +441,17 @@ class QueryGenerator:
             cursor = conn.cursor()
             cursor.execute(cs.QUERY_GEN_SHOW_VERSION)
             row = cursor.fetchone()
-            if row:
-                parts = str(row[0]).split(".")
+            version_value = _safe_get_column(row, 0)
+            if version_value is not None:
+                parts = str(version_value).split(".")
                 self._memgraph_version = tuple(int(p) for p in parts if p.isdigit())
 
             cursor.execute(cs.QUERY_GEN_SHOW_LICENSE)
             row = cursor.fetchone()
-            if row:
+            license_value = _safe_get_column(row, 0)
+            if license_value is not None:
                 self._has_enterprise_license = (
-                    cs.QUERY_GEN_ENTERPRISE_KEYWORD in str(row[0]).lower()
+                    cs.QUERY_GEN_ENTERPRISE_KEYWORD in str(license_value).lower()
                 )
             cursor.close()
         except Exception:

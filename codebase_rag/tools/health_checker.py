@@ -31,6 +31,29 @@ class HealthChecker:
         return labels or [label_expression]
 
     @staticmethod
+    def _safe_get_column(row: tuple | None, index: int = 0) -> object | None:
+        """Safely extract a column value from a row.
+
+        Handles mgclient.Column objects that may have an exception set.
+        Direct indexing like row[0] can fail with confusing errors.
+        """
+        if row is None:
+            return None
+        try:
+            return row[index]
+        except Exception:
+            # mgclient.Column may have an exception set
+            # Try to extract value using alternative method
+            if hasattr(row, '__iter__'):
+                try:
+                    values = list(row)
+                    if 0 <= index < len(values):
+                        return values[index]
+                except Exception:
+                    pass
+            return None
+
+    @staticmethod
     def _fetch_single_int(
         cursor: mgclient.Cursor,
         query: str,
@@ -41,9 +64,10 @@ class HealthChecker:
             row = cursor.fetchone()
             # Consume any remaining rows to allow safe connection close
             HealthChecker._consume_all_results(cursor)
-            if row is None:
+            value = HealthChecker._safe_get_column(row, 0)
+            if value is None:
                 return 0
-            return int(row[0])
+            return int(value)
         except Exception as e:
             raise QueryExecutionError(query, params, e) from e
 
@@ -67,7 +91,8 @@ class HealthChecker:
             cursor.execute(query, params)
             result = cursor.fetchone()
             HealthChecker._consume_all_results(cursor)
-            return result[0] if result else None
+            value = HealthChecker._safe_get_column(result, 0)
+            return int(value) if value is not None else None
         except Exception as e:
             raise QueryExecutionError(query, params, e) from e
 
@@ -287,7 +312,8 @@ class HealthChecker:
             cursor = conn.cursor()
             cursor.execute(query)
             row = cursor.fetchone()
-            count = int(row[0]) if row else 0
+            value = HealthChecker._safe_get_column(row, 0)
+            count = int(value) if value is not None else 0
             if count == 0:
                 return HealthCheckResult(
                     name=cs.HEALTH_CHECK_DISCONNECTED_PASS,
@@ -331,7 +357,8 @@ class HealthChecker:
             cursor = conn.cursor()
             cursor.execute(cs.QUERY_GEN_REQUIRED_PROPS)
             row = cursor.fetchone()
-            count = int(row[0]) if row else 0
+            value = HealthChecker._safe_get_column(row, 0)
+            count = int(value) if value is not None else 0
             if count == 0:
                 return HealthCheckResult(
                     name=cs.HEALTH_CHECK_REQUIRED_PROPS_PASS,
@@ -378,7 +405,8 @@ class HealthChecker:
                 {"expected_model": settings.EMBEDDING_MODEL},
             )
             row = cursor.fetchone()
-            count = int(row[0]) if row else 0
+            value = HealthChecker._safe_get_column(row, 0)
+            count = int(value) if value is not None else 0
             if count == 0:
                 return HealthCheckResult(
                     name=cs.HEALTH_CHECK_EMBEDDING_CORR_PASS,
@@ -426,13 +454,15 @@ class HealthChecker:
             cursor = conn.cursor()
             cursor.execute("MATCH (m:Module) RETURN count(m) AS module_count")
             module_row = cursor.fetchone()
-            module_count = int(module_row[0]) if module_row else 0
+            module_value = HealthChecker._safe_get_column(module_row, 0)
+            module_count = int(module_value) if module_value is not None else 0
             # Consume any remaining results before next query
             HealthChecker._consume_all_results(cursor)
 
             cursor.execute("MATCH (f:File) RETURN count(f) AS file_count")
             file_row = cursor.fetchone()
-            file_count = int(file_row[0]) if file_row else 0
+            file_value = HealthChecker._safe_get_column(file_row, 0)
+            file_count = int(file_value) if file_value is not None else 0
 
             if module_count == 0:
                 return HealthCheckResult(
@@ -497,8 +527,10 @@ class HealthChecker:
                 """
             )
             row = cursor.fetchone()
-            large_doc_count = int(row[0]) if row else 0
-            unchunked_count = int(row[1]) if row else 0
+            large_doc_value = HealthChecker._safe_get_column(row, 0)
+            unchunked_value = HealthChecker._safe_get_column(row, 1)
+            large_doc_count = int(large_doc_value) if large_doc_value is not None else 0
+            unchunked_count = int(unchunked_value) if unchunked_value is not None else 0
 
             if large_doc_count == 0:
                 return HealthCheckResult(
@@ -601,7 +633,8 @@ class HealthChecker:
                 WHERE f.qualified_name STARTS WITH 'builtin.' AND NOT (f)<-[:DEFINES]-()
                 RETURN count(f)
             """)
-            orphaned_builtins = cursor.fetchone()[0]
+            row = cursor.fetchone()
+            orphaned_builtins = int(HealthChecker._safe_get_column(row, 0)) if row else 0
             if orphaned_builtins > 0:
                 issues.append(f"{orphaned_builtins} orphaned builtin functions")
 
@@ -610,7 +643,8 @@ class HealthChecker:
                 WHERE m.is_external = true AND m.path IS NOT NULL
                 RETURN count(m)
             """)
-            external_with_path = cursor.fetchone()[0]
+            row = cursor.fetchone()
+            external_with_path = int(HealthChecker._safe_get_column(row, 0)) if row else 0
             if external_with_path > 0:
                 issues.append(f"{external_with_path} external modules with path set")
 
@@ -620,7 +654,8 @@ class HealthChecker:
                 AND n.name IS NULL
                 RETURN count(n)
             """)
-            json_missing_name = cursor.fetchone()[0]
+            row = cursor.fetchone()
+            json_missing_name = int(HealthChecker._safe_get_column(row, 0)) if row else 0
             if json_missing_name > 0:
                 issues.append(f"{json_missing_name} JSON nodes missing name")
 
@@ -629,7 +664,8 @@ class HealthChecker:
                 WHERE t.name IS NULL AND t.qualified_name IS NULL
                 RETURN count(t)
             """)
-            incomplete_tests = cursor.fetchone()[0]
+            row = cursor.fetchone()
+            incomplete_tests = int(HealthChecker._safe_get_column(row, 0)) if row else 0
             if incomplete_tests > 0:
                 issues.append(f"{incomplete_tests} incomplete Test nodes")
 
@@ -682,7 +718,10 @@ class HealthChecker:
 
             # Get existing vector indexes
             cursor.execute("SHOW VECTOR INDEX INFO;")
-            existing_indexes = {row[0] for row in cursor.fetchall()}
+            existing_indexes = {
+                HealthChecker._safe_get_column(row, 0) for row in cursor.fetchall()
+                if HealthChecker._safe_get_column(row, 0) is not None
+            }
 
             # Check which expected indexes are missing
             expected_labels = MemgraphBackend.LABELS_TO_INDEX
@@ -1068,11 +1107,14 @@ class HealthChecker:
                 {"embedded_labels": embedded_labels, "limit": limit},
             )
             for row in cursor.fetchall():
+                qn = HealthChecker._safe_get_column(row, 0)
+                labels_val = HealthChecker._safe_get_column(row, 1)
+                path_val = HealthChecker._safe_get_column(row, 2)
                 results.append(
                     {
-                        "qualified_name": row[0],
-                        "labels": list(row[1]) if row[1] else [],
-                        "path": row[2],
+                        "qualified_name": qn,
+                        "labels": list(labels_val) if labels_val else [],
+                        "path": path_val,
                     }
                 )
         except Exception as e:
@@ -1121,7 +1163,8 @@ class HealthChecker:
                 {"embedded_labels": embedded_labels},
             )
             row = cursor.fetchone()
-            return int(row[0]) if row else 0
+            value = HealthChecker._safe_get_column(row, 0)
+            return int(value) if value is not None else 0
         except Exception as e:
             logger.warning(f"Failed to get missing embeddings count: {e}")
             return 0

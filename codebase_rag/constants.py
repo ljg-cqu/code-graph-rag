@@ -561,6 +561,18 @@ class RelationshipType(StrEnum):
 # Alias for shorter usage
 RelType = RelationshipType
 
+# Relationship types that reference cross-file nodes and should be deferred
+# until all nodes are flushed to avoid creation failures
+DEFERRED_RELATIONSHIP_TYPES = frozenset({
+    RelationshipType.INHERITS,
+    RelationshipType.IMPLEMENTS,
+    RelationshipType.IMPORTS,
+    RelationshipType.EXPORTS,
+    RelationshipType.EXPORTS_MODULE,
+    RelationshipType.IMPLEMENTS_MODULE,
+    RelationshipType.OVERRIDES,
+})
+
 
 NODE_PROJECT = NodeLabel.PROJECT
 

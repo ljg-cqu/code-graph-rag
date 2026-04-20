@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import socket
+import sys
 import threading
 import time
 import types
@@ -77,6 +78,8 @@ class MemgraphIngestor:
         "failed to send chunk data",
         "failed to send message end marker",
     )
+
+    _REL_BUFFER_WARNING_THRESHOLD = 10000
 
     __slots__ = (
         "_conn_lock",
@@ -951,10 +954,22 @@ class MemgraphIngestor:
             RelBatchRow(from_val=from_val, to_val=to_val, props=properties or {})
         )
         self._rel_count += 1
+
+        # Add memory warning (not automatic flush)
+        if self._rel_count > 0 and self._rel_count % self._REL_BUFFER_WARNING_THRESHOLD == 0:
+            buffer_size_mb = sys.getsizeof(self._rel_groups) / (1024 * 1024)
+            logger.debug(
+                f"Relationship buffer size: {self._rel_count} relationships, "
+                f"~{buffer_size_mb:.1f}MB in memory"
+            )
+
         if self._rel_count >= self.batch_size:
             logger.debug(ls.MG_REL_BUFFER_FLUSH, size=self.batch_size)
             self.flush_nodes()
-            self.flush_relationships()
+            # Note: Relationships are flushed at the end of ingestion via flush_all()
+            # to ensure all target nodes exist before relationships are created.
+            # Do NOT flush relationships here - it causes failures when target
+            # nodes haven't been created yet.
 
     def _flush_node_label_group(
         self,
