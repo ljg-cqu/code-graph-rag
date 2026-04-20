@@ -1771,7 +1771,7 @@ async def _run_interactive_loop(
         query_mode=current_mode,
         doc_workspace=normalized_parallel_config.doc_workspace,
     )
-    task_splitter = TaskSplitter(repo_path=str(project_root))
+    task_splitter = TaskSplitter(repo_path=str(project_root), query_mode=current_mode)
 
     # Set up signal handlers for graceful Ctrl+C handling
     # Note: We use a local flag and nested function because the processing task
@@ -2151,6 +2151,7 @@ async def _run_interactive_loop(
                         question_with_context,
                         subtask_count=preview_count,
                         has_write_operations=has_write_operations,
+                        query_mode=current_mode,
                     )
 
                     if not eligible:
@@ -2167,6 +2168,7 @@ async def _run_interactive_loop(
                             "safety_rule_blocked",
                             "insufficient_subtasks",
                             "concurrency_disabled",
+                            "document_conceptual_query",
                         ):
                             concurrency_classifier.record_execution_result(task_type, success=False)
                     elif not normalized_parallel_config.auto_split:
@@ -2735,6 +2737,53 @@ def _validate_provider_config(role: cs.ModelRole, config: ModelConfig) -> None:
         raise ValueError(ex.CONFIG.format(role=role.value.title(), error=e)) from e
 
 
+def _determine_default_query_mode(
+    code_graph: QueryProtocol | None,
+    doc_graph: QueryProtocol | None,
+) -> QueryMode:
+    """Determine default query mode based on repository content statistics.
+
+    Priority:
+    1. If only document graph has data -> DOCUMENT_ONLY
+    2. If only code graph has data -> CODE_ONLY
+    3. If both have data -> BOTH_MERGED
+    4. If neither has data -> CODE_ONLY (fallback)
+    """
+    code_count = 0
+    doc_count = 0
+
+    if code_graph:
+        try:
+            result = code_graph.fetch_all(
+                "MATCH (n) WHERE labels(n)[0] IN ['Function', 'Class', 'Method'] RETURN count(n) as count"
+            )
+            code_count = result[0].get("count", 0) if result else 0
+        except Exception:
+            pass
+
+    if doc_graph:
+        try:
+            result = doc_graph.fetch_all(
+                "MATCH (d:Document) RETURN count(d) as count"
+            )
+            doc_count = result[0].get("count", 0) if result else 0
+        except Exception:
+            pass
+
+    if code_count == 0 and doc_count > 0:
+        logger.info(f"Auto-selecting DOCUMENT_ONLY mode (docs: {doc_count}, code: {code_count})")
+        return QueryMode.DOCUMENT_ONLY
+    elif code_count > 0 and doc_count == 0:
+        logger.info(f"Auto-selecting CODE_ONLY mode (code: {code_count}, docs: {doc_count})")
+        return QueryMode.CODE_ONLY
+    elif code_count > 0 and doc_count > 0:
+        logger.info(f"Auto-selecting BOTH_MERGED mode (code: {code_count}, docs: {doc_count})")
+        return QueryMode.BOTH_MERGED
+    else:
+        logger.info("No graph data found, defaulting to CODE_ONLY")
+        return QueryMode.CODE_ONLY
+
+
 def _initialize_services_and_agent(
     repo_path: str,
     ingestor: QueryProtocol,
@@ -2758,9 +2807,9 @@ def _initialize_services_and_agent(
     Returns:
         Tuple of (rag_agent, confirmation_tool_names, query_router)
     """
-    # Default to CODE_ONLY if not specified
+    # Auto-detect query mode if not specified
     if query_mode is None:
-        query_mode = QueryMode.CODE_ONLY
+        query_mode = _determine_default_query_mode(ingestor, doc_ingestor)
 
     _validate_provider_config(
         cs.ModelRole.ORCHESTRATOR, settings.active_orchestrator_config
@@ -2935,20 +2984,11 @@ async def main_unified_async(
         realtime_config: Optional realtime file watcher configuration
         _fallback_attempted: Internal flag to prevent infinite recursion on fallback
     """
-    # Default to CODE_ONLY if not specified
-    if query_mode is None:
-        query_mode = QueryMode.CODE_ONLY
-
     project_root = _setup_common_initialization(repo_path)
 
-    # Display configuration table
-    table = _create_configuration_table(
-        repo_path,
-        doc_graph_connected=with_docs,
-        query_mode=query_mode,
-        doc_workspace=doc_workspace,
-    )
-    app_context.console.print(table)
+    # Note: query_mode auto-detection happens after graph connections are established
+    # in _initialize_services_and_agent(). The configuration table will reflect the
+    # auto-detected mode when printed inside the graph connection blocks.
 
     # Display yolo mode warning if enabled
     _display_yolo_warning()
@@ -2977,7 +3017,7 @@ async def main_unified_async(
                     )
                 )
 
-                # Initialize agent with both graphs
+                # Initialize agent with both graphs (auto-detects query_mode if None)
                 rag_agent, tool_names, query_router = _initialize_services_and_agent(
                     repo_path,
                     code_graph,
@@ -2985,6 +3025,15 @@ async def main_unified_async(
                     query_mode=query_mode,
                     doc_workspace=doc_workspace,
                 )
+
+                # Display configuration table with auto-detected mode
+                table = _create_configuration_table(
+                    repo_path,
+                    doc_graph_connected=True,
+                    query_mode=query_router.current_mode if query_router else QueryMode.CODE_ONLY,
+                    doc_workspace=doc_workspace,
+                )
+                app_context.console.print(table)
 
                 watcher_manager = None
                 if realtime_config and realtime_config.enabled:
@@ -3003,7 +3052,7 @@ async def main_unified_async(
                         project_root,
                         tool_names,
                         query_router=query_router,
-                        current_mode=query_mode,
+                        current_mode=query_router.current_mode if query_router else QueryMode.CODE_ONLY,
                         parallel_config=parallel_config,
                     )
                 finally:
@@ -3043,9 +3092,19 @@ async def main_unified_async(
                 )
             )
 
+            # Initialize agent (auto-detects query_mode if None)
             rag_agent, tool_names, query_router = _initialize_services_and_agent(
                 repo_path, ingestor
             )
+
+            # Display configuration table with auto-detected mode
+            table = _create_configuration_table(
+                repo_path,
+                doc_graph_connected=False,
+                query_mode=query_router.current_mode if query_router else QueryMode.CODE_ONLY,
+                doc_workspace=doc_workspace,
+            )
+            app_context.console.print(table)
 
             watcher_manager = None
             if realtime_config and realtime_config.enabled:

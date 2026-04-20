@@ -10,6 +10,7 @@ import io
 import time
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from enum import StrEnum
 from typing import Any
 
 from loguru import logger
@@ -65,6 +66,25 @@ from .sufficiency_gatekeeper import (
     SufficiencyMetadata,
     evaluate_parallel_worker_sufficiency,
 )
+
+
+class SubagentErrorType(StrEnum):
+    """Detailed error classification for subtask failures.
+
+    NOTE: Named SubagentErrorType (not ErrorType) to avoid conflict with
+    ErrorType in codebase_rag/document/error_handling.py used for document
+    extraction errors.
+    """
+
+    MODEL_NOT_FOUND = "model_not_found"  # Unknown model ID
+    ENDPOINT_NOT_FOUND = "endpoint_not_found"  # Invalid API endpoint
+    RESOURCE_UNAVAILABLE = "resource_unavailable"  # Temporarily unavailable
+    RATE_LIMIT = "rate_limit"
+    AUTH_ERROR = "auth_error"
+    NETWORK_ERROR = "network_error"
+    TIMEOUT = "timeout"
+    UNKNOWN = "unknown"
+
 
 READ_ONLY_SUBAGENT_PROMPT = """
 You are a read-only parallel analysis worker for a codebase RAG system.
@@ -459,6 +479,14 @@ class SubAgentOrchestrator:
 
         self.initialize_agents()
 
+        # If only 1 worker available, skip thread pool overhead and execute sequentially
+        if self.worker_count == 1 and not dry_run:
+            logger.info(
+                f"Single worker mode: executing {len(subtasks)} subtasks sequentially "
+                f"(avoiding thread pool overhead)"
+            )
+            return self._execute_sequentially(subtasks, result_aggregator, retry_attempts)
+
         self.running.set(True)
         start_time = time.time()
         logger.info(
@@ -524,10 +552,10 @@ class SubAgentOrchestrator:
                             retry_count = retry_counts.get(subtask["id"], 0)
                             error_type = self._classify_error(error_msg)
 
-                            # Only retry for transient network/rate-limit errors
-                            if error_type in ("network_error", "rate_limit") and retry_count < retry_attempts:
+                            # Use _should_retry for consistent retry logic
+                            if self._should_retry(error_type, retry_count, retry_attempts):
                                 retry_counts[subtask["id"]] = retry_count + 1
-                                if error_type == "rate_limit":
+                                if error_type == SubagentErrorType.RATE_LIMIT:
                                     time.sleep(2 ** retry_count)
                                 logger.warning(
                                     f"Subtask {subtask['id']} failed with {error_type} "
@@ -586,20 +614,136 @@ class SubAgentOrchestrator:
                 future.cancel()
                 raise TimeoutError(f"Subtask exceeded timeout of {timeout}s") from e
 
-    def _classify_error(self, error_msg: str) -> str:
-        """Classify error type to determine if retry is appropriate."""
+    def _execute_sequentially(
+        self,
+        subtasks: list[dict[str, Any]],
+        result_aggregator: ResultAggregator | None = None,
+        retry_attempts: int | None = None,
+    ) -> ResultAggregator:
+        """Execute subtasks sequentially when only 1 worker is available."""
+        retry_attempts = retry_attempts or settings.CGR_SUBAGENT_RETRY_ATTEMPTS
+        result_aggregator = result_aggregator or ResultAggregator()
+        result_aggregator.set_total_subtasks(len(subtasks))
+        result_aggregator.metadata["execution_mode"] = "sequential"
+
+        worker = self.workers[0] if self.workers else None
+        if not worker:
+            raise RuntimeError("No workers available for sequential execution")
+
+        self.running.set(True)
+        start_time = time.time()
+        retry_counts: dict[str, int] = {subtask["id"]: 0 for subtask in subtasks}
+
+        logger.info(
+            f"Starting sequential execution of {len(subtasks)} subtasks (single worker)"
+        )
+
+        for subtask in subtasks:
+            if self._shutdown_called.get():
+                break
+
+            execution_start = time.time()
+            try:
+                result, exec_time = worker.execute(subtask)
+                result_aggregator.add_result(
+                    subtask,
+                    result,
+                    execution_time=time.time() - execution_start,
+                    status="completed",
+                    worker_metadata={
+                        "worker_id": worker.worker_id,
+                        "execution_time": exec_time,
+                        "status": "completed",
+                    },
+                )
+            except Exception as e:
+                error_msg = str(e)
+                retry_count = retry_counts.get(subtask["id"], 0)
+                error_type = self._classify_error(error_msg)
+
+                # Use _should_retry for consistent retry logic
+                if self._should_retry(error_type, retry_count, retry_attempts):
+                    retry_counts[subtask["id"]] = retry_count + 1
+                    if error_type == SubagentErrorType.RATE_LIMIT:
+                        time.sleep(2 ** retry_count)
+                    logger.warning(
+                        f"Subtask {subtask['id']} failed with {error_type} "
+                        f"(attempt {retry_count + 1}/{retry_attempts + 1}). Retrying..."
+                    )
+                    # Re-queue for retry (insert back into iteration)
+                    continue
+
+                result_aggregator.add_error(
+                    subtask,
+                    error_msg,
+                    execution_time=time.time() - execution_start,
+                    worker_metadata={
+                        "worker_id": worker.worker_id,
+                        "execution_time": time.time() - execution_start,
+                        "status": "failed",
+                    },
+                )
+
+        result_aggregator.set_total_execution_time(time.time() - start_time)
+        self.running.set(False)
+        logger.info(
+            f"Sequential execution completed: {result_aggregator.completed_count}/{len(subtasks)} succeeded"
+        )
+        return result_aggregator
+
+    def _classify_error(
+        self, error_msg: str, status_code: int | None = None
+    ) -> SubagentErrorType:
+        """Classify error with detailed type for appropriate handling."""
         error_lower = error_msg.lower()
 
-        if "404" in error_msg or "resource_not_found" in error_lower or "not found" in error_lower:
-            return "model_unavailable"
-        elif "connection" in error_lower or "timeout" in error_lower or "network" in error_lower:
-            return "network_error"
-        elif "rate_limit" in error_lower or "rate limit" in error_lower or "429" in error_msg:
-            return "rate_limit"
-        elif "auth" in error_lower or "401" in error_msg or "403" in error_msg:
-            return "auth_error"
-        else:
-            return "unknown"
+        # Check for specific 404 variants
+        if status_code == 404 or "404" in error_msg:
+            if "model" in error_lower and any(
+                x in error_lower for x in ["not found", "unknown", "invalid"]
+            ):
+                return SubagentErrorType.MODEL_NOT_FOUND
+            elif "endpoint" in error_lower or "url" in error_lower:
+                return SubagentErrorType.ENDPOINT_NOT_FOUND
+            else:
+                return SubagentErrorType.RESOURCE_UNAVAILABLE
+
+        if "rate_limit" in error_lower or "429" in error_msg:
+            return SubagentErrorType.RATE_LIMIT
+        if any(x in error_msg for x in ["401", "403", "auth", "unauthorized"]):
+            return SubagentErrorType.AUTH_ERROR
+        if any(x in error_lower for x in ["connection", "network", "dns"]):
+            return SubagentErrorType.NETWORK_ERROR
+        if "timeout" in error_lower:
+            return SubagentErrorType.TIMEOUT
+
+        return SubagentErrorType.UNKNOWN
+
+    def _should_retry(
+        self, error_type: SubagentErrorType, retry_count: int, max_retries: int
+    ) -> bool:
+        """Determine if error type supports retry."""
+        # Never retry these - they're configuration errors
+        if error_type in (
+            SubagentErrorType.MODEL_NOT_FOUND,
+            SubagentErrorType.ENDPOINT_NOT_FOUND,
+            SubagentErrorType.AUTH_ERROR,
+        ):
+            return False
+
+        # Always retry these if under limit
+        if error_type in (
+            SubagentErrorType.RATE_LIMIT,
+            SubagentErrorType.NETWORK_ERROR,
+            SubagentErrorType.TIMEOUT,
+        ):
+            return retry_count < max_retries
+
+        # Conditionally retry resource unavailable (fewer retries for 404s)
+        if error_type == SubagentErrorType.RESOURCE_UNAVAILABLE:
+            return retry_count < max_retries // 2
+
+        return False
 
     def _handle_shutdown(self, signum: int, frame: Any) -> None:
         """Handle shutdown signals to gracefully terminate all workers."""

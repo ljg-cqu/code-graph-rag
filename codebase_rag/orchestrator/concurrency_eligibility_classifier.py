@@ -15,6 +15,7 @@ from pydantic_ai.usage import UsageLimits
 
 from codebase_rag.config import settings
 from codebase_rag.providers import get_provider_from_config
+from codebase_rag.shared.query_router import QueryMode
 from codebase_rag.utils.path_utils import get_all_code_files
 
 
@@ -304,11 +305,32 @@ Safety Rules:
             )
             return 0.0, "llm_check_failed"
 
+    def _is_conceptual_question(self, prompt: str) -> bool:
+        """Detect if question is conceptual rather than file-specific."""
+        conceptual_patterns = [
+            r"\b(what is|what are|why|how to|explain|describe|what does)\b",
+            r"\b(importance of|benefits of|purpose of|meaning of)\b",
+            r"\b(categorical thinking|concept|theory|framework|methodology)\b",
+        ]
+
+        # Check for file-specific references
+        file_patterns = [
+            r"\b(file|function|class|method)\s+\w+",
+            r"\b(in|from)\s+[\w/]+\.(py|js|ts|java|cpp)\b",
+            r"```[\w/]+```",  # Code blocks with paths
+        ]
+
+        has_conceptual = any(re.search(p, prompt, re.I) for p in conceptual_patterns)
+        has_file_ref = any(re.search(p, prompt, re.I) for p in file_patterns)
+
+        return has_conceptual and not has_file_ref
+
     async def is_eligible(
         self,
         prompt: str,
         subtask_count: int | None = None,
         has_write_operations: bool = False,
+        query_mode: QueryMode = QueryMode.CODE_ONLY,
     ) -> tuple[bool, str, float]:
         """
         Determine if a task is eligible for automatic parallel execution (priority order enforced).
@@ -317,6 +339,7 @@ Safety Rules:
             prompt: User's natural language request / task description
             subtask_count: Optional number of detected subtasks for this request
             has_write_operations: Whether the task includes any write/modify operations
+            query_mode: Current query mode (affects eligibility for document queries)
 
         Returns:
             Tuple of (eligible: bool, task_type: str, confidence: float)
@@ -330,6 +353,16 @@ Safety Rules:
                 "Task not eligible for parallel execution: contains write operations"
             )
             return False, "write_operation", 0.0
+
+        # DOCUMENT_ONLY mode for conceptual questions should NOT use parallel file analysis
+        if query_mode == QueryMode.DOCUMENT_ONLY:
+            # Check if this is a conceptual question (not asking about specific files)
+            if self._is_conceptual_question(prompt):
+                logger.info(
+                    "Task not eligible for parallel execution: DOCUMENT_ONLY mode "
+                    "with conceptual question - use semantic search instead"
+                )
+                return False, "document_conceptual_query", 0.0
 
         # 2. Check for explicit user overrides
         lower_prompt = prompt.lower()

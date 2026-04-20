@@ -6,7 +6,7 @@ import pytest
 from unittest.mock import patch, MagicMock, PropertyMock
 
 from codebase_rag.config import ModelConfig, settings
-from codebase_rag.orchestrator.subagent_orchestrator import SubAgentOrchestrator
+from codebase_rag.orchestrator.subagent_orchestrator import SubAgentOrchestrator, SubagentErrorType
 
 
 class TestValidateModelConfig:
@@ -105,67 +105,135 @@ class TestInitializeAgents:
 
 
 class TestClassifyError:
-    """Tests for _classify_error method."""
+    """Tests for _classify_error method with SubagentErrorType constants."""
 
-    def test_classify_error_model_unavailable(self):
-        """Test error classification for model unavailable errors."""
+    def test_classify_error_model_not_found(self):
+        """Test error classification for model not found errors (404 with model mention)."""
         orchestrator = SubAgentOrchestrator()
 
-        assert orchestrator._classify_error("404 Not Found") == "model_unavailable"
-        assert orchestrator._classify_error("resource_not_found") == "model_unavailable"
-        assert orchestrator._classify_error("Model not found") == "model_unavailable"
+        # 404 errors with "model" and "not found"/"unknown"/"invalid" should be MODEL_NOT_FOUND
+        assert orchestrator._classify_error("404 Model not found") == SubagentErrorType.MODEL_NOT_FOUND
+        assert orchestrator._classify_error("404 Model unknown") == SubagentErrorType.MODEL_NOT_FOUND
+        assert orchestrator._classify_error("Invalid model", status_code=404) == SubagentErrorType.MODEL_NOT_FOUND
+
+    def test_classify_error_endpoint_not_found(self):
+        """Test error classification for endpoint not found errors."""
+        orchestrator = SubAgentOrchestrator()
+
+        # 404 errors with "endpoint" should be ENDPOINT_NOT_FOUND
+        assert orchestrator._classify_error("404 Endpoint not found") == SubagentErrorType.ENDPOINT_NOT_FOUND
+        assert orchestrator._classify_error("Invalid URL", status_code=404) == SubagentErrorType.ENDPOINT_NOT_FOUND
+
+    def test_classify_error_resource_unavailable(self):
+        """Test error classification for generic 404 resource unavailable."""
+        orchestrator = SubAgentOrchestrator()
+
+        # Generic 404s without model/endpoint context should be RESOURCE_UNAVAILABLE
+        assert orchestrator._classify_error("404 Not Found") == SubagentErrorType.RESOURCE_UNAVAILABLE
+        assert orchestrator._classify_error("404 resource_not_found") == SubagentErrorType.RESOURCE_UNAVAILABLE
 
     def test_classify_error_network_error(self):
         """Test error classification for network errors."""
         orchestrator = SubAgentOrchestrator()
 
-        assert orchestrator._classify_error("connection error") == "network_error"
-        assert orchestrator._classify_error("timeout") == "network_error"
-        assert orchestrator._classify_error("network unreachable") == "network_error"
+        assert orchestrator._classify_error("connection error") == SubagentErrorType.NETWORK_ERROR
+        assert orchestrator._classify_error("network unreachable") == SubagentErrorType.NETWORK_ERROR
+
+    def test_classify_error_timeout(self):
+        """Test error classification for timeout errors."""
+        orchestrator = SubAgentOrchestrator()
+
+        assert orchestrator._classify_error("timeout") == SubagentErrorType.TIMEOUT
+        assert orchestrator._classify_error("Request timeout") == SubagentErrorType.TIMEOUT
 
     def test_classify_error_rate_limit(self):
         """Test error classification for rate limit errors."""
         orchestrator = SubAgentOrchestrator()
 
-        assert orchestrator._classify_error("rate_limit exceeded") == "rate_limit"
-        assert orchestrator._classify_error("rate limit exceeded") == "rate_limit"
-        assert orchestrator._classify_error("429 Too Many Requests") == "rate_limit"
+        assert orchestrator._classify_error("rate_limit exceeded") == SubagentErrorType.RATE_LIMIT
+        assert orchestrator._classify_error("429 Too Many Requests") == SubagentErrorType.RATE_LIMIT
 
     def test_classify_error_auth_error(self):
         """Test error classification for auth errors."""
         orchestrator = SubAgentOrchestrator()
 
-        assert orchestrator._classify_error("auth failed") == "auth_error"
-        assert orchestrator._classify_error("401 Unauthorized") == "auth_error"
-        assert orchestrator._classify_error("403 Forbidden") == "auth_error"
+        assert orchestrator._classify_error("auth failed") == SubagentErrorType.AUTH_ERROR
+        assert orchestrator._classify_error("401 Unauthorized") == SubagentErrorType.AUTH_ERROR
+        assert orchestrator._classify_error("403 Forbidden") == SubagentErrorType.AUTH_ERROR
 
     def test_classify_error_unknown(self):
         """Test error classification for unknown errors."""
         orchestrator = SubAgentOrchestrator()
 
-        assert orchestrator._classify_error("some other error") == "unknown"
+        assert orchestrator._classify_error("some other error") == SubagentErrorType.UNKNOWN
+
+
+class TestShouldRetry:
+    """Tests for _should_retry method."""
+
+    def test_model_not_found_never_retry(self):
+        """Verify MODEL_NOT_FOUND errors are never retried (configuration error)."""
+        orchestrator = SubAgentOrchestrator()
+        assert orchestrator._should_retry(SubagentErrorType.MODEL_NOT_FOUND, 0, 3) is False
+        assert orchestrator._should_retry(SubagentErrorType.MODEL_NOT_FOUND, 2, 3) is False
+
+    def test_endpoint_not_found_never_retry(self):
+        """Verify ENDPOINT_NOT_FOUND errors are never retried (configuration error)."""
+        orchestrator = SubAgentOrchestrator()
+        assert orchestrator._should_retry(SubagentErrorType.ENDPOINT_NOT_FOUND, 0, 3) is False
+
+    def test_auth_error_never_retry(self):
+        """Verify AUTH_ERROR errors are never retried (configuration error)."""
+        orchestrator = SubAgentOrchestrator()
+        assert orchestrator._should_retry(SubagentErrorType.AUTH_ERROR, 0, 3) is False
+
+    def test_rate_limit_always_retry(self):
+        """Verify RATE_LIMIT errors are always retried if under limit."""
+        orchestrator = SubAgentOrchestrator()
+        assert orchestrator._should_retry(SubagentErrorType.RATE_LIMIT, 0, 3) is True
+        assert orchestrator._should_retry(SubagentErrorType.RATE_LIMIT, 2, 3) is True
+        assert orchestrator._should_retry(SubagentErrorType.RATE_LIMIT, 3, 3) is False
+
+    def test_network_error_retryable(self):
+        """Verify NETWORK_ERROR errors are retryable."""
+        orchestrator = SubAgentOrchestrator()
+        assert orchestrator._should_retry(SubagentErrorType.NETWORK_ERROR, 0, 3) is True
+        assert orchestrator._should_retry(SubagentErrorType.NETWORK_ERROR, 3, 3) is False
+
+    def test_timeout_retryable(self):
+        """Verify TIMEOUT errors are retryable."""
+        orchestrator = SubAgentOrchestrator()
+        assert orchestrator._should_retry(SubagentErrorType.TIMEOUT, 0, 3) is True
+
+    def test_resource_unavailable_limited_retry(self):
+        """Verify RESOURCE_UNAVAILABLE gets fewer retries (half of max)."""
+        orchestrator = SubAgentOrchestrator()
+        assert orchestrator._should_retry(SubagentErrorType.RESOURCE_UNAVAILABLE, 0, 4) is True
+        assert orchestrator._should_retry(SubagentErrorType.RESOURCE_UNAVAILABLE, 1, 4) is True
+        # max_retries // 2 = 2, so retry_count=2 fails (must be < 2)
+        assert orchestrator._should_retry(SubagentErrorType.RESOURCE_UNAVAILABLE, 2, 4) is False
 
 
 class TestExecuteTasks:
     """Tests for execute_tasks fail-fast behavior."""
 
-    def test_model_unavailable_not_retryable(self):
-        """Verify model_unavailable errors are not retryable (fail-fast)."""
+    def test_model_not_found_not_retryable(self):
+        """Verify MODEL_NOT_FOUND errors are not retryable (fail-fast)."""
         orchestrator = SubAgentOrchestrator()
-        assert orchestrator._classify_error("404: resource_not_found") == "model_unavailable"
-        assert orchestrator._classify_error("Model not found") == "model_unavailable"
+        assert orchestrator._classify_error("404: Model not found") == SubagentErrorType.MODEL_NOT_FOUND
+        assert orchestrator._should_retry(SubagentErrorType.MODEL_NOT_FOUND, 0, 3) is False
 
     def test_network_error_is_retryable(self):
         """Verify network errors are classified as retryable."""
         orchestrator = SubAgentOrchestrator()
-        assert orchestrator._classify_error("connection timeout") == "network_error"
-        assert orchestrator._classify_error("network unreachable") == "network_error"
+        assert orchestrator._classify_error("connection timeout") == SubagentErrorType.NETWORK_ERROR
+        assert orchestrator._should_retry(SubagentErrorType.NETWORK_ERROR, 0, 3) is True
 
     def test_auth_error_not_retryable(self):
         """Verify auth errors are not retryable (fail-fast)."""
         orchestrator = SubAgentOrchestrator()
-        assert orchestrator._classify_error("401 Unauthorized") == "auth_error"
-        assert orchestrator._classify_error("403 Forbidden") == "auth_error"
+        assert orchestrator._classify_error("401 Unauthorized") == SubagentErrorType.AUTH_ERROR
+        assert orchestrator._should_retry(SubagentErrorType.AUTH_ERROR, 0, 3) is False
 
 
 class TestWorkerLifecycle:

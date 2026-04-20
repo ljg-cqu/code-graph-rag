@@ -11,6 +11,7 @@ from typing import TypedDict
 from loguru import logger
 
 from codebase_rag.config import settings
+from codebase_rag.shared.query_router import QueryMode
 from codebase_rag.utils.path_utils import get_all_code_files
 
 
@@ -34,8 +35,9 @@ class TaskSplitter:
     Supports multiple splitting strategies: file-based, node-type, query-based, manual.
     """
 
-    def __init__(self, repo_path: str | None = None):
+    def __init__(self, repo_path: str | None = None, query_mode: QueryMode = QueryMode.CODE_ONLY):
         self.repo_path = Path(repo_path or settings.TARGET_REPO_PATH).resolve()
+        self.query_mode = query_mode
 
     def split_task(
         self, prompt: str, strategy: str = "auto", max_subtasks: int | None = None
@@ -230,16 +232,46 @@ class TaskSplitter:
                     )
                     return hinted_files
 
-        # Strategy 3: Fallback to all code files (unchanged from current)
-        # NOTE: Do NOT truncate to all_files[:500] — that silently drops parts of
-        # the codebase. The existing CGR_PARALLEL_MAX_QUEUE_SIZE check in
-        # _run_interactive_loop handles excessive subtask counts correctly
-        # by falling back to sequential execution with a clear log message.
+        # Strategy 3: Fallback to relevant files based on query mode
+        # Filter files based on query mode to avoid creating subtasks for irrelevant files
         all_files = get_all_code_files(self.repo_path)
+
+        # Filter files based on query mode
+        if self.query_mode == QueryMode.CODE_ONLY:
+            # Only code files
+            relevant_files = [f for f in all_files if self._is_code_file(f)]
+        elif self.query_mode == QueryMode.DOCUMENT_ONLY:
+            # Only document files
+            relevant_files = [f for f in all_files if self._is_document_file(f)]
+        else:
+            # BOTH_MERGED or validation modes - include both
+            relevant_files = all_files
+
+        if not relevant_files:
+            logger.warning(
+                f"No relevant files found for query mode {self.query_mode}. "
+                f"Consider switching query mode or indexing the repository."
+            )
+
         logger.info(
-            f"Using all {len(all_files)} code files (no scope paths or type hints found)"
+            f"Using {len(relevant_files)} relevant files for {self.query_mode} "
+            f"(no scope paths or type hints found)"
         )
-        return all_files
+        return relevant_files
+
+    def _is_code_file(self, path: Path) -> bool:
+        """Check if file is a code file based on extension."""
+        code_extensions = {
+            '.py', '.js', '.ts', '.jsx', '.tsx', '.java', '.cpp', '.h', '.hpp',
+            '.go', '.rs', '.cs', '.rb', '.php', '.swift', '.kt', '.scala',
+            '.c', '.lua', '.sol', '.vy'
+        }
+        return path.suffix.lower() in code_extensions
+
+    def _is_document_file(self, path: Path) -> bool:
+        """Check if file is a document file based on extension."""
+        doc_extensions = {'.md', '.rst', '.txt', '.pdf', '.docx'}
+        return path.suffix.lower() in doc_extensions
 
     def _extract_scope_paths(self, prompt: str) -> list[Path]:
         candidates: list[str] = []
