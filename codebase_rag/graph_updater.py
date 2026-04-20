@@ -32,7 +32,7 @@ from .types_defs import (
     SimpleNameLookup,
     TrieNode,
 )
-from .shared.utils.file_classifier import is_code_file
+from .shared.utils.file_classifier import is_code_file, is_document_file, classify_file, FileType
 from .utils.dependencies import has_embedding_provider, has_semantic_dependencies
 from .utils.fqn_resolver import find_function_source_by_fqn
 from .utils.path_utils import should_skip_path
@@ -354,19 +354,26 @@ class GraphUpdater:
 
         # Run post-ingestion data quality validation
         if settings.RUN_INGESTION_QUALITY_CHECKS:
-            health_checker = HealthChecker()
-            validation_results = health_checker.validate_ingestion_quality(
-                embedded_node_label="|".join(cs.EMBEDDABLE_CODE_NODE_LABELS)
-            )
-            passed = sum(1 for res in validation_results if res.passed)
-            total = len(validation_results)
-            logger.info(
-                f"Ingestion quality validation completed: {passed}/{total} checks passed"
-            )
-            failed = [res for res in validation_results if not res.passed]
-            for fail in failed:
-                error_msg = f" - {fail.error}" if fail.error else ""
-                logger.warning(f"Quality check failed: {fail.name} - {fail.message}{error_msg}")
+            # Skip quality validation if no code files were processed (document-only repo)
+            if len(self.function_registry) == 0:
+                logger.info(
+                    "No code files were processed. Skipping code graph quality validation. "
+                    "Document graph (if enabled) may still contain data."
+                )
+            else:
+                health_checker = HealthChecker()
+                validation_results = health_checker.validate_ingestion_quality(
+                    embedded_node_label="|".join(cs.EMBEDDABLE_CODE_NODE_LABELS)
+                )
+                passed = sum(1 for res in validation_results if res.passed)
+                total = len(validation_results)
+                logger.info(
+                    f"Ingestion quality validation completed: {passed}/{total} checks passed"
+                )
+                failed = [res for res in validation_results if not res.passed]
+                for fail in failed:
+                    error_msg = f" - {fail.error}" if fail.error else ""
+                    logger.warning(f"Quality check failed: {fail.name} - {fail.message}{error_msg}")
 
     def _run_post_ingestion_algorithms(self) -> None:
         from .graph_algorithms import get_shared_algorithms
@@ -504,6 +511,42 @@ class GraphUpdater:
             logger.info(ls.INCREMENTAL_FORCE)
 
         eligible_files = self._collect_eligible_files()
+
+        # Log file type distribution for better visibility
+        if eligible_files:
+            logger.info(f"Found {len(eligible_files)} code file(s) to process")
+        else:
+            # Provide detailed information about what files were found
+            all_files = [
+                f for f in self.repo_path.rglob("*")
+                if f.is_file() and f.name != cs.HASH_CACHE_FILENAME
+            ]
+            if all_files:
+                file_types: dict[str, int] = {}
+                doc_count = 0
+                for f in all_files:
+                    classification = classify_file(f)
+                    if classification.file_type == FileType.CODE:
+                        continue  # Should have been in eligible_files
+                    elif classification.file_type == FileType.DOCUMENT:
+                        doc_count += 1
+                    elif classification.file_type == FileType.JSON:
+                        file_types[".json"] = file_types.get(".json", 0) + 1
+                    else:
+                        ext = f.suffix or "(no extension)"
+                        file_types[ext] = file_types.get(ext, 0) + 1
+
+                if doc_count > 0:
+                    logger.info(
+                        f"Found {doc_count} document file(s) (markdown, etc.) - "
+                        f"these will be indexed in the document graph, not code graph"
+                    )
+                if file_types:
+                    type_summary = ", ".join(
+                        f"{ext}: {count}" for ext, count in sorted(file_types.items())[:5]
+                    )
+                    logger.debug(f"Other file types found: {type_summary}")
+
         new_hashes: FileHashCache = {}
         skipped_count = 0
         changed_file_count = 0
@@ -571,7 +614,26 @@ class GraphUpdater:
 
         # Early exit if no files to process and no deletions
         if not changed_files and not deleted_keys:
-            logger.info("No files to process (all files unchanged or no eligible files)")
+            if not eligible_files:
+                # Check if there are document files instead of code files
+                doc_files = [
+                    f for f in self.repo_path.rglob("*")
+                    if f.is_file() and is_document_file(f)
+                ]
+                if doc_files:
+                    logger.info(
+                        f"No code files found in repository. "
+                        f"Found {len(doc_files)} document file(s). "
+                        f"The code graph will be empty. "
+                        f"Use the document graph for markdown/documentation files."
+                    )
+                else:
+                    logger.info(
+                        "No code files found in repository. "
+                        "The code graph will be empty."
+                    )
+            else:
+                logger.info("No files to process (all files unchanged)")
             if skipped_count > 0:
                 logger.info(ls.INCREMENTAL_SKIPPED, count=skipped_count)
             _save_hash_cache(cache_path, new_hashes)
@@ -741,6 +803,16 @@ class GraphUpdater:
             logger.info(ls.INCREMENTAL_SKIPPED, count=skipped_count)
         if changed_file_count > 0:
             logger.info(ls.INCREMENTAL_CHANGED, count=changed_file_count)
+
+        # FIX: Flush any remaining nodes before returning
+        # This ensures all nodes exist before deferred relationships are processed
+        if buffered_node_count_since_flush > 0:
+            logger.info(
+                ls.PERIODIC_FLUSH.format(
+                    count=buffered_node_count_since_flush
+                )
+            )
+            self.ingestor.flush_nodes()
 
         _save_hash_cache(cache_path, new_hashes)
 

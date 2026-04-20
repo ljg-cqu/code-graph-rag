@@ -10,6 +10,7 @@ import io
 import time
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from dataclasses import replace
 from typing import Any
 
 from loguru import logger
@@ -18,6 +19,7 @@ from pydantic_ai.usage import UsageLimits
 from rich.console import Console
 
 from codebase_rag.config import ModelConfig, settings
+from codebase_rag.providers import get_provider_from_config
 from codebase_rag.services.connection_pool import (
     PooledMemgraphProxy,
     get_connection_pool,
@@ -283,6 +285,14 @@ class SubAgentOrchestrator:
     Manages full lifecycle of sub-agents, execution guarantees, and cleanup.
     """
 
+    # Model fallback chain for when primary model is unavailable
+    MODEL_FALLBACK_CHAIN: dict[str, list[str]] = {
+        "k2.6-code-preview": ["claude-sonnet-4-6", "claude-opus-4-7", "claude-haiku-4-5"],
+        "k2.5-code-preview": ["claude-sonnet-4-6", "claude-opus-4-7", "claude-haiku-4-5"],
+        "kimi-k2.6": ["claude-sonnet-4-6", "claude-opus-4-7", "claude-haiku-4-5"],
+        "kimi-k2.5": ["claude-sonnet-4-6", "claude-opus-4-7", "claude-haiku-4-5"],
+    }
+
     def __init__(
         self,
         worker_count: int | None = None,
@@ -307,6 +317,7 @@ class SubAgentOrchestrator:
         self.running = AtomicBoolean(False)
         self._shutdown_called = AtomicBoolean(False)
         self._llm_assignment_index = 0
+        self._current_model_config: ModelConfig | None = None
 
         valid_strategies = {"fifo", "round-robin"}
         scheduling_strategy = scheduling_strategy.lower()
@@ -331,18 +342,94 @@ class SubAgentOrchestrator:
             worker_index=worker_index,
         )
 
+    def _validate_model_availability(self, model_config: ModelConfig) -> bool:
+        """
+        Check if the specified model is available before spawning sub-agents.
+        Returns True if model is available, False otherwise.
+        """
+        try:
+            provider = get_provider_from_config(model_config)
+            # Attempt to create the model - this will fail if model is unavailable
+            provider.create_model(model_config.model_id)
+            return True
+        except Exception as e:
+            logger.warning(
+                f"Model '{model_config.model_id}' is not available: {e}"
+            )
+            return False
+
+    def _get_fallback_model_config(self, original_config: ModelConfig) -> ModelConfig | None:
+        """
+        Get a fallback model configuration when the primary model is unavailable.
+        Returns None if no fallback is available.
+        """
+        original_model_id = original_config.model_id
+        fallback_chain = self.MODEL_FALLBACK_CHAIN.get(original_model_id, [])
+
+        if not fallback_chain:
+            # Try generic fallbacks
+            fallback_chain = ["claude-sonnet-4-6", "claude-opus-4-7", "claude-haiku-4-5"]
+
+        for fallback_model_id in fallback_chain:
+            # Use dataclasses.replace to safely create a copy with modified model_id
+            # This preserves all attributes without manually specifying each one
+            fallback_config = replace(original_config, model_id=fallback_model_id)
+
+            if self._validate_model_availability(fallback_config):
+                logger.info(
+                    f"Using fallback model '{fallback_model_id}' instead of '{original_model_id}'"
+                )
+                return fallback_config
+
+        return None
+
     def initialize_agents(self) -> None:
         logger.info(f"Initializing {self.worker_count} sub-agents")
         worker_llms = settings.active_worker_llms
         num_worker_llms = len(worker_llms)
+
+        # Validate and potentially fallback model configurations
+        validated_worker_llms: list[ModelConfig] = []
+        for llm_config in worker_llms:
+            if self._validate_model_availability(llm_config):
+                validated_worker_llms.append(llm_config)
+            else:
+                # Try to find a fallback model
+                fallback_config = self._get_fallback_model_config(llm_config)
+                if fallback_config:
+                    validated_worker_llms.append(fallback_config)
+                else:
+                    logger.error(
+                        f"Model '{llm_config.model_id}' is unavailable and no fallback found. "
+                        f"This worker configuration will be skipped."
+                    )
+
+        # If no valid models, try orchestrator config as fallback
+        if not validated_worker_llms:
+            orchestrator_config = settings.active_orchestrator_config
+            if self._validate_model_availability(orchestrator_config):
+                logger.warning(
+                    "No valid worker LLMs found. Using orchestrator config as fallback."
+                )
+                validated_worker_llms = [orchestrator_config]
+            else:
+                # Try fallback for orchestrator config too
+                fallback_config = self._get_fallback_model_config(orchestrator_config)
+                if fallback_config:
+                    logger.warning(
+                        f"Using fallback model '{fallback_config.model_id}' for orchestrator."
+                    )
+                    validated_worker_llms = [fallback_config]
+
+        num_valid_llms = len(validated_worker_llms)
 
         for worker in self.workers[self.worker_count :]:
             worker.shutdown()
         self.workers = self.workers[: self.worker_count]
 
         for index in range(len(self.workers), self.worker_count):
-            if num_worker_llms > 0:
-                llm_config = worker_llms[self._llm_assignment_index % num_worker_llms]
+            if num_valid_llms > 0:
+                llm_config = validated_worker_llms[self._llm_assignment_index % num_valid_llms]
                 self._llm_assignment_index += 1
                 agent = self.agent_factory(llm_config=llm_config, worker_index=index)
             else:
@@ -351,13 +438,13 @@ class SubAgentOrchestrator:
                 SubAgentWorker(worker_id=self._build_worker_id(index), agent=agent)
             )
 
-        if num_worker_llms > 0:
+        if num_valid_llms > 0:
             logger.info(
-                f"Sub-agent pool initialized with {num_worker_llms} worker LLMs (round-robin assignment)"
+                f"Sub-agent pool initialized with {num_valid_llms} worker LLMs (round-robin assignment)"
             )
         else:
-            logger.info(
-                "Sub-agent pool initialized successfully using orchestrator LLM as default"
+            logger.warning(
+                "Sub-agent pool initialized without validated LLMs - using default orchestrator LLM"
             )
 
     def execute_tasks(
@@ -487,6 +574,36 @@ class SubAgentOrchestrator:
                         except Exception as e:
                             error_msg = str(e)
                             retry_count = retry_counts.get(subtask["id"], 0)
+
+                            # Check if this is a model availability error (404)
+                            is_model_error = (
+                                "404" in error_msg
+                                or "resource_not_found" in error_msg.lower()
+                                or "not found" in error_msg.lower()
+                            )
+
+                            if is_model_error and retry_count == 0:
+                                # First retry for model errors - try to switch to fallback model
+                                current_config = getattr(worker.agent, "llm_config", None)
+                                if current_config:
+                                    fallback_config = self._get_fallback_model_config(current_config)
+                                    if fallback_config:
+                                        logger.warning(
+                                            f"Subtask {subtask['id']} failed with model error. "
+                                            f"Switching to fallback model '{fallback_config.model_id}' and retrying..."
+                                        )
+                                        # Recreate worker agent with fallback model
+                                        worker.reset_agent(
+                                            self.agent_factory(
+                                                llm_config=fallback_config,
+                                                worker_index=int(worker.worker_id.split("-")[-1])
+                                                if "-" in worker.worker_id
+                                                else 0
+                                            )
+                                        )
+                                        retry_counts[subtask["id"]] = retry_count + 1
+                                        remaining_tasks.insert(0, subtask)
+                                        continue
 
                             if retry_count < retry_attempts:
                                 retry_counts[subtask["id"]] = retry_count + 1

@@ -21,6 +21,9 @@ def test_run_uses_all_embeddable_labels_for_quality_validation(
     checker_instance = MagicMock()
     checker_instance.validate_ingestion_quality.return_value = []
 
+    # Mock function_registry to have content so quality validation runs
+    updater.function_registry.insert("test.function", "Function")
+
     with (
         patch.object(updater, "_process_files"),
         patch.object(updater, "_process_function_calls"),

@@ -286,6 +286,54 @@ def load_json_files(
     return json_files
 
 
+def _detect_json_purpose(data: Any, file_path: Path) -> tuple[str, str | None]:
+    """
+    Detect the purpose/type of a JSON file and provide guidance.
+
+    Returns:
+        Tuple of (purpose_type, guidance_message)
+    """
+    if not isinstance(data, dict):
+        if isinstance(data, list):
+            return "raw_array", "This appears to be a raw JSON array. For ingestion, wrap it in an object with 'entities' and optional 'metadata' fields."
+        return "unknown", "Unrecognized JSON format. Expected an object with 'entities' and/or 'relationships' arrays."
+
+    # Check for schema definition
+    if "$schema" in data or "definitions" in data or "properties" in data:
+        return "schema_definition", "This appears to be a JSON Schema file, not entity data. Schema files define structure but don't contain ingestable entities."
+
+    # Check for configuration
+    if any(k in data for k in ["config", "settings", "options", "parameters"]):
+        return "configuration", "This appears to be a configuration file, not entity data. Configuration files control behavior but don't define entities."
+
+    # Check for metadata-only
+    if "metadata" in data and "entities" not in data and "relationships" not in data:
+        return "metadata_only", "This file contains only metadata. For ingestion, add an 'entities' array with the actual entity definitions."
+
+    # Check for valid ingestion payload
+    has_entities = "entities" in data and isinstance(data.get("entities"), list)
+    has_relationships = "relationships" in data and isinstance(data.get("relationships"), list)
+
+    if has_entities or has_relationships:
+        return "ingestion_payload", None  # Valid format, no guidance needed
+
+    # Check for relationship documentation (common in this repo)
+    if "relationships" in data and not isinstance(data.get("relationships"), list):
+        return "relationship_docs", "This appears to document relationships but not in the ingestable format. The 'relationships' field should be an array of relationship objects."
+
+    # Check for other common patterns
+    if "data" in data and isinstance(data.get("data"), list):
+        return "data_wrapper", "This has a 'data' array. For ingestion, rename 'data' to 'entities' or wrap the array appropriately."
+
+    if "nodes" in data and "links" in data:
+        return "graph_format", "This appears to be a graph format (nodes/links). For ingestion, rename 'nodes' to 'entities' and 'links' to 'relationships'."
+
+    if "name" in data and "description" in data and len(data) <= 5:
+        return "single_entity", "This appears to be a single entity object. For ingestion, wrap it in an 'entities' array."
+
+    return "unknown", f"Unrecognized JSON format. Keys found: {list(data.keys())[:5]}. Expected 'entities' and/or 'relationships' arrays."
+
+
 def _load_json_files_with_errors(
     input_path: str, exclude_patterns: list[str] | None = None
 ) -> tuple[list[tuple[Path, dict[str, Any]]], list[str]]:
@@ -309,6 +357,7 @@ def _load_json_files_with_errors(
         "**/coverage/**/*.json",
         "**/.embedding_cache/**/*.json",
         "**/.cgr/**/*.json",
+        "**/.cgr-*.json",  # Exclude CGR internal cache files (e.g., .cgr-hash-cache.json)
         "**/*.egg-info/**/*.json",
         "**/benchmarks/results/**/*.json",
     }
@@ -324,6 +373,10 @@ def _load_json_files_with_errors(
 
     def should_exclude(file_path: Path) -> bool:
         if file_path.name.startswith(".tmp_cache_") and file_path.suffix == ".json":
+            return True
+
+        # Exclude CGR internal cache files (e.g., .cgr-hash-cache.json)
+        if file_path.name.startswith(".cgr-") and file_path.suffix == ".json":
             return True
 
         if any(
@@ -347,20 +400,42 @@ def _load_json_files_with_errors(
             return [], []
         try:
             with open(path, encoding="utf-8") as json_file:
-                json_files.append((path, json.load(json_file)))
+                data = json.load(json_file)
+                purpose, guidance = _detect_json_purpose(data, path)
+                if purpose == "ingestion_payload":
+                    json_files.append((path, data))
+                elif guidance:
+                    load_errors.append(f"Skipping {path}: {guidance}")
         except Exception as exc:
             load_errors.append(f"Skipping invalid JSON file {path}: {exc}")
     elif path.is_dir():
+        skipped_files_with_guidance: list[tuple[Path, str]] = []
         for file_path in path.rglob("*.json"):
             if should_exclude(file_path):
                 continue
             try:
                 with open(file_path, encoding="utf-8") as json_file:
                     data = json.load(json_file)
-                    if looks_like_ingestion_payload(data):
+                    purpose, guidance = _detect_json_purpose(data, file_path)
+                    if purpose == "ingestion_payload":
                         json_files.append((file_path, data))
+                    elif guidance:
+                        skipped_files_with_guidance.append((file_path, guidance))
             except Exception as exc:
                 load_errors.append(f"Skipping invalid JSON file {file_path}: {exc}")
+
+        # Log summary of skipped files with guidance
+        if skipped_files_with_guidance:
+            purpose_counts: dict[str, int] = {}
+            for fp, guidance in skipped_files_with_guidance:
+                purpose, _ = _detect_json_purpose({}, fp)
+                purpose_counts[purpose] = purpose_counts.get(purpose, 0) + 1
+                load_errors.append(f"Skipping {fp}: {guidance}")
+
+            if purpose_counts:
+                summary = ", ".join(f"{count} {purpose.replace('_', ' ')}"
+                                   for purpose, count in sorted(purpose_counts.items()))
+                logger.info(f"JSON files skipped: {summary}")
     else:
         raise ValueError(
             f"Invalid input path: {input_path} (must be .json file or directory containing JSON files)"
@@ -1462,6 +1537,23 @@ def ingest_json_data(
                     ),
                     is_entity_summary=False,
                 )
+
+        # Log completion with guidance if nothing was ingested
+        if result.entities_ingested == 0 and result.files_processed > 0:
+            logger.warning(
+                f"Ingestion completed with {result.files_processed} file(s) processed "
+                f"but 0 entities ingested. This usually means:"
+            )
+            logger.warning(
+                "  1. The JSON files don't match the expected ingestion format "
+                "(needs 'entities' array with entity objects)"
+            )
+            logger.warning(
+                "  2. The files are documentation, configuration, or schema files rather than entity data"
+            )
+            logger.warning(
+                "  3. Check the 'entities' array is present and contains valid entity objects with 'id' and 'name' fields"
+            )
 
         logger.info(
             "Ingestion completed: "
