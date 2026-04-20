@@ -410,7 +410,7 @@ class SubAgentOrchestrator:
             return "model_unavailable"
         elif "connection" in error_lower or "timeout" in error_lower or "network" in error_lower:
             return "network_error"
-        elif "rate_limit" in error_lower or "429" in error_msg:
+        elif "rate_limit" in error_lower or "rate limit" in error_lower or "429" in error_msg:
             return "rate_limit"
         elif "auth" in error_lower or "401" in error_msg or "403" in error_msg:
             return "auth_error"

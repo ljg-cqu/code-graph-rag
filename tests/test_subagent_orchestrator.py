@@ -68,13 +68,26 @@ def test_failed_models_is_instance_level():
 
 def test_get_all_possible_models_includes_worker_llms():
     """Verify _get_all_possible_models includes configured worker LLMs."""
+    from unittest.mock import PropertyMock
+
     orchestrator = SubAgentOrchestrator()
 
-    with patch.object(settings, 'active_worker_llms', [
-        ModelConfig(model_id="gpt-4o", provider="openai")
-    ]):
-        all_models = orchestrator._get_all_possible_models()
-        assert "gpt-4o" in all_models
+    # Mock the settings property using PropertyMock on the class
+    mock_worker_llms = [ModelConfig(model_id="gpt-4o", provider="openai")]
+    with patch.object(
+        type(settings),
+        'active_worker_llms',
+        new_callable=PropertyMock,
+        return_value=mock_worker_llms
+    ):
+        with patch.object(
+            type(settings),
+            'active_orchestrator_config',
+            new_callable=PropertyMock,
+            return_value=ModelConfig(model_id="claude-sonnet-4-6", provider="anthropic")
+        ):
+            all_models = orchestrator._get_all_possible_models()
+            assert "gpt-4o" in all_models
 
 
 def test_classify_error_model_unavailable():
@@ -91,7 +104,8 @@ def test_classify_error_model_unavailable():
     assert orchestrator._classify_error("timeout") == "network_error"
     assert orchestrator._classify_error("network unreachable") == "network_error"
 
-    # Rate limit errors
+    # Rate limit errors (both with underscore and space)
+    assert orchestrator._classify_error("rate_limit exceeded") == "rate_limit"
     assert orchestrator._classify_error("rate limit exceeded") == "rate_limit"
     assert orchestrator._classify_error("429 Too Many Requests") == "rate_limit"
 
@@ -121,27 +135,47 @@ def test_graceful_degradation_with_unavailable_models():
         ])
 
         # Should have error result, not hang or crash
-        assert result.total_errors == 1
+        assert len(result.errors) == 1
         assert "No LLM models available" in result.errors[0]["error"]
 
 
 def test_initialize_agents_sets_has_validated_models():
     """Verify initialize_agents sets _has_validated_models correctly."""
+    from unittest.mock import PropertyMock
+
     orchestrator = SubAgentOrchestrator()
 
-    # Mock settings
-    with patch.object(settings, 'active_worker_llms', []):
-        with patch.object(settings, 'active_orchestrator_config',
-                         ModelConfig(model_id="claude-sonnet-4-6", provider="anthropic")):
+    # Mock settings properties using PropertyMock
+    with patch.object(
+        type(settings),
+        'active_worker_llms',
+        new_callable=PropertyMock,
+        return_value=[]
+    ):
+        with patch.object(
+            type(settings),
+            'active_orchestrator_config',
+            new_callable=PropertyMock,
+            return_value=ModelConfig(model_id="claude-sonnet-4-6", provider="anthropic")
+        ):
             with patch.object(orchestrator, '_validate_model_availability', return_value=True):
                 orchestrator.initialize_agents()
                 assert orchestrator._has_validated_models is True
 
     # Test when no models available
     orchestrator2 = SubAgentOrchestrator()
-    with patch.object(settings, 'active_worker_llms', []):
-        with patch.object(settings, 'active_orchestrator_config',
-                         ModelConfig(model_id="claude-sonnet-4-6", provider="anthropic")):
+    with patch.object(
+        type(settings),
+        'active_worker_llms',
+        new_callable=PropertyMock,
+        return_value=[]
+    ):
+        with patch.object(
+            type(settings),
+            'active_orchestrator_config',
+            new_callable=PropertyMock,
+            return_value=ModelConfig(model_id="claude-sonnet-4-6", provider="anthropic")
+        ):
             with patch.object(orchestrator2, '_validate_model_availability', return_value=False):
                 orchestrator2.initialize_agents()
                 assert orchestrator2._has_validated_models is False
