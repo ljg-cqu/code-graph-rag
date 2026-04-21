@@ -1,4 +1,11 @@
-"""Query utility functions for keyword extraction and processing."""
+"""Query utility functions for keyword extraction and processing.
+
+NOTE: extract_best_keyword and extract_keywords are deprecated.
+Use LLMQueryPlanner.expected_entities for LLM-extracted entities instead.
+These functions remain as fallback for contexts without LLM plan access.
+"""
+
+import warnings
 
 STOPWORDS = {
     'the', 'is', 'at', 'which', 'on', 'a', 'an', 'and', 'or', 'but',

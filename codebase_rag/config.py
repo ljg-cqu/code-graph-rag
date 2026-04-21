@@ -609,6 +609,15 @@ class AppConfig(BaseSettings):
     DOC_MEMGRAPH_VECTOR_CAPACITY: int = 100000
     DOC_VECTOR_SEARCH_TOP_K: int = 5
 
+    # Document concept extraction
+    DOC_CONCEPT_EXTRACTION_ENABLED: bool = True
+    DOC_CONCEPT_MIN_CONFIDENCE: float = Field(default=0.7, ge=0.0, le=1.0)
+    DOC_CONCEPT_EXTRACTION_CONCURRENCY: int = Field(default=10, ge=1, le=50)
+
+    # Document graph algorithms
+    DOC_GRAPH_MAX_PATH_DEPTH: int = Field(default=5, ge=1, le=10)
+    DOC_GRAPH_MAX_NEIGHBORS: int = Field(default=50, ge=1, le=500)
+
     # ─────────────────────────────────────────────────────────
     # JSON GRAPHRAG (NEW)
     # ─────────────────────────────────────────────────────────
@@ -813,6 +822,9 @@ class AppConfig(BaseSettings):
     # When True, DOCUMENT_ONLY mode conceptual queries automatically route to semantic search
     # Set to False to disable fallback (queries passed directly to agent without document context)
     CGR_DOCUMENT_SEMANTIC_FALLBACK_ENABLED: bool = True
+
+    # Default query mode when both code and document graphs have content
+    CGR_DEFAULT_MODE_WHEN_BOTH: str = Field(default="both_merged", pattern="^(both_merged|code_only)$")
 
     # Worker LLM Configuration for Sub-Agents
     CGR_WORKER_LLMS: str | list[str | dict] = Field(default_factory=list)

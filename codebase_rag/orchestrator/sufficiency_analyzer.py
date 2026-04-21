@@ -1,3 +1,12 @@
+"""Sufficiency analyzer module.
+
+NOTE: This module is deprecated. Use LLMSufficiencyAnalyzer from
+codebase_rag.orchestrator.llm_sufficiency_analyzer for LLM-driven
+sufficiency analysis.
+
+This module remains for backward compatibility only.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -5,6 +14,8 @@ from enum import Enum
 
 
 class QuestionType(Enum):
+    """Question type classification."""
+
     STRUCTURAL = "structural"
     FUNCTIONAL = "functional"
     DIAGNOSTIC = "diagnostic"
@@ -12,6 +23,8 @@ class QuestionType(Enum):
 
 @dataclass
 class InvestigationRequirements:
+    """Investigation requirements for a question."""
+
     question_type: QuestionType
     requires_vector: bool
     requires_graph: bool
@@ -20,49 +33,25 @@ class InvestigationRequirements:
     requires_cross_validation: bool = False
 
 
-_DIAGNOSTIC_KEYWORDS = frozenset({
-    "why is", "why does", "what is wrong", "debug", "failing",
-    "error", "issue", "problem", "not working", "broken",
-    "stack trace", "exception", "crash",
-})
-
-_FUNCTIONAL_KEYWORDS = frozenset({
-    "how does", "how do", "implementation", "logic", "algorithm",
-    "work", "flow", "behavior", "what happens when", "step by step",
-    "describe", "explain", "process", "mechanism",
-})
-
-_STRUCTURAL_KEYWORDS = frozenset({
-    "what classes", "what functions", "list all", "show me",
-    "find all", "how many", "count", "directory", "structure",
-    "hierarchy", "dependencies", "relationships",
-})
-
-
 def analyze_requirements(question: str) -> InvestigationRequirements:
-    q_lower = question.lower()
+    """Determine investigation requirements for a question.
 
-    if any(kw in q_lower for kw in _DIAGNOSTIC_KEYWORDS):
-        return InvestigationRequirements(
-            QuestionType.DIAGNOSTIC,
-            requires_vector=True,
-            requires_graph=True,
-            requires_file_read=True,
-            min_rounds=3,
-            requires_cross_validation=True,
-        )
-    if any(kw in q_lower for kw in _FUNCTIONAL_KEYWORDS):
-        return InvestigationRequirements(
-            QuestionType.FUNCTIONAL,
-            requires_vector=True,
-            requires_graph=True,
-            requires_file_read=True,
-            min_rounds=3,
-        )
+    DEPRECATED: Use LLMSufficiencyAnalyzer.assess() for LLM-driven analysis.
+
+    This function now returns conservative defaults suitable for most queries.
+    It no longer performs keyword matching which produced false positives.
+
+    Args:
+        question: User's natural language question
+
+    Returns:
+        InvestigationRequirements with conservative defaults
+    """
     return InvestigationRequirements(
-        QuestionType.STRUCTURAL,
+        QuestionType.FUNCTIONAL,
         requires_vector=True,
         requires_graph=True,
-        requires_file_read=False,
+        requires_file_read=True,
         min_rounds=2,
+        requires_cross_validation=False,
     )

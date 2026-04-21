@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import re
+import time
 from typing import TYPE_CHECKING
 
 from loguru import logger
+from pydantic import BaseModel, Field
 from pydantic_ai import Agent, DeferredToolRequests, Tool
 from pydantic_ai.usage import UsageLimits
 
@@ -79,7 +82,6 @@ def _clean_cypher_response(response_text: str) -> str:
     query = "\n".join([line_content for line_content in lines if line_content.strip()])
 
     # Remove all block comments (/* ... */)
-    import re
 
     query = re.sub(r"/\*.*?\*/", "", query, flags=re.DOTALL).strip()
 
@@ -165,77 +167,122 @@ def _clean_cypher_response(response_text: str) -> str:
     return query
 
 
-_COMMENT_OR_WS = r"(?:\s|//[^\n]*|/\*.*?\*/)+"
+# Cache for LLM-validated Cypher queries
+_CYPHER_LLM_VALIDATION_CACHE: dict[str, tuple[bool, float]] = {}
+_CYPHER_LLM_VALIDATION_CACHE_TTL = 3600  # 1 hour
 
 
-def _build_keyword_pattern(keyword: str) -> re.Pattern[str]:
-    parts = keyword.split()
-    if len(parts) == 1:
-        return re.compile(rf"\b{re.escape(parts[0])}\b")
-    joined = _COMMENT_OR_WS.join(re.escape(p) for p in parts)
-    return re.compile(rf"\b{joined}\b", re.DOTALL)
+class CypherSafetyAssessment(BaseModel):
+    """Structured output for Cypher safety validation."""
+
+    safe: bool = Field(..., description="Whether the query is read-only safe")
+    reasoning: str = Field(default="", description="Brief explanation")
 
 
-_CYPHER_DANGEROUS_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
-    (kw, _build_keyword_pattern(kw)) for kw in cs.CYPHER_DANGEROUS_KEYWORDS
-]
+# Singleton agent for Cypher safety validation
+_CYPHER_SAFETY_AGENT: Agent | None = None
 
 
-# Pattern to extract procedure name from CALL statements
-# Matches: CALL procedure.name(...) or CALL procedure.name YIELD ...
-_CALL_PROCEDURE_PATTERN = re.compile(
-    r"\bCALL\s+(?P<proc>[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)",
-    re.IGNORECASE,
-)
+async def _llm_validate_cypher_safety(query: str) -> bool:
+    """Use LLM to validate Cypher query safety semantically.
+
+    Uses structured output (Pydantic model) instead of string parsing.
+    Agent is created once and reused for efficiency.
+    """
+    global _CYPHER_SAFETY_AGENT
+
+    if _CYPHER_SAFETY_AGENT is None:
+        system_prompt = """You validate Cypher queries for read-only safety. A query is UNSAFE if it:
+- Modifies data (CREATE, DELETE, DETACH DELETE, SET, REMOVE, MERGE that creates new nodes)
+- Modifies schema (CREATE INDEX, DROP INDEX, CREATE CONSTRAINT, etc.)
+- Uses non-read-only CALL procedures (write procedures, admin procedures)
+- Contains multiple statements separated by semicolons
+
+A query is SAFE if it only:
+- Reads data (MATCH, RETURN, WITH, OPTIONAL MATCH, UNWIND)
+- Uses read-only CALL procedures
+- Uses COUNT, COLLECT, etc.
+
+Respond with a JSON object: {"safe": true/false, "reasoning": "brief explanation"}"""
+
+        config = settings.active_cypher_config
+        llm = _create_provider_model(config)
+        _CYPHER_SAFETY_AGENT = Agent(
+            model=llm,
+            system_prompt=system_prompt,
+            output_type=CypherSafetyAssessment,
+            retries=1,
+        )
+
+    try:
+        result = await _CYPHER_SAFETY_AGENT.run(query)
+        return result.output.safe
+    except Exception as e:
+        logger.warning(f"LLM Cypher validation failed: {e}. Defaulting to unsafe.")
+        return False
 
 
-def _validate_cypher_read_only(query: str) -> None:
+async def _validate_cypher_read_only_async(query: str) -> None:
+    """Validate Cypher query for read-only safety.
+
+    Uses hybrid approach: mechanical fast-path + LLM semantic validation.
+    """
     upper_query = query.upper()
 
-    # Block multiple queries
+    # Fast-path mechanical checks (zero false positives)
     if upper_query.count(";") > 1:
         raise ex.LLMGenerationError(
             ex.LLM_DANGEROUS_QUERY.format(
-                keyword="Multiple semicolon-separated queries", query=query
+                keyword="Multiple semicolon-separated queries",
+                query=query,
             )
         )
-
-    # Block unsupported Memgraph Community features
     if "OVER(" in upper_query:
         raise ex.LLMGenerationError(
-            ex.LLM_DANGEROUS_QUERY.format(keyword="OVER() window function", query=query)
+            ex.LLM_DANGEROUS_QUERY.format(
+                keyword="OVER() window function",
+                query=query,
+            )
         )
     if "USING PARALLEL EXECUTION" in upper_query:
         raise ex.LLMGenerationError(
             ex.LLM_DANGEROUS_QUERY.format(
-                keyword="USING PARALLEL EXECUTION", query=query
+                keyword="USING PARALLEL EXECUTION",
+                query=query,
             )
         )
 
-    # Block dangerous write operations
-    for keyword, pattern in _CYPHER_DANGEROUS_PATTERNS:
-        if pattern.search(upper_query):
+    # Check cache for LLM validation
+    query_hash = hashlib.sha256(query.encode()).hexdigest()[:16]
+    if query_hash in _CYPHER_LLM_VALIDATION_CACHE:
+        is_safe, cached_time = _CYPHER_LLM_VALIDATION_CACHE[query_hash]
+        if time.time() - cached_time < _CYPHER_LLM_VALIDATION_CACHE_TTL:
+            if is_safe:
+                return
             raise ex.LLMGenerationError(
-                ex.LLM_DANGEROUS_QUERY.format(keyword=keyword, query=query)
+                ex.LLM_DANGEROUS_QUERY.format(
+                    keyword="Unsafe operation (cached)",
+                    query=query,
+                )
             )
 
-    # Validate CALL statements against whitelist of safe procedures
-    for match in _CALL_PROCEDURE_PATTERN.finditer(query):
-        procedure = match.group("proc").lower()
-        # Check if procedure starts with any whitelisted prefix
-        is_safe = any(
-            procedure == safe or procedure.startswith(safe + ".")
-            for safe in cs.CYPHER_SAFE_CALL_PROCEDURES
-        )
-        if not is_safe:
-            raise ex.LLMGenerationError(
-                f"CALL procedure '{procedure}' is not in the whitelist of safe read-only procedures. "
-                f"Query rejected: {query}"
+    # LLM semantic validation
+    is_safe = await _llm_validate_cypher_safety(query)
+
+    # Cache result
+    _CYPHER_LLM_VALIDATION_CACHE[query_hash] = (is_safe, time.time())
+
+    if not is_safe:
+        raise ex.LLMGenerationError(
+            ex.LLM_DANGEROUS_QUERY.format(
+                keyword="Unsafe write operation detected by LLM",
+                query=query,
             )
+        )
 
 
 class CypherGenerator:
-    __slots__ = ("agent",)
+    __slots__ = ("agent", "_fallback_agent")
 
     def __init__(self) -> None:
         try:
@@ -254,6 +301,7 @@ class CypherGenerator:
                 output_type=str,
                 retries=settings.AGENT_RETRIES,
             )
+            self._fallback_agent = None
         except Exception as e:
             raise ex.LLMGenerationError(ex.LLM_INIT_CYPHER.format(error=e)) from e
 
@@ -268,7 +316,7 @@ class CypherGenerator:
             )
 
         query = _clean_cypher_response(result.output)
-        _validate_cypher_read_only(query)
+        await _validate_cypher_read_only_async(query)
         return query
 
     async def generate(self, natural_language_query: str) -> str:
@@ -301,6 +349,57 @@ class CypherGenerator:
         except Exception as e:
             logger.error(ls.CYPHER_ERROR.format(error=e))
             raise ex.LLMGenerationError(ex.LLM_GENERATION_FAILED.format(error=e)) from e
+
+    async def generate_fallback(
+        self,
+        user_query: str,
+        error_message: str,
+    ) -> str | None:
+        """Generate a conservative fallback Cypher query when primary generation fails.
+
+        Args:
+            user_query: Original natural language query.
+            error_message: Error from the primary Cypher generation attempt.
+
+        Returns:
+            A conservative Cypher query string, or None if generation fails.
+        """
+        if self._fallback_agent is None:
+            from pydantic_ai import Agent
+
+            self._fallback_agent = Agent(
+                model=self.agent.model,
+                system_prompt=(
+                    "You generate conservative, simple Cypher queries. "
+                    "Use only MATCH, WHERE, RETURN, LIMIT, ORDER BY. "
+                    "No CALL procedures, no complex patterns. "
+                    "Return ONLY the Cypher query, no markdown, no explanation."
+                ),
+                retries=1,
+            )
+
+        fallback_prompt = f"""The primary Cypher generation failed with this error: {error_message}
+
+User query: {user_query}
+
+Generate a SIMPLE, conservative Cypher query that will likely work. Guidelines:
+- Use only MATCH, WHERE, RETURN, LIMIT, ORDER BY
+- Do not use CALL procedures
+- Do not use variable-length paths longer than 3 hops
+- Prefer exact name/qualified_name matching over complex patterns
+- If unsure, return a query that matches nodes by name CONTAINS and returns their qualified_name and path
+
+Return ONLY the Cypher query string, no markdown, no explanation."""
+
+        try:
+            result = await self._fallback_agent.run(fallback_prompt)
+            query = str(result.output).strip()
+            if query.startswith("```"):
+                query = query.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+            return query
+        except Exception as e:
+            logger.warning(f"Fallback Cypher generation failed: {e}")
+            return None
 
 
 def create_rag_orchestrator_with_config(

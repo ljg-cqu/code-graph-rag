@@ -33,6 +33,7 @@ from pydantic_ai import (
 )
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.usage import UsageLimits
+from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
@@ -59,7 +60,6 @@ from .services import QueryProtocol
 from .services.graph_service import MemgraphIngestor
 from .services.llm import CypherGenerator, create_rag_orchestrator
 from .shared.query_router import QueryMode, QueryRouter
-from .tools import get_tools_for_mode
 from .tools.code_retrieval import CodeRetriever, create_code_retrieval_tool
 from .tools.codebase_query import create_query_tool
 from .tools.directory_lister import DirectoryLister, create_directory_lister_tool
@@ -818,10 +818,20 @@ async def _run_agent_response_loop(
     from pydantic_ai.messages import ModelRequest, UserPromptPart
 
     from .orchestrator.investigation_tracker import InvestigationState
-    from .orchestrator.sufficiency_analyzer import analyze_requirements
+    from .orchestrator.sufficiency_analyzer import (
+        InvestigationRequirements,
+        QuestionType,
+    )
     from .orchestrator.sufficiency_gatekeeper import evaluate_sufficiency
 
-    requirements = analyze_requirements(question_with_context)
+    requirements = InvestigationRequirements(
+        QuestionType.FUNCTIONAL,
+        requires_vector=True,
+        requires_graph=True,
+        requires_file_read=True,
+        min_rounds=2,
+        requires_cross_validation=False,
+    )
     state = InvestigationState()
     rejection_count = 0
     deferred_results: DeferredToolResults | None = None
@@ -1714,115 +1724,6 @@ Available modes:
         return current_mode, f"Invalid mode: {arg}. Use /mode help for options."
 
 
-def _has_write_intent(prompt: str) -> bool:
-    """
-    Enhanced write operation detection with contextual understanding.
-    The current implementation uses r"\\b(create|write|edit|modify|...)\\b" which
-    matches write-related words ANYWHERE in the prompt, causing false positives
-    on read-only queries like "show me how the code creates objects" or
-    "explain what the write method does".
-
-    This replacement:
-    1. Checks for explicit imperative write commands (verb + code target noun)
-    2. Excludes queries in known read-only phrasing patterns (question/explanation)
-    3. Returns False for ambiguous cases where write words appear but no imperative
-       command structure is detected (instead of the current blanket True)
-    """
-    # Use strict mode if configured (backward compatibility)
-    if settings.CGR_PARALLEL_WRITE_DETECTION_STRICT:
-        write_patterns = [
-            r"\b(create|write|edit|modify|update|delete|remove|refactor|rename|move|implement|fix|patch)\b",
-            r"\badd\b.{0,40}\b(file|files|code|test|tests|function|class|method|doc|docs|documentation|config)\b",
-        ]
-        lowered_prompt = prompt.lower()
-        return any(re.search(pattern, lowered_prompt) for pattern in write_patterns)
-
-    lowered_prompt = prompt.lower().strip()
-
-    # ── Layer 1: Explicit imperative write command patterns ──
-    # These match when a write verb is used as an imperative/instruction
-    # directly targeting a code entity (verb followed by a code noun object).
-    # This eliminates false positives where "write"/"create" appear as nouns
-    # or in descriptive/analytical contexts.
-    explicit_write_patterns = [
-        # Imperative: "create a file", "modify the code", "fix the following test"
-        r"\b(create|write|edit|modify|update|delete|remove|refactor|rename|move|implement|fix|patch)\s+(the\s+)?(following\s+)?(file|files|code|test|tests|function|class|method|doc|docs|documentation|config|configuration|module|package|script|component)\b",
-        # "add/insert a function/class/test" — add requires a direct object
-        r"\b(add|insert)\s+(the\s+)?(following\s+)?(code|function|class|test|tests|documentation|module|package|file|files)\b",
-        # "generate and save", "produce to file" — explicit save intent
-        r"\b(generate|produce)\s+(and\s+)?(save|persist|store|write|output\s+to)\b",
-        # "save/store/persist the result/output/code" — explicit persistence
-        r"\b(save|store|persist)\s+(the\s+)?(result|output|code|file|changes|modification)\b",
-        # "replace X with Y", "overwrite the file" — destructive operations
-        r"\b(replace|overwrite)\s+.*\b(with|by)\b",
-        # "remove/delete the file/function" (without a question context)
-        r"\b(remove|delete)\s+(the\s+)?(file|files|directory|folder|code|function|class|method|module)\b",
-    ]
-
-    for pattern in explicit_write_patterns:
-        if re.search(pattern, lowered_prompt, re.IGNORECASE):
-            return True
-
-    # ── Layer 2: Read-only context detection ──
-    # If the prompt is phrased as a question, explanation request, or
-    # analytical query, any write-related words are being used descriptively,
-    # not as instructions to modify code.
-    read_only_context_patterns = [
-        # Questions about how to do something (learning, not doing)
-        r"how\s+(to|do|can\s+i|does|should\s+i)\s+(write|create|modify|update|delete|remove|edit|implement|fix)",
-        # Requests for examples or demonstrations
-        r"(example|demonstration|sample|illustration)\s+(of|for|showing)\s+(writing|creating|modifying|updating|deleting|removing|how\s+to)",
-        # Best practices / guidelines (knowledge, not action)
-        r"(best\s+practice|guideline|recommendation|pattern|convention)\s+(for|about|on)\s+(writing|creating|modifying|updating|deleting|removing)",
-        # Explanation requests
-        r"(explain|describe|what\s+(does|is|are)|tell\s+me\s+about|show\s+me\s+how)\s+.*(write|create|modify|update|delete|remove|wrote|created|writes|creates)",
-        # Documentation/reference queries
-        r"(documentation|docs|reference|api)\s+(for|about|on)\s+(write|create|modify|update|delete|remove)",
-        # Analytical/review queries: "analyze how X creates Y", "review the update logic"
-        r"(analyze|review|examine|investigate|compare|find|search|list|count|check|verify|understand)\s+.*(write|create|modify|update|delete|remove)",
-        # Past-tense or third-person: "where the code writes to disk", "how the factory creates objects"
-        r"(where|how|when|why)\s+.*(writes|creates|modifies|updates|deletes|removes|wrote|created|modified|updated|deleted|removed)",
-        # "the write method", "the create function" — referring to named entities
-        r"(the\s+)?(write|create|modify|update|delete|remove)\s+(method|function|handler|callback|operation|routine|procedure|class|module|interface|trait|decorator)",
-    ]
-
-    # If ANY read-only context pattern matches, treat the entire prompt as read-only
-    # regardless of whether individual write words appear. This is the key fix:
-    # queries like "explain what the write method does" or "show me how the code
-    # creates objects" will match read-only patterns and return False.
-    for pattern in read_only_context_patterns:
-        if re.search(pattern, lowered_prompt, re.IGNORECASE):
-            return False
-
-    # ── Layer 3: Ambiguous case handling ──
-    # If write-related words appear but no explicit imperative command matched
-    # (Layer 1) and no read-only context matched (Layer 2), we have an
-    # ambiguous case. The current code returns True for ALL such cases
-    # (any word in lowered_prompt from write_words → True), which is overly
-    # conservative. Instead, we only return True if the write word appears
-    # in a syntactic position suggesting an instruction (followed by a direct
-    # object within 40 chars, similar to the current second pattern but broader).
-    ambiguous_write_patterns = [
-        # "write something", "create something" with a nearby target
-        r"\b(create|write|edit|modify|update|delete|remove|refactor|rename|move|implement)\b.{0,40}\b(file|files|code|test|tests|function|class|method|doc|docs|documentation|config|module|package|component|script)\b",
-        # Standalone imperative without explicit target but with instruction cues
-        r"\b(please|kindly|make\s+sure|ensure)\s+.*\b(create|write|edit|modify|update|delete|remove)\b",
-    ]
-
-    for pattern in ambiguous_write_patterns:
-        if re.search(pattern, lowered_prompt, re.IGNORECASE):
-            return True
-
-    # ── Layer 4: Default safe ──
-    # If nothing matched, default to False (read-only). This is a deliberate
-    # change from the current behavior which defaults to True when write words
-    # appear. The rationale: the explicit and ambiguous patterns above already
-    # catch genuine write intents; remaining cases are likely read-only queries
-    # that happen to contain write-related words in passing. The LLM eligibility
-    # classifier provides a second safety net for truly ambiguous edge cases.
-    return False
-
-
 def _normalize_parallel_config(
     parallel_config: ParallelExecutionConfig | None,
 ) -> ParallelExecutionConfig:
@@ -2159,12 +2060,15 @@ async def _run_interactive_loop(
 
                 subagent_orchestrator.query_mode = current_mode
 
-                has_write_operations = _has_write_intent(question_with_context)
+                # Let the LLM classifier detect write intent via structured analysis.
+                # The classifier's system prompt explicitly instructs it to reject
+                # write operations with eligible=false and task_type="write_operation".
+                has_write_operations = False
                 preview_subtasks: list[dict[str, Any]] = []
                 preview_count: int | None = None
 
                 if normalized_parallel_config.auto_split:
-                    preview_subtasks = task_splitter.split_task(question_with_context)
+                    preview_subtasks = await task_splitter.split_task(question_with_context)
                     preview_count = len(preview_subtasks)
 
                     # Show mode mismatch suggestion if available
@@ -2953,28 +2857,27 @@ def _determine_default_query_mode(
     code_graph: QueryProtocol | None,
     doc_graph: QueryProtocol | None,
 ) -> QueryMode:
-    """Determine default query mode based on repository content statistics.
+    """Determine default query mode based on available graphs.
 
-    Priority:
-    1. If only document graph has data -> DOCUMENT_ONLY
-    2. If only code graph has data -> CODE_ONLY
-    3. If both have data -> BOTH_MERGED
-    4. If neither has data -> CODE_ONLY (fallback)
+    Mode is a hint for the LLM agent, not a tool filter.
     """
     code_count, doc_count = _get_content_availability(code_graph, doc_graph)
 
     if code_count == 0 and doc_count > 0:
         logger.info(f"Auto-selecting DOCUMENT_ONLY mode (docs: {doc_count}, code: {code_count})")
         return QueryMode.DOCUMENT_ONLY
-    elif code_count > 0 and doc_count == 0:
+    if code_count > 0 and doc_count == 0:
         logger.info(f"Auto-selecting CODE_ONLY mode (code: {code_count}, docs: {doc_count})")
         return QueryMode.CODE_ONLY
-    elif code_count > 0 and doc_count > 0:
-        logger.info(f"Auto-selecting BOTH_MERGED mode (code: {code_count}, docs: {doc_count})")
-        return QueryMode.BOTH_MERGED
-    else:
-        logger.info("No graph data found, defaulting to CODE_ONLY")
+
+    # Both graphs have content
+    default_when_both = getattr(settings, "CGR_DEFAULT_MODE_WHEN_BOTH", "both_merged")
+    if default_when_both == "code_only":
+        logger.info("Auto-selecting CODE_ONLY mode (both available, configured default)")
         return QueryMode.CODE_ONLY
+
+    logger.info(f"Auto-selecting BOTH_MERGED mode (code: {code_count}, docs: {doc_count})")
+    return QueryMode.BOTH_MERGED
 
 
 def _initialize_services_and_agent(
@@ -3104,7 +3007,7 @@ def _initialize_services_and_agent(
             index_docs_tool,
             graph_query_tool,
         ]
-        tools.extend(get_tools_for_mode(query_mode, doc_tools))
+        tools.extend(doc_tools)
 
     confirmation_tool_names = ConfirmationToolNames(
         replace_code=file_editor_tool.name,

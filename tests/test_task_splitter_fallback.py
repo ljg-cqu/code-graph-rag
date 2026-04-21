@@ -3,8 +3,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from codebase_rag.orchestrator.task_splitter import SplitInfo, TaskSplitter
 from codebase_rag.shared.query_router import QueryMode
 
@@ -65,13 +63,15 @@ class TestLastSplitInfo:
     """Test last_split_info population during split_task."""
 
     def test_last_split_info_populated_on_empty_result(self, tmp_path: Path):
+        import asyncio
+
         splitter = TaskSplitter(
             repo_path=str(tmp_path),
             query_mode=QueryMode.CODE_ONLY,
             code_count=0,
             doc_count=5,
         )
-        subtasks = splitter.split_task("test query")
+        subtasks = asyncio.run(splitter.split_task("test query", strategy="file"))
         assert subtasks == []
         assert splitter.last_split_info is not None
         assert splitter.last_split_info.suggested_mode == QueryMode.DOCUMENT_ONLY
@@ -79,6 +79,8 @@ class TestLastSplitInfo:
         assert splitter.last_split_info.doc_count == 5
 
     def test_last_split_info_reset_on_successful_split(self, tmp_path: Path):
+        import asyncio
+
         (tmp_path / "test.py").write_text("def foo(): pass\n")
         splitter = TaskSplitter(
             repo_path=str(tmp_path),
@@ -86,13 +88,15 @@ class TestLastSplitInfo:
             code_count=10,
             doc_count=0,
         )
-        subtasks = splitter.split_task("test query")
+        subtasks = asyncio.run(splitter.split_task("test query", strategy="file"))
         assert len(subtasks) > 0
         assert splitter.last_split_info is not None
         assert splitter.last_split_info.subtask_count == len(subtasks)
         assert splitter.last_split_info.suggested_mode is None
 
     def test_last_split_info_on_scope_paths(self, tmp_path: Path):
+        import asyncio
+
         (tmp_path / "main.py").write_text("def foo(): pass\n")
         splitter = TaskSplitter(
             repo_path=str(tmp_path),
@@ -100,7 +104,9 @@ class TestLastSplitInfo:
             code_count=10,
             doc_count=0,
         )
-        subtasks = splitter.split_task(f"review {tmp_path / 'main.py'}")
+        subtasks = asyncio.run(splitter.split_task(
+            f"review {tmp_path / 'main.py'}", strategy="file"
+        ))
         assert len(subtasks) > 0
         assert splitter.last_split_info is not None
         assert splitter.last_split_info.subtask_count == len(subtasks)

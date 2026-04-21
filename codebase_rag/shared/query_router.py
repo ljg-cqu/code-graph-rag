@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Literal
 from loguru import logger
 
 if TYPE_CHECKING:
+    from ..orchestrator.llm_query_planner import QueryPlan
     from ..services import QueryProtocol
     from ..vector_backend import VectorBackend
 
@@ -37,6 +38,26 @@ def _coerce_str_list(value: object, default: list[str] | None = None) -> list[st
     if not isinstance(value, list):
         return fallback
     return [item for item in value if isinstance(item, str)]
+
+
+def _format_path_result(path) -> str:
+    lines = [
+        "Found path between concepts:",
+        "",
+        path.formatted_path,
+        "",
+        f"Path length: {path.path_length} hops",
+    ]
+    return "\n".join(lines)
+
+
+def _format_related_concepts(related) -> str:
+    if not related:
+        return "No related concepts found."
+    lines = ["Related concepts:"]
+    for name, rel_type, strength in related:
+        lines.append(f"  - {name} ({rel_type}, strength: {strength:.2f})")
+    return "\n".join(lines)
 
 
 class QueryMode(StrEnum):
@@ -104,6 +125,8 @@ class QueryRequest:
     top_k: int = 5
     scope: str = "all"
     use_orchestrator: bool = False
+    plan: QueryPlan | None = None
+    forced: bool = False
 
 
 @dataclass
@@ -243,7 +266,37 @@ class QueryRouter:
             return self._query_code_only(request)
 
         elif request.mode == QueryMode.DOCUMENT_ONLY:
-            return self._query_document_only(request)
+            import asyncio
+
+            try:
+                _ = asyncio.get_running_loop()
+                # We're in sync context but document query is async
+                # Loop is running; we can't block here
+                # Fall back to legacy behavior
+                return self._query_document_only_legacy(request)
+            except RuntimeError:
+                pass
+            return asyncio.run(self._query_document_only_async(request))
+
+        elif request.mode == QueryMode.BOTH_MERGED:
+            return self._query_both_merged(request)
+
+        elif request.mode == QueryMode.CODE_VS_DOC:
+            return self._validate_code_against_doc(request)
+
+        elif request.mode == QueryMode.DOC_VS_CODE:
+            return self._validate_doc_against_code(request)
+
+        else:
+            raise ValueError(f"Unknown query mode: {request.mode}")
+
+    async def query_async(self, request: QueryRequest) -> QueryResponse:
+        """Async version of query() for use in async contexts."""
+        if request.mode == QueryMode.CODE_ONLY:
+            return self._query_code_only(request)
+
+        elif request.mode == QueryMode.DOCUMENT_ONLY:
+            return await self._query_document_only_async(request)
 
         elif request.mode == QueryMode.BOTH_MERGED:
             return self._query_both_merged(request)
@@ -403,7 +456,7 @@ class QueryRouter:
 
         CRITICAL: Document graph must NOT be touched.
         """
-        if self.current_mode == QueryMode.DOCUMENT_ONLY:
+        if self.current_mode == QueryMode.DOCUMENT_ONLY and not request.forced:
             logger.warning("Code query called in DOCUMENT_ONLY mode, returning empty")
             return QueryResponse(
                 answer="Code queries are disabled in DOCUMENT_ONLY mode.",
@@ -448,7 +501,7 @@ class QueryRouter:
 
         # Use async version in event loop aware manner
         try:
-            loop = asyncio.get_running_loop()
+            _ = asyncio.get_running_loop()
             # We're in an async context, but this method is sync
             # Use the synchronous wrapper
             combined = orchestrator.execute(
@@ -602,9 +655,14 @@ class QueryRouter:
                    n.end_line as end_line, labels(n) as labels
             LIMIT $limit
             """
-            from ..utils.query_utils import extract_keywords
+            # Use LLM-extracted entities when plan is available (LLM-First spec).
+            # Fallback to keyword extraction only as last resort.
+            if request.plan and request.plan.expected_entities:
+                keywords = request.plan.expected_entities[:3]
+            else:
+                from ..utils.query_utils import extract_keywords
 
-            keywords = extract_keywords(request.question, max_keywords=3)
+                keywords = extract_keywords(request.question, max_keywords=3)
             try:
                 keyword_results = self.code_graph.fetch_all(
                     keyword_query,
@@ -657,13 +715,9 @@ class QueryRouter:
             warnings=warnings,
         )
 
-    def _query_document_only(self, request: QueryRequest) -> QueryResponse:
-        """
-        Query DOCUMENT graph/vector ONLY.
-
-        CRITICAL: Code graph must NOT be touched.
-        """
-        if self.current_mode == QueryMode.CODE_ONLY:
+    def _query_document_only_legacy(self, request: QueryRequest) -> QueryResponse:
+        """Legacy synchronous document query for backward compatibility."""
+        if self.current_mode == QueryMode.CODE_ONLY and not request.forced:
             logger.warning("Document query called in CODE_ONLY mode, returning empty")
             return QueryResponse(
                 answer="Document queries are disabled in CODE_ONLY mode.",
@@ -702,6 +756,78 @@ class QueryRouter:
                 mode=request.mode,
                 warnings=[f"Search error: {e}"],
             )
+
+    async def _query_document_only_async(self, request: QueryRequest) -> QueryResponse:
+        """Query DOCUMENT graph/vector with optional graph traversal."""
+        if self.current_mode == QueryMode.CODE_ONLY and not request.forced:
+            return QueryResponse(
+                answer="Document queries are disabled in CODE_ONLY mode.",
+                sources=[],
+                mode=request.mode,
+                warnings=["Document queries disabled in CODE_ONLY mode"],
+            )
+
+        if not self.doc_graph:
+            return QueryResponse(
+                answer="Document graph is not available.",
+                sources=[],
+                mode=request.mode,
+                warnings=["Document graph unavailable"],
+            )
+
+        if not self.doc_vector:
+            return QueryResponse(
+                answer="Document vector backend is not available.",
+                sources=[],
+                mode=request.mode,
+                warnings=["Document vector backend unavailable"],
+            )
+
+        logger.info(f"Querying document graph: {request.question}")
+
+        try:
+            # Use LLM-provided plan for routing decisions
+            from ..orchestrator.llm_query_planner import QueryIntent
+
+            if request.plan and request.plan.intent == QueryIntent.DOC_GRAPH_TRAVERSAL:
+                from ..document.graph_algorithms import DocumentGraphAlgorithms
+
+                workspace = getattr(self, "workspace", "default")
+                algo = DocumentGraphAlgorithms(self.doc_graph, workspace=workspace)
+                concepts = request.plan.expected_entities
+
+                if len(concepts) >= 2:
+                    path = await algo.find_shortest_path(concepts[0], concepts[1])
+                    if path:
+                        return QueryResponse(
+                            answer=_format_path_result(path),
+                            sources=[],
+                            mode=request.mode,
+                        )
+                elif len(concepts) == 1:
+                    related = await algo.find_related_concepts(concepts[0])
+                    if related:
+                        return QueryResponse(
+                            answer=_format_related_concepts(related),
+                            sources=[],
+                            mode=request.mode,
+                        )
+
+            # Default: semantic/vector search
+            results = self._fetch_document_results(request)
+            return self._build_document_response(request, results)
+
+        except Exception as e:
+            return QueryResponse(
+                answer=f"Document search failed: {e}",
+                sources=[],
+                mode=request.mode,
+                warnings=[str(e)],
+            )
+
+    def _query_document_only(self, request: QueryRequest) -> QueryResponse:
+        """Synchronous wrapper for backward compatibility."""
+        return self._query_document_only_legacy(request)
 
     def _query_both_merged(self, request: QueryRequest) -> QueryResponse:
         """

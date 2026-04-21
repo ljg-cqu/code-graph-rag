@@ -10,6 +10,7 @@ import hashlib
 import math
 import re
 from datetime import UTC, datetime
+from itertools import batched
 from pathlib import Path
 
 from loguru import logger
@@ -21,7 +22,9 @@ from ..embeddings import get_embedding_provider
 from ..services.graph_service import MemgraphIngestor
 from ..types_defs import ResultRow
 from ..utils.path_utils import should_skip_path
+from . import logs as doc_ls
 from .chunking import DocumentChunk, SemanticDocumentChunker
+from .concept_extraction import ConceptExtractor, ExtractionResult, LLMConceptExtractor
 from .error_handling import (
     DeadLetterQueue,
     ErrorType,
@@ -181,6 +184,7 @@ class DocumentGraphUpdater:
         workspace: str = "default",
         exclude_paths: frozenset[str] | None = None,
         unignore_paths: frozenset[str] | None = None,
+        concept_extractor: ConceptExtractor | None = None,
     ) -> None:
         self.host = host
         self.port = port
@@ -193,6 +197,10 @@ class DocumentGraphUpdater:
                 "Must contain only alphanumeric characters, underscores, and hyphens."
             )
         self.workspace = workspace
+        self.concept_extractor = concept_extractor or (
+            LLMConceptExtractor() if settings.DOC_CONCEPT_EXTRACTION_ENABLED else None
+        )
+        self._concept_indexes_ensured = False
 
         # Determine base path for metadata files
         # If repo_path is a file, use its parent directory
@@ -861,6 +869,22 @@ class DocumentGraphUpdater:
             doc, embeddings_data, section_info, ingestor, indexed_at
         )
 
+        # Extract and store concepts from chunks (sync wrapper)
+        if self.concept_extractor and chunks:
+            import asyncio
+
+            try:
+                asyncio.run(
+                    self._extract_and_store_concepts(
+                        chunks, ingestor, self.workspace
+                    )
+                )
+            except RuntimeError:
+                # Event loop already running; fall back to legacy behavior
+                logger.debug(
+                    "Skipping concept extraction in running event loop (sync path)"
+                )
+
         # Update version cache
         version = self.version_tracker.create_version(doc)
         self.version_cache.set(version)
@@ -892,6 +916,10 @@ class DocumentGraphUpdater:
         path_prefix = f"{doc_path}#"
 
         try:
+            # Clean up orphaned concepts before deleting chunks
+            if self.concept_extractor:
+                self._cleanup_concepts_for_document(doc_path, ingestor)
+
             ingestor.execute_write(
                 """
                 MATCH (d:Document {path: $path, workspace: $workspace})
@@ -985,6 +1013,10 @@ class DocumentGraphUpdater:
             ingestor,
             indexed_at,
         )
+
+        # Extract and store concepts from chunks
+        if self.concept_extractor and chunks:
+            await self._extract_and_store_concepts(chunks, ingestor, self.workspace)
 
         # Update version
         version = self.version_tracker.create_version(doc)
@@ -1719,6 +1751,216 @@ class DocumentGraphUpdater:
                 )
             )
             return "failed"
+
+
+    def _ensure_concept_indexes(self, ingestor: MemgraphIngestor) -> None:
+        """Create indexes for Concept and Topic nodes if they do not exist."""
+        if self._concept_indexes_ensured:
+            return
+        cypher = """
+        CREATE INDEX concept_qualified_name_index IF NOT EXISTS
+        FOR (c:Concept) ON (c.qualified_name);
+
+        CREATE INDEX concept_workspace_index IF NOT EXISTS
+        FOR (c:Concept) ON (c.workspace);
+
+        CREATE INDEX topic_qualified_name_index IF NOT EXISTS
+        FOR (t:Topic) ON (t.qualified_name);
+
+        CREATE INDEX topic_workspace_index IF NOT EXISTS
+        FOR (t:Topic) ON (t.workspace);
+        """
+        try:
+            ingestor.fetch_all(cypher)
+            self._concept_indexes_ensured = True
+        except Exception as e:
+            logger.warning(f"Concept index creation failed (may already exist): {e}")
+
+    async def _extract_and_store_concepts(
+        self,
+        chunks: list[DocumentChunk],
+        ingestor: MemgraphIngestor,
+        workspace: str,
+    ) -> None:
+        """Extract concepts from chunks and store in graph via batch MERGE.
+
+        Uses LLM extraction (not regex) for semantic concept identification.
+        Extraction runs concurrently with a configurable semaphore to limit
+        parallel LLM calls.
+        """
+        if not self.concept_extractor:
+            return
+
+        self._ensure_concept_indexes(ingestor)
+        logger.info(doc_ls.DOC_CONCEPT_EXTRACT_START.format(chunk_count=len(chunks)))
+
+        semaphore = asyncio.Semaphore(
+            getattr(settings, "DOC_CONCEPT_EXTRACTION_CONCURRENCY", 10)
+        )
+
+        async def _extract_one(chunk: DocumentChunk) -> ExtractionResult:
+            async with semaphore:
+                return await self.concept_extractor.extract(
+                    chunk.content, chunk.qualified_name
+                )
+
+        extraction_results = await asyncio.gather(
+            *[_extract_one(c) for c in chunks]
+        )
+
+        concept_nodes: list[dict[str, object]] = []
+        mention_rels: list[dict[str, object]] = []
+        concept_relationships: list[tuple[str, str, str, float]] = []
+
+        for chunk, result in zip(chunks, extraction_results):
+            for concept in result.concepts:
+                concept_qn = f"{workspace}:{concept.name}"
+                concept_nodes.append({
+                    "qualified_name": concept_qn,
+                    "workspace": workspace,
+                    "name": concept.name,
+                    "aliases": concept.aliases,
+                    "definition": concept.definition,
+                    "confidence": concept.confidence,
+                    "source_chunk_qn": concept.source_chunk_qn,
+                })
+                frequency = chunk.content.lower().count(concept.name.lower())
+                if not frequency:
+                    frequency = 1
+                mention_rels.append({
+                    "chunk_qn": chunk.qualified_name,
+                    "concept_qn": concept_qn,
+                    "frequency": frequency,
+                    "context": concept.context,
+                })
+
+            for rel in result.relationships:
+                concept_relationships.append(
+                    (
+                        f"{workspace}:{rel.from_concept}",
+                        f"{workspace}:{rel.to_concept}",
+                        rel.relationship_type,
+                        rel.strength,
+                    )
+                )
+
+        logger.info(
+            doc_ls.DOC_CONCEPT_EXTRACT_DONE.format(concept_count=len(concept_nodes))
+        )
+
+        if concept_nodes:
+            self._merge_concept_nodes_batch(ingestor, concept_nodes)
+        if mention_rels:
+            self._create_mentions_batch(ingestor, mention_rels, workspace)
+        if concept_relationships:
+            self._store_concept_relationships_batch(ingestor, concept_relationships, workspace)
+
+    def _merge_concept_nodes_batch(
+        self,
+        ingestor: MemgraphIngestor,
+        concept_nodes: list[dict[str, object]],
+    ) -> None:
+        """Batch merge Concept nodes using UNWIND for efficiency."""
+        batch_size = settings.DOC_MEMGRAPH_BATCH_SIZE
+        for batch in batched(concept_nodes, batch_size):
+            cypher = """
+            UNWIND $nodes as node
+            MERGE (c:Concept {qualified_name: node.qualified_name})
+            SET c.workspace = node.workspace,
+                c.name = node.name,
+                c.aliases = node.aliases,
+                c.definition = node.definition,
+                c.confidence = node.confidence,
+                c.source_chunk_qn = node.source_chunk_qn
+            """
+            ingestor.fetch_all(cypher, {"nodes": list(batch)})
+
+    def _create_mentions_batch(
+        self,
+        ingestor: MemgraphIngestor,
+        mention_rels: list[dict[str, object]],
+        workspace: str,
+    ) -> None:
+        """Batch create MENTIONS relationships from chunks to concepts."""
+        batch_size = settings.DOC_MEMGRAPH_BATCH_SIZE
+        for batch in batched(mention_rels, batch_size):
+            cypher = """
+            UNWIND $rels as rel
+            MATCH (c:Chunk {qualified_name: rel.chunk_qn, workspace: $workspace})
+            MATCH (concept:Concept {qualified_name: rel.concept_qn, workspace: $workspace})
+            MERGE (c)-[m:MENTIONS]->(concept)
+            SET m.frequency = rel.frequency, m.context = rel.context
+            """
+            ingestor.fetch_all(cypher, {"rels": list(batch), "workspace": workspace})
+
+    def _store_concept_relationships_batch(
+        self,
+        ingestor: MemgraphIngestor,
+        relationships: list[tuple[str, str, str, float]],
+        workspace: str,
+    ) -> None:
+        """Batch create relationships between concepts.
+
+        Memgraph does not support parameterized relationship types, so we use
+        explicit FOREACH branches per type.
+        """
+        rel_maps: list[dict[str, object]] = [
+            {
+                "from_qn": from_qn,
+                "to_qn": to_qn,
+                "rel_type": rel_type,
+                "strength": strength,
+            }
+            for from_qn, to_qn, rel_type, strength in relationships
+        ]
+        batch_size = settings.DOC_MEMGRAPH_BATCH_SIZE
+        for batch in batched(rel_maps, batch_size):
+            cypher = """
+            UNWIND $rels as rel
+            MATCH (a:Concept {qualified_name: rel.from_qn, workspace: $workspace})
+            MATCH (b:Concept {qualified_name: rel.to_qn, workspace: $workspace})
+            FOREACH (_ IN CASE WHEN rel.rel_type = 'RELATED_TO' THEN [1] ELSE [] END |
+                MERGE (a)-[r:RELATED_TO]->(b) SET r.strength = rel.strength
+            )
+            FOREACH (_ IN CASE WHEN rel.rel_type = 'IS_A' THEN [1] ELSE [] END |
+                MERGE (a)-[r:IS_A]->(b) SET r.strength = rel.strength
+            )
+            FOREACH (_ IN CASE WHEN rel.rel_type = 'PART_OF' THEN [1] ELSE [] END |
+                MERGE (a)-[r:PART_OF]->(b) SET r.strength = rel.strength
+            )
+            FOREACH (_ IN CASE WHEN rel.rel_type = 'CAUSES' THEN [1] ELSE [] END |
+                MERGE (a)-[r:CAUSES]->(b) SET r.strength = rel.strength
+            )
+            """
+            ingestor.fetch_all(cypher, {"rels": list(batch), "workspace": workspace})
+
+    def _cleanup_concepts_for_document(
+        self,
+        document_path: str,
+        ingestor: MemgraphIngestor,
+    ) -> None:
+        """Remove orphaned concepts after document chunks are deleted."""
+        logger.info(doc_ls.DOC_CONCEPT_CLEANUP_START.format(doc_path=document_path))
+
+        cypher = """
+        MATCH (d:Document {path: $doc_path, workspace: $workspace})-[:CONTAINS_CHUNK]->(c:Chunk)
+        OPTIONAL MATCH (c)-[m:MENTIONS]->(concept:Concept)
+        DELETE m
+        WITH DISTINCT concept
+        WHERE concept IS NOT NULL
+          AND NOT EXISTS {
+            MATCH (:Chunk)-[:MENTIONS]->(concept)
+          }
+        DETACH DELETE concept
+        RETURN count(concept) as removed_count
+        """
+        result = ingestor.fetch_all(
+            cypher,
+            {"doc_path": document_path, "workspace": self.workspace},
+        )
+
+        removed_count = result[0].get("removed_count", 0) if result else 0
+        logger.info(doc_ls.DOC_CONCEPT_CLEANUP_DONE.format(count=removed_count))
 
 
 def migrate_section_count_property(

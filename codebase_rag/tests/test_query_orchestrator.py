@@ -1,4 +1,9 @@
-"""Tests for QueryMethodOrchestrator."""
+"""Tests for QueryMethodOrchestrator.
+
+NOTE: This module now uses LLM-driven orchestration per the LLM-First Orchestration spec.
+The previous rule-based methods (classify_intent, select_methods) have been replaced
+with LLMQueryPlanner for intent classification and method selection.
+"""
 
 from __future__ import annotations
 
@@ -6,99 +11,79 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from codebase_rag.orchestrator.llm_query_planner import (
+    GraphAlgorithm,
+    LLMQueryPlanner,
+    QueryIntent,
+    QueryMethod,
+    QueryPlan,
+)
 from codebase_rag.retrieval.query_orchestrator import (
     CombinedQueryResult,
     IntegrityWarning,
-    QueryIntent,
-    QueryMethod,
     QueryMethodOrchestrator,
     QueryMethodResult,
     verify_graph_result_integrity,
 )
 
 
-class TestQueryIntentClassification:
-    """Test query intent classification."""
-
-    def test_classifies_structural_intent(self) -> None:
-        assert QueryMethodOrchestrator.classify_intent(
-            "What functions call authenticate?"
-        ) == QueryIntent.STRUCTURAL
-
-    def test_classifies_functional_intent(self) -> None:
-        assert QueryMethodOrchestrator.classify_intent(
-            "How does authentication work?"
-        ) == QueryIntent.FUNCTIONAL
-
-    def test_classifies_semantic_intent(self) -> None:
-        assert QueryMethodOrchestrator.classify_intent(
-            "Find functions similar to login"
-        ) == QueryIntent.SEMANTIC
-
-    def test_classifies_validation_intent(self) -> None:
-        assert QueryMethodOrchestrator.classify_intent(
-            "Is this code valid and correct?"
-        ) == QueryIntent.VALIDATION
-
-    def test_defaults_to_exploratory(self) -> None:
-        assert (
-            QueryMethodOrchestrator.classify_intent("Tell me about auth")
-            == QueryIntent.EXPLORATORY
-        )
-
-
-class TestQueryIntentWithConfidence:
-    """Test query intent classification with confidence scoring."""
-
-    def test_returns_tuple(self) -> None:
-        intent, confidence = QueryMethodOrchestrator.classify_intent_with_confidence(
-            "What functions call authenticate?"
-        )
-        assert isinstance(intent, QueryIntent)
-        assert isinstance(confidence, float)
-        assert 0.0 <= confidence <= 1.0
-
-    def test_high_confidence_for_clear_intent(self) -> None:
-        intent, confidence = QueryMethodOrchestrator.classify_intent_with_confidence(
-            "call hierarchy for authenticate"
-        )
-        assert intent == QueryIntent.STRUCTURAL
-        assert confidence >= 0.5
-
-    def test_low_confidence_for_ambiguous_query(self) -> None:
-        intent, confidence = QueryMethodOrchestrator.classify_intent_with_confidence(
-            "auth"
-        )
-        assert confidence < 0.5
-
-
-class TestQueryMethodSelection:
-    """Test method selection based on intent."""
+class TestLLMQueryPlanner:
+    """Test LLM-driven query planning (replaces rule-based classification)."""
 
     @pytest.fixture
-    def orchestrator(self) -> QueryMethodOrchestrator:
-        mock_graph = MagicMock()
-        return QueryMethodOrchestrator(code_graph=mock_graph)
+    def planner(self) -> LLMQueryPlanner:
+        return LLMQueryPlanner()
 
-    def test_functional_selects_primary_semantic_and_graph(
-        self, orchestrator: QueryMethodOrchestrator
-    ) -> None:
-        primary, secondary = orchestrator.select_methods(QueryIntent.FUNCTIONAL)
-        assert QueryMethod.SEMANTIC_SEARCH in primary
-        assert QueryMethod.GRAPH_TRAVERSAL in primary
+    def test_query_plan_structure(self) -> None:
+        """Test that QueryPlan has all required fields."""
+        plan = QueryPlan(
+            methods=[QueryMethod.SEMANTIC_SEARCH],
+            reasoning="Test reasoning",
+            fallback_methods=[QueryMethod.KEYWORD_SEARCH],
+            expected_entities=["auth", "login"],
+            requires_file_read=False,
+            intent=QueryIntent.FUNCTIONAL,
+            algorithm=GraphAlgorithm.NONE,
+        )
+        assert plan.methods == [QueryMethod.SEMANTIC_SEARCH]
+        assert plan.intent == QueryIntent.FUNCTIONAL
+        assert plan.expected_entities == ["auth", "login"]
 
-    def test_structural_selects_graph_methods(
-        self, orchestrator: QueryMethodOrchestrator
-    ) -> None:
-        primary, secondary = orchestrator.select_methods(QueryIntent.STRUCTURAL)
-        assert QueryMethod.GRAPH_TRAVERSAL in primary
-        assert QueryMethod.GRAPH_NAVIGATION in primary
+    def test_query_plan_defaults(self) -> None:
+        """Test QueryPlan default values."""
+        plan = QueryPlan(methods=[QueryMethod.GRAPH_TRAVERSAL])
+        assert plan.fallback_methods == []
+        assert plan.expected_entities == []
+        assert plan.requires_file_read is False
+        assert plan.intent is None
+        assert plan.algorithm == GraphAlgorithm.NONE
 
-    def test_exploratory_selects_multiple_primary(
-        self, orchestrator: QueryMethodOrchestrator
-    ) -> None:
-        primary, secondary = orchestrator.select_methods(QueryIntent.EXPLORATORY)
-        assert len(primary) >= 2
+    def test_planner_caching(self, planner: LLMQueryPlanner) -> None:
+        """Test that planner has caching infrastructure."""
+        # Cache key should be deterministic for same query
+        key1 = planner._get_cache_key("test query")
+        key2 = planner._get_cache_key("test query")
+        assert key1 == key2
+        assert len(key1) == 16  # SHA256 hex digest truncated
+
+    def test_planner_cache_operations(self, planner: LLMQueryPlanner) -> None:
+        """Test cache store and retrieve."""
+        plan = QueryPlan(
+            methods=[QueryMethod.SEMANTIC_SEARCH],
+            reasoning="Cached plan",
+        )
+        key = "test_key"
+
+        # Store in cache
+        planner._cache_plan(key, plan)
+
+        # Retrieve from cache
+        cached = planner._get_cached_plan(key)
+        assert cached is not None
+        assert cached.reasoning == "Cached plan"
+
+        # Non-existent key returns None
+        assert planner._get_cached_plan("nonexistent") is None
 
 
 class TestQueryMethodOrchestrator:

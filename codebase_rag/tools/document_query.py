@@ -27,51 +27,91 @@ def create_query_document_graph_tool(
     async def query_document_graph(
         natural_language_query: str,
         top_k: int = 5,
+        include_paths: bool = False,
+        source_concept: str | None = None,
+        target_concept: str | None = None,
     ) -> str:
-        """Query document graph with natural language.
+        """Query document graph with optional graph traversal support.
 
         Args:
-            natural_language_query: Question about documentation
-            top_k: Maximum results to return
+            natural_language_query: The user's question about documents.
+            top_k: Number of results to return.
+            include_paths: If True, attempt graph traversal between concepts.
+            source_concept: Optional explicit source concept for path queries.
+            target_concept: Optional explicit target concept for path queries.
 
         Returns:
-            Formatted results from document graph
+            Formatted results from document graph query.
         """
         logger.info(f"Querying document graph: {natural_language_query[:50]}...")
 
-        # Create router if not provided (standalone usage)
         router = query_router
         if router is None:
             router = _create_document_query_router()
             if router is None:
                 return cs.MSG_SEMANTIC_NO_RESULTS.format(query=natural_language_query)
 
+        # Get LLM plan for intent and entity extraction
+        from ..orchestrator.llm_query_planner import LLMQueryPlanner, QueryIntent
+
+        planner = LLMQueryPlanner()
+        plan = await planner.plan(natural_language_query)
+
+        # Handle graph traversal intent
+        if plan.intent == QueryIntent.DOC_GRAPH_TRAVERSAL or include_paths:
+            from ..document.graph_algorithms import DocumentGraphAlgorithms
+
+            workspace = getattr(router, "workspace", "default")
+            concepts = plan.expected_entities
+
+            # Use explicit concepts if provided
+            if source_concept and target_concept:
+                concepts = [source_concept, target_concept]
+            elif source_concept:
+                concepts = [source_concept] + concepts[:1]
+
+            if len(concepts) >= 2 and router.doc_graph is not None:
+                algo = DocumentGraphAlgorithms(
+                    graph=router.doc_graph,
+                    workspace=workspace,
+                )
+                path = await algo.find_shortest_path(concepts[0], concepts[1])
+                if path:
+                    return _format_path_result(path)
+
+            if len(concepts) == 1 and router.doc_graph is not None:
+                algo = DocumentGraphAlgorithms(
+                    graph=router.doc_graph,
+                    workspace=workspace,
+                )
+                related = await algo.find_related_concepts(concepts[0])
+                if related:
+                    return _format_related_concepts(related)
+
+        # Default: semantic search
         request = QueryRequest(
             question=natural_language_query,
             mode=QueryMode.DOCUMENT_ONLY,
             top_k=top_k,
+            plan=plan,
         )
 
         try:
-            response = router.query(request)
-
+            response = await router.query_async(request)
             if not response.sources:
                 return f"No relevant documents found for: {natural_language_query}"
 
-            # Format response for agent
             result_lines = ["**Document Query Results:**\n"]
             for i, source in enumerate(response.sources, 1):
                 result_lines.append(
                     f"{i}. **{source.qualified_name or source.path}** "
                     f"({source.node_type or 'Section'})"
                 )
-                if source.line_range:
+                if include_paths and source.line_range:
                     result_lines.append(
                         f"   Lines: {source.line_range[0]}-{source.line_range[1]}"
                     )
-
             result_lines.append(f"\n\n**Answer:**\n{response.answer}")
-
             return "\n".join(result_lines)
 
         except Exception as e:
@@ -136,7 +176,7 @@ def create_query_both_graphs_tool(
         )
 
         try:
-            response = router.query(request)
+            response = await router.query_async(request)
 
             # Separate sources by type
             code_sources = [s for s in response.sources if s.type == "code"]
@@ -175,6 +215,26 @@ def create_query_both_graphs_tool(
         name=td.AgenticToolName.QUERY_BOTH_GRAPHS,
         description=td.QUERY_BOTH_GRAPHS,
     )
+
+
+def _format_path_result(path) -> str:
+    lines = [
+        "Found path between concepts:",
+        "",
+        path.formatted_path,
+        "",
+        f"Path length: {path.path_length} hops",
+    ]
+    return "\n".join(lines)
+
+
+def _format_related_concepts(related) -> str:
+    if not related:
+        return "No related concepts found."
+    lines = ["Related concepts:"]
+    for name, rel_type, strength in related:
+        lines.append(f"  - {name} ({rel_type}, strength: {strength:.2f})")
+    return "\n".join(lines)
 
 
 def _create_document_query_router() -> QueryRouter | None:

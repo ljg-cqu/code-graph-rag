@@ -19,42 +19,27 @@ import asyncio
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
-from enum import Enum, auto
+from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from loguru import logger
 
 from ..config import settings
+from ..orchestrator.llm_query_planner import (
+    GraphAlgorithm,
+    LLMQueryPlanner,
+    QueryIntent,
+    QueryMethod,
+    QueryPlan,
+)
 from ..shared.utils.file_classifier import is_code_file
 
 if TYPE_CHECKING:
-    from ..embeddings.base import EmbeddingProviderProtocol
     from ..graph_algorithms import GraphAlgorithms
     from ..memgraph_advanced.hybrid_retrieval import HybridRetriever
     from ..services import QueryProtocol
     from ..vector_backend import VectorBackend
-
-
-class QueryIntent(Enum):
-    """Classified query intent for method selection."""
-
-    FUNCTIONAL = auto()
-    STRUCTURAL = auto()
-    SEMANTIC = auto()
-    EXPLORATORY = auto()
-    VALIDATION = auto()
-
-
-class QueryMethod(Enum):
-    """Available query methods."""
-
-    SEMANTIC_SEARCH = auto()
-    GRAPH_TRAVERSAL = auto()
-    KEYWORD_SEARCH = auto()
-    VECTOR_DIRECT = auto()
-    GRAPH_ALGORITHMS = auto()
-    GRAPH_NAVIGATION = auto()
 
 
 class ConsistencyStatus(Enum):
@@ -99,74 +84,6 @@ class CombinedQueryResult:
     integrity_warnings: list[IntegrityWarning] = field(default_factory=list)
     integrity_check_count: int = 0
     integrity_pass_count: int = 0
-
-
-# Intent keyword mapping for classification
-_INTENT_KEYWORD_MAP: dict[QueryIntent, frozenset[str]] = {
-    QueryIntent.STRUCTURAL: frozenset(
-        {
-            "call",
-            "calls",
-            "called by",
-            "caller",
-            "callee",
-            "hierarchy",
-            "inherit",
-            "import",
-            "depend",
-        }
-    ),
-    QueryIntent.FUNCTIONAL: frozenset(
-        {
-            "how does",
-            "how to",
-            "what does",
-            "why does",
-            "explain",
-            "work",
-            "behavior",
-        }
-    ),
-    QueryIntent.VALIDATION: frozenset(
-        {
-            "correct",
-            "valid",
-            "implement",
-            "comply",
-            "spec",
-            "should",
-            "must",
-            "require",
-        }
-    ),
-    QueryIntent.SEMANTIC: frozenset(
-        {"similar", "like", "compare", "related", "same as", "function"}
-    ),
-}
-
-# Primary/secondary method designation per intent
-_INTENT_METHOD_MAP: dict[QueryIntent, tuple[list[QueryMethod], list[QueryMethod]]] = {
-    QueryIntent.FUNCTIONAL: (
-        [QueryMethod.SEMANTIC_SEARCH, QueryMethod.GRAPH_TRAVERSAL],
-        [QueryMethod.KEYWORD_SEARCH, QueryMethod.VECTOR_DIRECT],
-    ),
-    QueryIntent.STRUCTURAL: (
-        [QueryMethod.GRAPH_TRAVERSAL, QueryMethod.GRAPH_NAVIGATION],
-        [QueryMethod.KEYWORD_SEARCH, QueryMethod.SEMANTIC_SEARCH],
-    ),
-    QueryIntent.SEMANTIC: (
-        [QueryMethod.SEMANTIC_SEARCH, QueryMethod.VECTOR_DIRECT],
-        [QueryMethod.GRAPH_TRAVERSAL, QueryMethod.KEYWORD_SEARCH],
-    ),
-    QueryIntent.EXPLORATORY: (
-        [QueryMethod.SEMANTIC_SEARCH, QueryMethod.GRAPH_TRAVERSAL, QueryMethod.GRAPH_ALGORITHMS],
-        [],
-    ),
-    QueryIntent.VALIDATION: (
-        [QueryMethod.GRAPH_TRAVERSAL, QueryMethod.KEYWORD_SEARCH],
-        [QueryMethod.SEMANTIC_SEARCH, QueryMethod.GRAPH_ALGORITHMS],
-    ),
-}
 
 
 class BackendHealthCoordinator:
@@ -386,66 +303,6 @@ class QueryMethodOrchestrator:
             logger.debug(f"Graph data consistency check failed: {e}")
             return ConsistencyStatus.CONSISTENT  # Assume OK on error
 
-    @staticmethod
-    def classify_intent(query: str) -> QueryIntent:
-        """Classify query intent based on keywords and patterns."""
-        query_lower = query.lower()
-
-        for intent, keywords in _INTENT_KEYWORD_MAP.items():
-            if any(kw in query_lower for kw in keywords):
-                return intent
-
-        return QueryIntent.EXPLORATORY
-
-    @staticmethod
-    def classify_intent_with_confidence(query: str) -> tuple[QueryIntent, float]:
-        """Classify intent with heuristic confidence score.
-
-        Confidence is based on:
-        - Number of matching keywords (more matches → higher confidence)
-        - Keyword specificity (longer/more-specific phrases → higher confidence)
-        - Whether only one intent matched (single intent → higher confidence)
-
-        Returns (intent, confidence) where confidence is 0.0–1.0.
-        """
-        query_lower = query.lower()
-        scores: dict[QueryIntent, float] = {}
-
-        for intent, keywords in _INTENT_KEYWORD_MAP.items():
-            match_count = sum(1 for kw in keywords if kw in query_lower)
-            if match_count > 0:
-                # Score: match ratio + bonus for specificity
-                avg_keyword_len = (
-                    sum(len(kw) for kw in keywords if kw in query_lower) / match_count
-                )
-                specificity_bonus = min(avg_keyword_len / 20.0, 0.3)
-                scores[intent] = min(match_count / 3.0 + specificity_bonus, 1.0)
-
-        if not scores:
-            return QueryIntent.EXPLORATORY, 0.3  # Low confidence for default
-
-        best_intent = max(scores, key=scores.get)
-        best_score = scores[best_intent]
-
-        # If multiple intents scored similarly, reduce confidence
-        if len(scores) > 1:
-            second_best = max(v for k, v in scores.items() if k != best_intent)
-            if second_best > best_score * 0.5:
-                best_score *= 0.7  # Penalize ambiguous classification
-
-        return best_intent, best_score
-
-    def select_methods(
-        self, intent: QueryIntent
-    ) -> tuple[list[QueryMethod], list[QueryMethod]]:
-        """Select appropriate query methods based on intent.
-
-        Returns (primary_methods, secondary_methods).
-        """
-        return _INTENT_METHOD_MAP.get(
-            intent, ([QueryMethod.SEMANTIC_SEARCH], [QueryMethod.KEYWORD_SEARCH])
-        )
-
     def _is_method_available(self, method: QueryMethod) -> bool:
         """Check circuit breaker and health coordinator."""
         failures = self._circuit_breaker.get(method, 0)
@@ -480,6 +337,7 @@ class QueryMethodOrchestrator:
         method: QueryMethod,
         query: str,
         top_k: int = 5,
+        plan: QueryPlan | None = None,
     ) -> QueryMethodResult:
         """Execute a single query method (async)."""
         start = time.time()
@@ -489,21 +347,21 @@ class QueryMethodOrchestrator:
                 case QueryMethod.SEMANTIC_SEARCH:
                     return await self._execute_semantic_search(query, top_k, start)
                 case QueryMethod.GRAPH_TRAVERSAL:
-                    return await self._execute_graph_traversal(query, top_k, start)
+                    return await self._execute_graph_traversal(query, top_k, start, plan)
                 case QueryMethod.KEYWORD_SEARCH:
-                    return await self._execute_keyword_search(query, top_k, start)
+                    return await self._execute_keyword_search(query, top_k, start, plan)
                 case QueryMethod.VECTOR_DIRECT:
                     return await self._execute_vector_direct(query, top_k, start)
                 case QueryMethod.GRAPH_NAVIGATION:
-                    return await self._execute_graph_navigation(query, top_k, start)
+                    return await self._execute_graph_navigation(query, top_k, start, plan)
                 case QueryMethod.GRAPH_ALGORITHMS:
-                    return await self._execute_graph_algorithms(query, top_k, start)
+                    return await self._execute_graph_algorithms(query, top_k, start, plan)
                 case _:
                     return QueryMethodResult(
                         method=method,
                         items=[],
                         execution_time_ms=(time.time() - start) * 1000,
-                        error=f"Method {method.name} not implemented",
+                        error=f"Method {method.value} not implemented",
                     )
         except Exception as e:
             return QueryMethodResult(
@@ -551,11 +409,16 @@ class QueryMethodOrchestrator:
         query: str,
         top_k: int,
         start: float,
+        plan: QueryPlan | None,
     ) -> QueryMethodResult:
-        """Execute graph traversal with retry and template fallback.
+        """Execute graph traversal with retry and LLM fallback chain.
 
-        Uses async CypherGenerator.generate()/repair() and _fetch_all_async()
-        for async-native execution in MCP server / pydantic-ai contexts.
+        Fallback chain:
+        1. LLM-based Cypher generation
+        1b. Cypher repair on syntax errors
+        2. Conservative Cypher fallback (generate_fallback)
+        3. Keyword search using plan.expected_entities
+        4. Semantic fallback
         """
         from ..exceptions import LLMGenerationError
         from ..services.failure_classifier import classify_memgraph_failure
@@ -590,97 +453,39 @@ class QueryMethodOrchestrator:
                             execution_time_ms=(time.time() - start) * 1000,
                         )
                 except Exception:
-                    pass  # Fall through to template fallback
+                    pass  # Fall through to fallback chain
 
-        # Step 2: Template fallback
-        template_result = await self._try_template_fallback(query, top_k, start)
-        if template_result is not None:
-            return template_result
+        # Step 2: Conservative Cypher fallback
+        try:
+            cypher = await cypher_gen.generate_fallback(query)
+            results = await self._fetch_all_async(cypher)
+            return QueryMethodResult(
+                method=QueryMethod.GRAPH_TRAVERSAL,
+                items=results[:top_k],
+                execution_time_ms=(time.time() - start) * 1000,
+            )
+        except Exception as e:
+            logger.warning(f"Conservative Cypher fallback failed: {e}")
 
-        # Step 3: Keyword fallback
-        return await self._execute_keyword_search(query, top_k, start)
+        # Step 3: Keyword search using LLM-extracted entities
+        if plan and plan.expected_entities:
+            return await self._execute_keyword_search(query, top_k, start, plan)
 
-    async def _try_template_fallback(
-        self, query: str, top_k: int, start: float
-    ) -> QueryMethodResult | None:
-        """Try to match query to a pre-built Cypher template.
-
-        Template matching is based on intent classification + keyword extraction.
-        Tries multiple templates in order based on query intent.
-        Uses _fetch_all_async() for async-native database access.
-        """
-        if not getattr(settings, "QUERY_TEMPLATE_FALLBACK_ENABLED", True):
-            return None
-
-        from ..cypher_queries import CYPHER_QUERY_TEMPLATES
-        from ..utils.query_utils import extract_best_keyword
-
-        keyword = extract_best_keyword(query)
-        if not keyword:
-            return None
-
-        # Determine which templates to try based on query content
-        query_lower = query.lower()
-
-        # Template selection based on query patterns
-        templates_to_try: list[tuple[str, dict[str, Any]]] = []
-
-        # Structural queries: callers/importers
-        if any(kw in query_lower for kw in ["call", "caller", "calls", "called by"]):
-            templates_to_try.append(("find_callers_of", {"qn": keyword}))
-
-        if any(kw in query_lower for kw in ["import", "importer", "imports"]):
-            templates_to_try.append(("find_importers_of", {"qn": keyword}))
-
-        # Dependency queries
-        if any(kw in query_lower for kw in ["depend", "uses", "reference"]):
-            templates_to_try.append(("find_dependencies", {"keyword": keyword, "limit": top_k}))
-
-        # Default: try find_by_name for any query
-        templates_to_try.append(("find_by_name", {"keyword": keyword, "limit": top_k}))
-
-        # Try each template in order
-        for template_name, params in templates_to_try:
-            template_entry = CYPHER_QUERY_TEMPLATES.get(template_name)
-            if not template_entry:
-                continue
-
-            template_cypher, param_types = template_entry
-
-            # For find_by_type, validate and interpolate the label placeholder
-            if template_name == "find_by_type" and "label" in params:
-                from ..constants import NodeLabel
-                label = params.get("label", "")
-                if label not in [e.value for e in NodeLabel]:
-                    continue  # Skip invalid label
-                template_cypher = template_cypher.replace("{label}", label)
-
-            try:
-                results = await self._fetch_all_async(template_cypher, params)
-                if results:
-                    return QueryMethodResult(
-                        method=QueryMethod.GRAPH_TRAVERSAL,
-                        items=results,
-                        execution_time_ms=(time.time() - start) * 1000,
-                    )
-            except Exception as e:
-                logger.debug(f"Template '{template_name}' fallback failed: {e}")
-
-        return None
+        # Step 4: Semantic fallback
+        return await self._execute_semantic_search(query, top_k, start)
 
     async def _execute_keyword_search(
         self,
         query: str,
         top_k: int,
         start: float,
+        plan: QueryPlan | None = None,
     ) -> QueryMethodResult:
-        """Execute keyword-based search.
+        """Execute keyword-based search using LLM-extracted entities.
 
         Uses _fetch_all_async() for async-native database access.
         """
-        from ..utils.query_utils import extract_keywords
-
-        keywords = extract_keywords(query, max_keywords=3)
+        keywords = plan.expected_entities[:3] if plan and plan.expected_entities else []
         if not keywords:
             return QueryMethodResult(
                 method=QueryMethod.KEYWORD_SEARCH,
@@ -780,22 +585,25 @@ class QueryMethodOrchestrator:
         )
 
     async def _execute_graph_navigation(
-        self, query: str, top_k: int, start: float
+        self,
+        query: str,
+        top_k: int,
+        start: float,
+        plan: QueryPlan | None = None,
     ) -> QueryMethodResult:
         """Execute graph navigation using pre-built Cypher queries.
 
         Uses _fetch_all_async() for async-native database access.
         """
         from ..cypher_queries import CYPHER_FIND_CALLERS, CYPHER_FIND_IMPORTERS
-        from ..utils.query_utils import extract_keywords
 
-        keywords = extract_keywords(query, max_keywords=3)
+        keywords = plan.expected_entities[:3] if plan and plan.expected_entities else []
         if not keywords:
             return QueryMethodResult(
                 method=QueryMethod.GRAPH_NAVIGATION,
                 items=[],
                 execution_time_ms=(time.time() - start) * 1000,
-                error="No keyword extracted from query",
+                error="No entities extracted from query",
             )
 
         # First, find nodes matching any keyword
@@ -874,108 +682,146 @@ class QueryMethodOrchestrator:
             )
 
     async def _execute_graph_algorithms(
-        self, query: str, top_k: int, start: float
+        self,
+        query: str,
+        top_k: int,
+        start: float,
+        plan: QueryPlan | None = None,
     ) -> QueryMethodResult:
-        """Execute graph algorithms using GraphAlgorithms.
+        """Execute graph algorithms based on LLM plan.
 
-        Uses asyncio.to_thread() to wrap synchronous MAGE algorithm calls
-        for async-native execution in MCP server / pydantic-ai contexts.
+        Algorithm selection is mechanical: the LLM outputs plan.algorithm
+        as a structured enum, and Python executes the corresponding method.
+        No keyword matching on reasoning text.
         """
         from ..graph_algorithms import GraphAlgorithms
-        from ..utils.query_utils import extract_keywords
+
+        if not self._health_coordinator:
+            return QueryMethodResult(
+                method=QueryMethod.GRAPH_ALGORITHMS,
+                items=[],
+                execution_time_ms=(time.time() - start) * 1000,
+                error="Graph algorithms unavailable",
+            )
+
+        entities = plan.expected_entities if plan else []
+        algorithm = plan.algorithm if plan else GraphAlgorithm.NONE
 
         try:
-            keywords = extract_keywords(query, max_keywords=3)
-            if not keywords:
-                return QueryMethodResult(
-                    method=QueryMethod.GRAPH_ALGORITHMS,
-                    items=[],
-                    execution_time_ms=(time.time() - start) * 1000,
-                )
-
-            # Find node(s) matching any keyword
-            # Use WHERE IN clause instead of | union syntax for label filtering
-            find_cypher = """
-            MATCH (n)
-            WHERE labels(n)[0] IN ['Function', 'Class', 'Method']
-              AND ANY(kw IN $keywords WHERE n.name CONTAINS kw OR n.qualified_name CONTAINS kw)
-            RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
-                   n.name AS name, labels(n)[0] AS type,
-                   n.path AS file_path
-            LIMIT 1
-            """
-            nodes = await self._fetch_all_async(find_cypher, {"keywords": keywords})
-            if not nodes:
-                return QueryMethodResult(
-                    method=QueryMethod.GRAPH_ALGORITHMS,
-                    items=[],
-                    execution_time_ms=(time.time() - start) * 1000,
-                )
-
-            node = nodes[0]
-            node_id = node.get("node_id")
-
-            # Determine algorithm based on query content
-            query_lower = query.lower()
             algo = GraphAlgorithms()
+            items: list[dict[str, Any]] = []
 
-            if any(
-                word in query_lower
-                for word in ["similar", "like", "same as", "analogous"]
-            ):
-                # Structural similarity
-                similar_nodes = await asyncio.to_thread(
-                    algo.get_similar_nodes, node_id, top_k
-                )
-                items = [
-                    {
-                        "node_id": sn.get("node_id"),
-                        "qualified_name": sn.get("qualified_name"),
-                        "name": sn.get("name"),
-                        "type": "Function",
-                        "file_path": sn.get("file_path", ""),
-                        "similarity": sn.get("jaccard_similarity", 0.0),
-                        "score": sn.get("jaccard_similarity", 0.0),
-                    }
-                    for sn in similar_nodes
-                ]
-            elif any(
-                word in query_lower
-                for word in ["context", "neighbors", "around", "surrounding"]
-            ):
-                # BFS context
-                bfs_nodes = await asyncio.to_thread(
-                    algo.get_bfs_context, node_id, 3
-                )
-                items = [
-                    {
-                        "node_id": bn.get("node_id"),
-                        "qualified_name": bn.get("qualified_name"),
-                        "name": bn.get("name"),
-                        "type": bn.get("type", "Function"),
-                        "file_path": bn.get("file_path", ""),
-                        "depth": bn.get("depth", 0),
-                        "score": 0.9 - (bn.get("depth", 0) * 0.1),
-                    }
-                    for bn in bfs_nodes[:top_k]
-                ]
-            else:
-                # Default: use similar nodes
-                similar_nodes = await asyncio.to_thread(
-                    algo.get_similar_nodes, node_id, top_k
-                )
-                items = [
-                    {
-                        "node_id": sn.get("node_id"),
-                        "qualified_name": sn.get("qualified_name"),
-                        "name": sn.get("name"),
-                        "type": "Function",
-                        "file_path": sn.get("file_path", ""),
-                        "similarity": sn.get("jaccard_similarity", 0.0),
-                        "score": sn.get("jaccard_similarity", 0.0),
-                    }
-                    for sn in similar_nodes
-                ]
+            match algorithm:
+                case GraphAlgorithm.SHORTEST_PATH:
+                    if len(entities) >= 2:
+                        result = await asyncio.to_thread(
+                            algo.find_shortest_path,
+                            entities[0],
+                            entities[1],
+                        )
+                        if result:
+                            items = [result]
+
+                case GraphAlgorithm.SIMILARITY:
+                    if entities:
+                        # Find node by name first
+                        find_cypher = """
+                        MATCH (n)
+                        WHERE labels(n)[0] IN ['Function', 'Class', 'Method']
+                          AND (n.name = $name OR n.qualified_name CONTAINS $name)
+                        RETURN id(n) AS node_id
+                        LIMIT 1
+                        """
+                        nodes = await self._fetch_all_async(
+                            find_cypher, {"name": entities[0]}
+                        )
+                        if nodes:
+                            similar = await asyncio.to_thread(
+                                algo.get_similar_nodes,
+                                nodes[0].get("node_id"),
+                                top_k,
+                            )
+                            items = [
+                                {
+                                    "node_id": sn.get("node_id"),
+                                    "qualified_name": sn.get("qualified_name"),
+                                    "name": sn.get("name"),
+                                    "type": "Function",
+                                    "file_path": sn.get("file_path", ""),
+                                    "similarity": sn.get("jaccard_similarity", 0.0),
+                                    "score": sn.get("jaccard_similarity", 0.0),
+                                }
+                                for sn in similar
+                            ]
+
+                case GraphAlgorithm.COMMUNITY:
+                    communities = await asyncio.to_thread(
+                        algo.detect_communities,
+                    )
+                    items = communities
+
+                case GraphAlgorithm.BFS:
+                    if entities:
+                        find_cypher = """
+                        MATCH (n)
+                        WHERE labels(n)[0] IN ['Function', 'Class', 'Method']
+                          AND (n.name = $name OR n.qualified_name CONTAINS $name)
+                        RETURN id(n) AS node_id
+                        LIMIT 1
+                        """
+                        nodes = await self._fetch_all_async(
+                            find_cypher, {"name": entities[0]}
+                        )
+                        if nodes:
+                            bfs = await asyncio.to_thread(
+                                algo.get_bfs_context,
+                                nodes[0].get("node_id"),
+                                3,
+                            )
+                            items = [
+                                {
+                                    "node_id": bn.get("node_id"),
+                                    "qualified_name": bn.get("qualified_name"),
+                                    "name": bn.get("name"),
+                                    "type": bn.get("type", "Function"),
+                                    "file_path": bn.get("file_path", ""),
+                                    "depth": bn.get("depth", 0),
+                                    "score": 0.9 - (bn.get("depth", 0) * 0.1),
+                                }
+                                for bn in bfs[:top_k]
+                            ]
+
+                case GraphAlgorithm.NONE | _:
+                    # Default: similarity search using first entity
+                    if entities:
+                        find_cypher = """
+                        MATCH (n)
+                        WHERE labels(n)[0] IN ['Function', 'Class', 'Method']
+                          AND (n.name = $name OR n.qualified_name CONTAINS $name)
+                        RETURN id(n) AS node_id
+                        LIMIT 1
+                        """
+                        nodes = await self._fetch_all_async(
+                            find_cypher, {"name": entities[0]}
+                        )
+                        if nodes:
+                            similar = await asyncio.to_thread(
+                                algo.get_similar_nodes,
+                                nodes[0].get("node_id"),
+                                top_k,
+                            )
+                            items = [
+                                {
+                                    "node_id": sn.get("node_id"),
+                                    "qualified_name": sn.get("qualified_name"),
+                                    "name": sn.get("name"),
+                                    "type": "Function",
+                                    "file_path": sn.get("file_path", ""),
+                                    "similarity": sn.get("jaccard_similarity", 0.0),
+                                    "score": sn.get("jaccard_similarity", 0.0),
+                                }
+                                for sn in similar
+                            ]
 
             return QueryMethodResult(
                 method=QueryMethod.GRAPH_ALGORITHMS,
@@ -983,6 +829,7 @@ class QueryMethodOrchestrator:
                 execution_time_ms=(time.time() - start) * 1000,
             )
         except Exception as e:
+            logger.error(f"Graph algorithm execution failed: {e}")
             return QueryMethodResult(
                 method=QueryMethod.GRAPH_ALGORITHMS,
                 items=[],
@@ -1011,6 +858,8 @@ class QueryMethodOrchestrator:
     ) -> CombinedQueryResult:
         """Execute comprehensive query with adaptive sequencing.
 
+        Uses LLM-driven planning instead of keyword-based intent classification.
+
         Args:
             query: Natural language query
             top_k: Maximum number of results to return
@@ -1019,46 +868,34 @@ class QueryMethodOrchestrator:
         Returns:
             CombinedQueryResult with merged items and metadata
         """
+        start = time.time()
         min_methods = getattr(settings, "QUERY_MIN_METHODS", 2)
-        confidence_threshold = getattr(settings, "QUERY_INTENT_CONFIDENCE_THRESHOLD", 0.5)
         enable_integrity = getattr(settings, "QUERY_ENABLE_INTEGRITY_CHECK", True)
         integrity_check_count = getattr(settings, "QUERY_INTEGRITY_CHECK_COUNT", 5)
 
-        # Classify intent with confidence
-        intent, confidence = self.classify_intent_with_confidence(query)
-        primary_methods, secondary_methods = self.select_methods(intent)
+        # LLM-driven planning replaces keyword-based intent classification
+        planner = LLMQueryPlanner()
+        plan = await planner.plan(query)
+
+        methods_to_run = plan.methods[:max_methods]
+        if not methods_to_run:
+            methods_to_run = [QueryMethod.SEMANTIC_SEARCH]
 
         # Initialize health coordinator
         health = self._get_health_coordinator()
-
-        # Health pre-check: filter out unavailable methods
         availability = health.get_method_availability()
-        primary_methods = [m for m in primary_methods if availability.get(m, False)]
-        secondary_methods = [m for m in secondary_methods if availability.get(m, False)]
-
-        # If confidence is low, treat all methods as primary (exploratory)
-        if confidence < confidence_threshold:
-            primary_methods = [
-                m for m in QueryMethod if availability.get(m, False)
-            ]
-            secondary_methods = []
-
-        # Limit methods for backward compatibility
-        if len(primary_methods) > max_methods:
-            primary_methods = primary_methods[:max_methods]
+        methods_to_run = [m for m in methods_to_run if availability.get(m, False)]
 
         results: list[QueryMethodResult] = []
-        sufficient = False
 
-        # Stage 1: Execute primary methods
-        for method in primary_methods:
+        # Execute primary methods
+        for method in methods_to_run:
             if not self._is_method_available(method):
                 continue
-            result = await self.execute_method_async(method, query, top_k)
+            result = await self.execute_method_async(method, query, top_k, plan)
             results.append(result)
             self._update_circuit_breaker(method, result)
 
-            # Early termination check
             successful_results = [
                 r for r in results if r.error is None and len(r.items) > 0
             ]
@@ -1066,25 +903,27 @@ class QueryMethodOrchestrator:
                 len(successful_results) >= min_methods
                 and self._results_cover_query(query, successful_results)
             ):
-                sufficient = True
                 break
 
-        # Stage 2: If not sufficient, execute secondary methods
-        if not sufficient:
-            for method in secondary_methods:
+        # If primary methods returned empty, try fallbacks
+        if not any(r.items for r in results) and plan.fallback_methods:
+            logger.info(f"Primary methods returned empty, trying fallbacks: {plan.fallback_methods[:2]}")
+            for method in plan.fallback_methods[:2]:
+                if not availability.get(method, False):
+                    continue
                 if not self._is_method_available(method):
                     continue
-                result = await self.execute_method_async(method, query, top_k)
+                result = await self.execute_method_async(method, query, top_k, plan)
                 results.append(result)
                 self._update_circuit_breaker(method, result)
 
-                successful_results = [
-                    r for r in results if r.error is None and len(r.items) > 0
-                ]
-                if len(successful_results) >= min_methods:
-                    break
+        # Final fallback: semantic search if everything else failed
+        if not any(r.items for r in results):
+            logger.info("All methods returned empty, falling back to semantic search")
+            result = await self._execute_semantic_search(query, top_k, start)
+            results.append(result)
 
-        # Stage 3: Merge, rank, and integrity spot-check
+        # Merge, rank, and integrity spot-check
         merged_items = self._merge_and_rank(results, top_k)
 
         integrity_warnings: list[IntegrityWarning] = []
@@ -1102,8 +941,8 @@ class QueryMethodOrchestrator:
 
         return CombinedQueryResult(
             query=query,
-            intent=intent,
-            intent_confidence=confidence,
+            intent=plan.intent or QueryIntent.EXPLORATORY,
+            intent_confidence=1.0 if plan.intent else 0.0,
             methods_used=[r.method for r in results],
             items=merged_items,
             execution_time_ms=total_time,
@@ -1160,7 +999,7 @@ class QueryMethodOrchestrator:
                 score = item.get("similarity") or item.get("score", 0.5)
 
                 merged[key]["scores"].append(score)
-                merged[key]["sources"].append(result.method.name)
+                merged[key]["sources"].append(result.method.value)
                 if merged[key]["item"] is None:
                     merged[key]["item"] = item
 

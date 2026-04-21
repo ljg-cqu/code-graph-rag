@@ -455,6 +455,8 @@ class NodeLabel(StrEnum):
     DOCUMENT = "Document"
     SECTION = "Section"
     CHUNK = "Chunk"
+    CONCEPT = "Concept"
+    TOPIC = "Topic"
     # AutoHotkey nodes
     HOTKEY = "Hotkey"
     HOTSTRING = "Hotstring"
@@ -494,6 +496,8 @@ _NODE_LABEL_UNIQUE_KEYS: dict[NodeLabel, UniqueKeyType] = {
     NodeLabel.DOCUMENT: UniqueKeyType.PATH,
     NodeLabel.SECTION: UniqueKeyType.QUALIFIED_NAME,
     NodeLabel.CHUNK: UniqueKeyType.QUALIFIED_NAME,
+    NodeLabel.CONCEPT: UniqueKeyType.QUALIFIED_NAME,
+    NodeLabel.TOPIC: UniqueKeyType.QUALIFIED_NAME,
     # AutoHotkey nodes
     NodeLabel.HOTKEY: UniqueKeyType.QUALIFIED_NAME,
     NodeLabel.HOTSTRING: UniqueKeyType.QUALIFIED_NAME,
@@ -551,6 +555,15 @@ class RelationshipType(StrEnum):
     HAS_SUBSECTION = "HAS_SUBSECTION"
     CONTAINS_CHUNK = "CONTAINS_CHUNK"
     BELONGS_TO_SECTION = "BELONGS_TO_SECTION"
+    # Concept relationships
+    RELATED_TO = "RELATED_TO"
+    IS_A = "IS_A"
+    PART_OF = "PART_OF"
+    CAUSES = "CAUSES"
+    MENTIONS = "MENTIONS"
+    DISCUSSES = "DISCUSSES"
+    COVERS = "COVERS"
+    BELONGS_TO_TOPIC = "BELONGS_TO_TOPIC"
     # JSON content relationships
     CONTAINS_JSON = "CONTAINS_JSON"
     HAS_FIELD = "HAS_FIELD"
@@ -1532,47 +1545,7 @@ CYPHER_PREFIX = "cypher"
 CYPHER_SEMICOLON = ";"
 CYPHER_BACKTICK = "`"
 CYPHER_MATCH_KEYWORD = "MATCH"
-CYPHER_DANGEROUS_KEYWORDS: frozenset[str] = frozenset(
-    {
-        "DELETE",
-        "DETACH",
-        "DROP",
-        "CREATE INDEX",
-        "CREATE CONSTRAINT",
-        "REMOVE",
-        "SET",
-        "MERGE",
-        "CREATE",
-        "LOAD CSV",
-        "FOREACH",
-    }
-)
 
-# Whitelist of safe read-only CALL procedure prefixes/names
-# These are Memgraph/community procedures that don't modify data
-CYPHER_SAFE_CALL_PROCEDURES: frozenset[str] = frozenset(
-    {
-        "db.schema",
-        "db.info",
-        "db.show",
-        "db.list",
-        "file_exists",
-        "graph_util",
-        "mg",
-        "meta",
-        "statistics",
-        "page_rank",
-        "betweenness_centrality",
-        "community_detection",
-        "label_propagation",
-        "weakly_connected_components",
-        "strongly_connected_components",
-        "bfs",
-        "dfs",
-        "all_shortest_paths",
-        "algorithm",
-    }
-)
 
 # (H) Tool success messages
 MSG_SURGICAL_SUCCESS = "Successfully applied surgical code replacement in: {path}"

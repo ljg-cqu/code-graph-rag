@@ -5,7 +5,6 @@ Determines if a task can be safely parallelized without explicit user request.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,57 +40,35 @@ class ConcurrencyEligibilityClassifier:
     Uses explicit user overrides, minimal safety rules, and LLM intent analysis (no rule-based pattern matching for eligible tasks).
     """
 
-    # Explicit user override patterns (highest priority)
-    EXPLICIT_PARALLEL_PATTERNS = [
-        r"run in parallel",
-        r"use parallel execution",
-        r"split into parallel subtasks",
-        r"parallelize this",
-        r"execute in parallel",
-    ]
-
-    EXPLICIT_SEQUENTIAL_PATTERNS = [
-        r"run sequentially",
-        r"no parallel",
-        r"run one at a time",
-        r"sequential execution",
-        r"do not parallelize",
-    ]
-
-    # Safety-focused non-eligible patterns (only these rule-based checks remain)
-    SAFETY_NON_ELIGIBLE_PATTERNS = [
-        (r"single file", 0.95),
-        (r"one (file|function|class)", 0.9),
-        (r"only (.*) file", 0.85),
-        (
-            r"(write|modify|delete|update|create) (file|code|config|document)",
-            0.9,
-        ),  # Write operations are sequential only
-    ]
-
-    # Enhanced LLM system prompt with codebase context
+    # Enhanced LLM system prompt with codebase context and mode awareness
     # NOTE: {prompt} is NOT included here. pydantic_ai sends the user prompt
     # as a separate message via agent.run(prompt). Including {prompt} in the
     # system prompt would create a confusing double-prompt where the LLM sees
     # both "{prompt}" literally in the system message AND the actual user message.
-    LLM_ELIGIBILITY_PROMPT = """
-You are a parallel task eligibility classifier for a codebase analysis system.
+    LLM_ELIGIBILITY_PROMPT = """You are a parallel task eligibility classifier for a codebase analysis system.
 Evaluate if the user request (provided separately) can be split into independent,
-non-overlapping subtasks that can be executed in parallel to speed up results.
+non-overlapping subtasks that can be executed in parallel.
 
 Codebase Context:
 - Total files: {file_count}
 - Primary languages: {languages}
 - Repository size: {repo_size}
+- Query mode: {query_mode}
 
-Respond ONLY with a valid JSON object with three keys:
-1. "eligible": boolean (true if request can be safely parallelized, false otherwise)
-2. "confidence": float between 0.0 and 1.0 indicating confidence in this assessment
-3. "reasoning": string explaining the decision briefly
+Respond ONLY with a valid JSON object:
+{{
+  "eligible": boolean,
+  "confidence": float between 0.0 and 1.0,
+  "task_type": string,
+  "reasoning": string,
+  "fallback_action": string or null
+}}
 
 Safety Rules:
-- NEVER parallelize tasks that modify, create, delete, or update files/code
+- NEVER parallelize tasks that modify, create, delete, or update files/code/config
 - ALWAYS parallelize read-only tasks that analyze multiple files or entities
+- For conceptual/theoretical questions, return eligible=false with task_type="conceptual_question"
+- For explicit write requests ("fix this", "create a file", "refactor X"), return eligible=false with task_type="write_operation"
 - When uncertain, prefer sequential execution (eligible=false)
 """
 
@@ -125,6 +102,7 @@ Safety Rules:
             settings, "CGR_PARALLEL_MIN_SUBTASKS", 2
         )
         self.agent: Agent | None = None
+        self._planner = None
         # Dynamic calibration state (tracks success rates per task type)
         self.success_rate_tracker: dict[str, list[bool]] = {}
         # Adaptive adjustment enabled via CGR_PARALLEL_ADAPTIVE_THRESHOLD config
@@ -261,7 +239,11 @@ Safety Rules:
             }
             return 0, "unknown", "unknown"
 
-    async def _get_llm_eligibility(self, prompt: str) -> tuple[float, str]:
+    async def _get_llm_eligibility(
+        self,
+        prompt: str,
+        query_mode: QueryMode = QueryMode.CODE_ONLY,
+    ) -> tuple[float, str]:
         """Run enhanced LLM analysis with codebase context."""
         if not self.agent:
             config = settings.active_orchestrator_config
@@ -276,12 +258,13 @@ Safety Rules:
                 languages = "unknown"
                 repo_size = "unknown"
 
-            # Format system prompt with codebase context only (NO {prompt} placeholder)
+            # Format system prompt with codebase context and query mode
             # The user prompt is sent separately by pydantic_ai via agent.run(prompt)
             system_prompt = self.LLM_ELIGIBILITY_PROMPT.format(
                 file_count=file_count,
                 languages=languages,
                 repo_size=repo_size,
+                query_mode=query_mode.value,
             )
 
             self.agent = Agent(
@@ -321,26 +304,6 @@ Safety Rules:
             )
             return 0.0, "llm_check_failed"
 
-    def _is_conceptual_question(self, prompt: str) -> bool:
-        """Detect if question is conceptual rather than file-specific."""
-        conceptual_patterns = [
-            r"\b(what is|what are|why|how to|explain|describe|what does)\b",
-            r"\b(importance of|benefits of|purpose of|meaning of)\b",
-            r"\b(categorical thinking|concept|theory|framework|methodology)\b",
-        ]
-
-        # Check for file-specific references
-        file_patterns = [
-            r"\b(file|function|class|method)\s+\w+",
-            r"\b(in|from)\s+[\w/]+\.(py|js|ts|java|cpp)\b",
-            r"```[\w/]+```",  # Code blocks with paths
-        ]
-
-        has_conceptual = any(re.search(p, prompt, re.I) for p in conceptual_patterns)
-        has_file_ref = any(re.search(p, prompt, re.I) for p in file_patterns)
-
-        return has_conceptual and not has_file_ref
-
     async def is_eligible(
         self,
         prompt: str,
@@ -348,8 +311,9 @@ Safety Rules:
         has_write_operations: bool = False,
         query_mode: QueryMode = QueryMode.CODE_ONLY,
     ) -> EligibilityResult:
-        """
-        Determine if a task is eligible for automatic parallel execution (priority order enforced).
+        """Determine if a task is eligible for automatic parallel execution.
+
+        All semantic decisions are delegated to the LLM. No regex pre-filtering.
 
         Args:
             prompt: User's natural language request / task description
@@ -363,68 +327,19 @@ Safety Rules:
         if not self.enabled:
             return EligibilityResult(False, "concurrency_disabled", 0.0)
 
-        # 1. HIGHEST PRIORITY: Explicit write operation check
         if has_write_operations:
-            logger.debug(
-                "Task not eligible for parallel execution: contains write operations"
-            )
             return EligibilityResult(False, "write_operation", 0.0)
 
-        # DOCUMENT_ONLY mode for conceptual questions should NOT use parallel file analysis
-        if query_mode == QueryMode.DOCUMENT_ONLY:
-            # Check if this is a conceptual question (not asking about specific files)
-            if self._is_conceptual_question(prompt):
-                logger.info(
-                    "Task not eligible for parallel execution: DOCUMENT_ONLY mode "
-                    "with conceptual question - routing to semantic search"
-                )
-                return EligibilityResult(
-                    False,
-                    "document_conceptual_query",
-                    0.0,
-                    fallback_action="semantic_search",
-                )
-
-        # 2. Check for explicit user overrides
-        lower_prompt = prompt.lower()
-
-        for pattern in self.EXPLICIT_SEQUENTIAL_PATTERNS:
-            if re.search(pattern, lower_prompt, flags=re.IGNORECASE):
-                logger.debug(
-                    "Task not eligible for parallel execution: explicit user request for sequential"
-                )
-                return EligibilityResult(False, "user_requested_sequential", 0.0)
-
-        explicitly_parallel = any(
-            re.search(pattern, lower_prompt, flags=re.IGNORECASE)
-            for pattern in self.EXPLICIT_PARALLEL_PATTERNS
-        )
-
-        # 3. Safety rule-based non-eligible checks
-        for pattern, confidence in self.SAFETY_NON_ELIGIBLE_PATTERNS:
-            if re.search(pattern, lower_prompt, flags=re.IGNORECASE):
-                logger.debug(f"Task matches safety non-eligible pattern '{pattern}'")
-                return EligibilityResult(False, "safety_rule_blocked", confidence)
-
-        # 4. Check minimum subtask count if provided
         if subtask_count is not None and subtask_count < self.min_subtask_count:
             logger.debug(
                 f"Task not eligible for parallel execution: only {subtask_count} subtasks (min {self.min_subtask_count})"
             )
             return EligibilityResult(False, "insufficient_subtasks", 0.0)
 
-        if explicitly_parallel:
-            logger.info("Task eligible for parallel execution: explicit user request")
-            return EligibilityResult(True, "user_requested_parallel", 1.0)
-
-        # 5. LLM intent analysis (primary eligibility detection)
-        confidence, task_type = await self._get_llm_eligibility(prompt)
-
-        # 6. Apply dynamic threshold adjustment based on historical success rates
-        # This REPLACES the existing confidence-multiplier calibration
+        # Delegate ALL semantic decisions to the LLM
+        confidence, task_type = await self._get_llm_eligibility(prompt, query_mode)
         effective_threshold = self._adjust_threshold_based_on_success(task_type)
 
-        # Final eligibility decision using effective threshold
         if confidence >= effective_threshold:
             logger.info(
                 f"Task eligible for parallel execution: type={task_type}, confidence={confidence:.2f}, effective_threshold={effective_threshold:.2f}"
@@ -434,7 +349,7 @@ Safety Rules:
         logger.debug(
             f"Task not eligible for parallel execution: LLM confidence {confidence:.2f} below effective threshold {effective_threshold:.2f} (base: {self.threshold:.2f})"
         )
-        return EligibilityResult(False, "llm_rejected", confidence)
+        return EligibilityResult(False, task_type, confidence)
 
     def record_execution_result(self, task_type: str, success: bool) -> None:
         """Record execution result for dynamic threshold calibration."""

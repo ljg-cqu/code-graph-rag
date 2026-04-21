@@ -187,7 +187,11 @@ class CommunityQFS:
         return self._complete_prompt(prompt)
 
     def query_focused_summary(
-        self, question: str, top_communities: int = 3, min_community_size: int = 5
+        self,
+        question: str,
+        top_communities: int = 3,
+        min_community_size: int = 5,
+        entities: list[str] | None = None,
     ) -> str:
         """
         Generate query-focused summary from community summaries.
@@ -207,7 +211,7 @@ class CommunityQFS:
 
         # Rank communities by relevance to question
         ranked_communities = self._rank_communities_by_relevance(
-            question, all_communities
+            question, all_communities, entities=entities
         )
 
         # Take top N communities
@@ -219,14 +223,21 @@ class CommunityQFS:
         return final_summary
 
     def _rank_communities_by_relevance(
-        self, question: str, communities: list[CommunitySummary]
+        self,
+        question: str,
+        communities: list[CommunitySummary],
+        entities: list[str] | None = None,
     ) -> list[CommunitySummary]:
         """Rank communities by semantic similarity + keyword overlap."""
         config = settings.active_embedding_config
         embed_provider = get_embedding_provider(config=config)
         query_embedding = embed_provider.embed(question)
 
-        keywords = extract_keywords(question, max_keywords=5)
+        # Prefer LLM-extracted entities; fall back to keyword extraction.
+        if entities:
+            keywords = entities[:5]
+        else:
+            keywords = extract_keywords(question, max_keywords=5)
         scored: list[tuple[float, CommunitySummary]] = []
 
         for comm in communities:

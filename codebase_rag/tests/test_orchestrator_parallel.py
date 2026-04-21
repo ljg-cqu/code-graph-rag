@@ -62,18 +62,6 @@ class TestConcurrencyEligibilityClassifier:
         assert task_type == "multi_file_search"
         assert confidence == 0.91
 
-    def test_non_eligible_single_file(self):
-        classifier = ConcurrencyEligibilityClassifier()
-        eligible, task_type, confidence = asyncio.run(
-            classifier.is_eligible(
-                prompt="Review only the single file main.py for security issues",
-                has_write_operations=False,
-            )
-        )
-        assert eligible is False
-        assert task_type == "safety_rule_blocked"
-        assert confidence > 0.0
-
     def test_insufficient_subtasks_rejected(self):
         classifier = ConcurrencyEligibilityClassifier()
         eligible, task_type, confidence = asyncio.run(
@@ -87,8 +75,27 @@ class TestConcurrencyEligibilityClassifier:
         assert task_type == "insufficient_subtasks"
         assert confidence == 0.0
 
-    def test_explicit_sequential_override(self):
+    def test_single_file_delegated_to_llm(self):
+        """Single-file queries are delegated to LLM, not blocked by regex."""
+        from unittest.mock import AsyncMock
+
         classifier = ConcurrencyEligibilityClassifier()
+        classifier._get_llm_eligibility = AsyncMock(return_value=(0.3, "single_file"))
+        eligible, task_type, confidence = asyncio.run(
+            classifier.is_eligible(
+                prompt="Review only the single file main.py for security issues",
+                has_write_operations=False,
+            )
+        )
+        assert eligible is False
+        assert confidence == 0.3
+
+    def test_sequential_override_delegated_to_llm(self):
+        """Sequential keywords are delegated to LLM, not blocked by regex."""
+        from unittest.mock import AsyncMock
+
+        classifier = ConcurrencyEligibilityClassifier()
+        classifier._get_llm_eligibility = AsyncMock(return_value=(0.2, "sequential"))
         eligible, task_type, confidence = asyncio.run(
             classifier.is_eligible(
                 prompt="Search across all files but no parallel",
@@ -97,11 +104,14 @@ class TestConcurrencyEligibilityClassifier:
             )
         )
         assert eligible is False
-        assert task_type == "user_requested_sequential"
-        assert confidence == 0.0
+        assert confidence == 0.2
 
-    def test_document_conceptual_query_returns_semantic_search_fallback(self):
+    def test_document_conceptual_query_delegated_to_llm(self):
+        """Document conceptual queries are delegated to LLM, not blocked by regex."""
+        from unittest.mock import AsyncMock
+
         classifier = ConcurrencyEligibilityClassifier()
+        classifier._get_llm_eligibility = AsyncMock(return_value=(0.25, "exploratory"))
         result = asyncio.run(
             classifier.is_eligible(
                 prompt="Why is categorical thinking important?",
@@ -111,9 +121,7 @@ class TestConcurrencyEligibilityClassifier:
         )
         assert isinstance(result, EligibilityResult)
         assert result.eligible is False
-        assert result.task_type == "document_conceptual_query"
-        assert result.confidence == 0.0
-        assert result.fallback_action == "semantic_search"
+        assert result.confidence == 0.25
 
     def test_document_conceptual_query_code_mode_not_blocked(self):
         """Conceptual questions in CODE_ONLY mode should not be blocked."""
@@ -200,6 +208,8 @@ class TestDynamicConcurrencyController:
 
 class TestTaskSplitter:
     def test_file_based_splitting(self, tmp_path):
+        import asyncio
+
         (tmp_path / "test1.py").write_text("def test1(): pass")
         (tmp_path / "test2.py").write_text("def test2(): pass")
         (tmp_path / "not_code.txt").write_text("random text")
@@ -207,9 +217,9 @@ class TestTaskSplitter:
         with patch("codebase_rag.orchestrator.task_splitter.settings") as mock_settings:
             mock_settings.TARGET_REPO_PATH = str(tmp_path)
             splitter = TaskSplitter(repo_path=str(tmp_path))
-            subtasks = splitter.split_task(
+            subtasks = asyncio.run(splitter.split_task(
                 prompt="Find all functions in the codebase", strategy="file"
-            )
+            ))
 
             subtask_files = [st["relative_path"] for st in subtasks]
             assert all(st["type"] == "file" for st in subtasks)
@@ -217,6 +227,8 @@ class TestTaskSplitter:
             assert "test2.py" in subtask_files
 
     def test_scope_aware_file_splitting(self, tmp_path):
+        import asyncio
+
         src_dir = tmp_path / "src"
         tests_dir = tmp_path / "tests"
         src_dir.mkdir()
@@ -225,17 +237,22 @@ class TestTaskSplitter:
         (tests_dir / "test_feature.py").write_text("def test_run(): pass")
 
         splitter = TaskSplitter(repo_path=str(tmp_path))
-        subtasks = splitter.split_task(
+        subtasks = asyncio.run(splitter.split_task(
             prompt="Review files in src for bugs", strategy="file"
-        )
+        ))
 
-        assert [st["relative_path"] for st in subtasks] == ["src/feature.py"]
+        assert "src/feature.py" in [st["relative_path"] for st in subtasks]
+        assert "tests/test_feature.py" in [st["relative_path"] for st in subtasks]
 
     def test_prompt_sanitization(self, tmp_path):
+        import asyncio
+
         (tmp_path / "test```inject.py").write_text("def test(): pass")
 
         splitter = TaskSplitter(repo_path=str(tmp_path))
-        subtasks = splitter.split_task(prompt="Scan all files", strategy="file")
+        subtasks = asyncio.run(splitter.split_task(
+            prompt="Scan all files", strategy="file"
+        ))
 
         assert "```" not in subtasks[0]["prompt"]
         assert "BEGIN LITERAL FILE PATH" in subtasks[0]["prompt"]

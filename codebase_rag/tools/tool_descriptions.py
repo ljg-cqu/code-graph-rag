@@ -90,11 +90,10 @@ FILE_EDITOR = (
     "True surgical patching."
 )
 
-# Document GraphRAG agentic tool descriptions
 QUERY_DOCUMENT_GRAPH = (
-    "Query the DOCUMENT graph/vector ONLY. "
+    "Query the DOCUMENT graph/vector. "
     "Use for questions about documentation, tutorials, guides, or API docs. "
-    "Returns relevant document sections and chunks with source attribution. "
+    "When the user's question is about code implementation, prefer query_graph or semantic_search instead. "
     "Examples: 'How do I use the authentication API?', 'What does the docs say about configuration?'"
 )
 

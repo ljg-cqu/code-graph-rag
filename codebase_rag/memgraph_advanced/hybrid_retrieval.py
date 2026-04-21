@@ -404,7 +404,12 @@ class HybridRetriever:
         results.sort(key=lambda r: r.combined_score, reverse=True)
         return results
 
-    def search(self, query: str, top_k: int = 10) -> list[HybridSearchResult]:
+    def search(
+        self,
+        query: str,
+        top_k: int = 10,
+        entities: list[str] | None = None,
+    ) -> list[HybridSearchResult]:
         # Check health if not yet validated
         if self._is_healthy is None or not self._is_healthy:
             if not self._validate():
@@ -412,11 +417,16 @@ class HybridRetriever:
                 return []
 
         from ..config import HybridRetrievalConfig
-        from ..utils.query_utils import extract_keywords
 
         cfg = self.config or HybridRetrievalConfig()
         query_embedding = self.embedding_provider.embed(query)
-        query_keywords = extract_keywords(query, max_keywords=3)
+        # Prefer LLM-extracted entities for text matching; fall back to keyword extraction.
+        if entities:
+            query_keywords = entities[:3]
+        else:
+            from ..utils.query_utils import extract_keywords
+
+            query_keywords = extract_keywords(query, max_keywords=3)
 
         # Try atomic query first (single round-trip)
         atomic_results = self._search_atomic(

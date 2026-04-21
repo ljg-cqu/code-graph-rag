@@ -76,21 +76,30 @@ def enrich_with_graph_context(
     return enriched
 
 
-def _semantic_search_keyword_fallback(query: str, top_k: int) -> list[SemanticSearchResult]:
+def _semantic_search_keyword_fallback(
+    query: str,
+    top_k: int,
+    entities: list[str] | None = None,
+) -> list[SemanticSearchResult]:
     """Fallback keyword-based search when semantic search unavailable.
 
     Uses CONTAINS queries on function/class names and docstrings.
+    Prefers LLM-extracted entities when provided.
     """
     from ..config import settings
     from ..services.graph_service import MemgraphIngestor
-    from ..utils.query_utils import extract_keywords
 
     try:
         with MemgraphIngestor(
             host=settings.MEMGRAPH_HOST,
             port=settings.MEMGRAPH_PORT,
         ) as ingestor:
-            keywords = extract_keywords(query, max_keywords=3)
+            if entities:
+                keywords = entities[:3]
+            else:
+                from ..utils.query_utils import extract_keywords
+
+                keywords = extract_keywords(query, max_keywords=3)
             if not keywords:
                 return []
 
@@ -210,7 +219,9 @@ def _search_direct_vector(query: str, top_k: int) -> list[SemanticSearchResult]:
         ]
 
 
-def semantic_code_search(query: str, top_k: int = 5) -> list[SemanticSearchResult]:
+def semantic_code_search(
+    query: str, top_k: int = 5, entities: list[str] | None = None
+) -> list[SemanticSearchResult]:
     """Search codebase using semantic similarity with comprehensive fallback chain.
 
     Includes caching layer to avoid redundant embedding generation for
@@ -254,7 +265,7 @@ def semantic_code_search(query: str, top_k: int = 5) -> list[SemanticSearchResul
 
     # Level 3: Keyword fallback (always available)
     try:
-        results = _semantic_search_keyword_fallback(query, top_k)
+        results = _semantic_search_keyword_fallback(query, top_k, entities=entities)
         if results:
             logger.info(f"Keyword fallback found {len(results)} results for: {query}")
             cache.put(query, top_k, results)
