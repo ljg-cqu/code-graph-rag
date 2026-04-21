@@ -420,13 +420,8 @@ class HybridRetriever:
 
         cfg = self.config or HybridRetrievalConfig()
         query_embedding = self.embedding_provider.embed(query)
-        # Prefer LLM-extracted entities for text matching; fall back to keyword extraction.
-        if entities:
-            query_keywords = entities[:3]
-        else:
-            from ..utils.query_utils import extract_keywords
-
-            query_keywords = extract_keywords(query, max_keywords=3)
+        # Use LLM-extracted entities only; no keyword fallback per LLM-First spec
+        query_keywords = entities[:3] if entities else []
 
         # Try atomic query first (single round-trip)
         atomic_results = self._search_atomic(

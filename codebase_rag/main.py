@@ -3015,7 +3015,7 @@ def _initialize_services_and_agent(
         shell_command=shell_command_tool.name,
     )
 
-    rag_agent = create_rag_orchestrator(tools=tools)
+    rag_agent = create_rag_orchestrator(tools=tools, mode=query_mode.value)
     return rag_agent, confirmation_tool_names, query_router
 
 

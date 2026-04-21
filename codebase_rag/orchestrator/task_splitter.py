@@ -99,6 +99,7 @@ class TaskSplitter:
         self._extension_hints: list[str] = []
         self._name_pattern_hints: list[str] = []
         self._path_hints: list[str] = []
+        self._complexity: int = 2
         self._strategy_agent = None
 
     def _suggest_query_mode(self) -> QueryMode | None:
@@ -134,6 +135,7 @@ class TaskSplitter:
             self._extension_hints = plan.relevant_extensions
             self._name_pattern_hints = plan.relevant_name_patterns
             self._path_hints = plan.relevant_paths
+            self._complexity = plan.complexity
 
         if strategy == "file":
             subtasks = self._split_by_file(prompt)
@@ -229,7 +231,7 @@ Return JSON with your analysis."""
                     "file_path": str(file_path),
                     "relative_path": relative_path,
                     "prompt": subtask_prompt,
-                    "complexity": 2,
+                    "complexity": self._complexity,
                     "metadata": {
                         "file_size": os.path.getsize(file_path),
                         "file_extension": os.path.splitext(file_path)[1].lower(),

@@ -156,9 +156,22 @@ MULTI_ROUND_PROTOCOL = """
 """.strip()
 
 
-def build_rag_orchestrator_prompt(tools: list["Tool"]) -> str:
+def build_rag_orchestrator_prompt(tools: list["Tool"], mode: str | None = None) -> str:
     t = extract_tool_names(tools)
-    return f"""You are an expert AI assistant for analyzing codebases. Your answers are based **EXCLUSIVELY** on information retrieved using your tools.
+    mode_context = """
+    if mode:
+        mode_context = f"""
+
+Current query mode: {mode}.
+Mode descriptions:
+- code_only: Focus on code graph queries. Document tools are available but secondary.
+- document_only: Focus on document graph queries. Code tools are available but secondary.
+- both_merged: Query both graphs and merge results.
+- code_vs_doc: Validate code against documentation.
+- doc_vs_code: Validate documentation against code.
+Use your judgment to select the most appropriate tools for the user'"s query.
+"""
+    return f"""You are an expert AI assistant for analyzing codebases. Your answers are based **EXCLUSIVELY** on information retrieved using your tools.{mode_context}
 
 **CRITICAL RULES:**
 1.  **TOOL-ONLY ANSWERS**: You must ONLY use information from the tools provided. Do not use external knowledge.

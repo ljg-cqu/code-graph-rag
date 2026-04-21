@@ -826,6 +826,12 @@ class AppConfig(BaseSettings):
     # Default query mode when both code and document graphs have content
     CGR_DEFAULT_MODE_WHEN_BOTH: str = Field(default="both_merged", pattern="^(both_merged|code_only)$")
 
+    # LLM-First Orchestration feature flags for gradual rollout / backward compatibility
+    CGR_LLM_FIRST_ORCHESTRATION: bool = True
+    CGR_LLM_FIRST_ELIGIBILITY: bool = True
+    CGR_LLM_FIRST_TASK_SPLITTING: bool = True
+    CGR_LLM_FIRST_CYPHER_VALIDATION: bool = True
+
     # Worker LLM Configuration for Sub-Agents
     CGR_WORKER_LLMS: str | list[str | dict] = Field(default_factory=list)
     CGR_WORKER_LLM_ASSIGNMENT_STRATEGY: Literal["round-robin"] = "round-robin"

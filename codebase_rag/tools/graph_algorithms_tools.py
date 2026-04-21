@@ -14,13 +14,20 @@ async def community_summary(question: str, top_communities: int = 3) -> str:
     for a given question. Best for understanding large codebases.
     """
     from ..memgraph_advanced.qfs import CommunityQFS
+    from ..orchestrator.llm_query_planner import LLMQueryPlanner
 
     try:
+        # Use LLM planner to extract entities per LLM-First spec
+        planner = LLMQueryPlanner()
+        plan = await planner.plan(question)
+        entities = plan.expected_entities if plan else []
+
         qfs = CommunityQFS()
         summary = qfs.query_focused_summary(
             question=question,
             top_communities=top_communities,
             min_community_size=settings.qfs_config.min_community_size,
+            entities=entities,
         )
         return summary
     except Exception as e:

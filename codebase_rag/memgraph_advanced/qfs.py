@@ -13,7 +13,6 @@ from ..embeddings import get_embedding_provider
 from ..providers import get_provider_from_config
 from ..services import QueryProtocol
 from ..services.graph_service import MemgraphIngestor
-from ..utils.query_utils import extract_keywords
 
 
 def _coerce_int(value: object, default: int = 0) -> int:
@@ -233,11 +232,8 @@ class CommunityQFS:
         embed_provider = get_embedding_provider(config=config)
         query_embedding = embed_provider.embed(question)
 
-        # Prefer LLM-extracted entities; fall back to keyword extraction.
-        if entities:
-            keywords = entities[:5]
-        else:
-            keywords = extract_keywords(question, max_keywords=5)
+        # Use LLM-extracted entities only; no keyword fallback per LLM-First spec
+        keywords = entities[:5] if entities else []
         scored: list[tuple[float, CommunitySummary]] = []
 
         for comm in communities:

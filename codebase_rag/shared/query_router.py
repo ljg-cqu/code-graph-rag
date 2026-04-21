@@ -655,14 +655,12 @@ class QueryRouter:
                    n.end_line as end_line, labels(n) as labels
             LIMIT $limit
             """
-            # Use LLM-extracted entities when plan is available (LLM-First spec).
-            # Fallback to keyword extraction only as last resort.
-            if request.plan and request.plan.expected_entities:
-                keywords = request.plan.expected_entities[:3]
-            else:
-                from ..utils.query_utils import extract_keywords
-
-                keywords = extract_keywords(request.question, max_keywords=3)
+            # Use LLM-extracted entities only; no keyword fallback per LLM-First spec
+            keywords = (
+                request.plan.expected_entities[:3]
+                if request.plan and request.plan.expected_entities
+                else []
+            )
             try:
                 keyword_results = self.code_graph.fetch_all(
                     keyword_query,

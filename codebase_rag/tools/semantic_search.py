@@ -94,12 +94,8 @@ def _semantic_search_keyword_fallback(
             host=settings.MEMGRAPH_HOST,
             port=settings.MEMGRAPH_PORT,
         ) as ingestor:
-            if entities:
-                keywords = entities[:3]
-            else:
-                from ..utils.query_utils import extract_keywords
-
-                keywords = extract_keywords(query, max_keywords=3)
+            # Use LLM-extracted entities only; no keyword fallback per LLM-First spec
+            keywords = entities[:3] if entities else []
             if not keywords:
                 return []
 
@@ -323,7 +319,14 @@ def create_semantic_search_tool() -> Tool:
     async def semantic_search_functions(query: str, top_k: int = 5) -> str:
         logger.info(ls.SEMANTIC_TOOL_SEARCH.format(query=query))
 
-        results = semantic_code_search(query, top_k)
+        # Use LLM planner to extract entities per LLM-First spec
+        from ..orchestrator.llm_query_planner import LLMQueryPlanner
+
+        planner = LLMQueryPlanner()
+        plan = await planner.plan(query)
+        entities = plan.expected_entities if plan else []
+
+        results = semantic_code_search(query, top_k, entities=entities)
 
         if not results:
             return cs.MSG_SEMANTIC_NO_RESULTS.format(query=query)
