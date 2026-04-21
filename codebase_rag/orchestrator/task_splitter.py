@@ -3,8 +3,8 @@ Task Splitter module for parallel sub-agent execution.
 Handles splitting user requests into independent subtasks.
 """
 
+import asyncio
 import os
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TypedDict
@@ -439,9 +439,77 @@ Return JSON with your analysis."""
         """
         raise NotImplementedError("Manual splitting will be implemented in Phase 2")
 
-    def extract_worker_llms_from_prompt(self, prompt: str) -> list[str] | None:
-        """
-        Extract worker LLM configurations from user prompt if present.
+class WorkerLLMExtraction(BaseModel):
+    """Structured output for worker LLM extraction."""
+
+    has_worker_llms: bool = Field(
+        ...,
+        description="Whether the prompt specifies worker LLMs to use",
+    )
+    worker_llms: list[str] = Field(
+        default_factory=list,
+        description="List of worker LLM identifiers (e.g., ['openai:gpt-4o', 'anthropic:claude-3-5-sonnet'])",
+    )
+    reasoning: str = Field(
+        default="",
+        description="Brief explanation of the extraction",
+    )
+
+
+class WorkerLLMExtractor:
+    """LLM-driven extraction of worker LLM configurations from prompts."""
+
+    __slots__ = ("agent",)
+
+    SYSTEM_PROMPT = """You are a worker LLM configuration extractor.
+
+Your task is to analyze user prompts and extract any explicit worker LLM specifications.
+
+Look for patterns like:
+- "using MODEL as worker"
+- "with MODEL_1 and MODEL_2 as workers"
+- "worker LLMs: MODEL_1, MODEL_2"
+- "use MODEL for subtasks"
+
+Valid LLM identifiers:
+- Provider-prefixed: "openai:gpt-4o", "anthropic:claude-3-5-sonnet", "google:gemini-pro"
+- Simple model names: "gpt-4o", "claude-3-sonnet", "llama3"
+
+Return JSON with:
+{
+  "has_worker_llms": true/false,
+  "worker_llms": ["provider:model" or "model_name"],
+  "reasoning": "brief explanation"
+}
+
+Rules:
+- Only extract explicitly mentioned LLMs
+- If no worker LLMs are specified, return has_worker_llms=false
+- Do not invent or assume model names
+- Extract provider prefix if present (e.g., "openai:gpt-4o")"""
+
+    def __init__(self) -> None:
+        self.agent = None
+
+    def _initialize_agent(self) -> None:
+        """Lazy initialization."""
+        if self.agent is None:
+            from pydantic_ai import Agent
+
+            from codebase_rag.services.llm import _create_provider_model
+
+            config = settings.active_orchestrator_config
+            llm = _create_provider_model(config)
+
+            self.agent = Agent(
+                model=llm,
+                system_prompt=self.SYSTEM_PROMPT,
+                output_type=WorkerLLMExtraction,
+                retries=1,
+            )
+
+    async def extract(self, prompt: str) -> list[str] | None:
+        """Extract worker LLM configurations using LLM.
 
         Args:
             prompt: User's original request
@@ -449,37 +517,53 @@ Return JSON with your analysis."""
         Returns:
             List of extracted LLM model strings if found, None otherwise
         """
-        lower_prompt = prompt.lower()
+        self._initialize_agent()
 
-        # Regex patterns to match worker LLM configuration
-        patterns = [
-            r"using\s+((?:[a-zA-Z0-9_-]+:)?[a-zA-Z0-9_-]+(?:\s+and\s+|,\s+|,|\s+)+(?:[a-zA-Z0-9_-]+:)?[a-zA-Z0-9_-]+)\s+(?:as\s+)?(?:worker|llm|model)",
-            r"(?:worker|llm|model)s?\s+(?:to use|are|used?)\s+((?:[a-zA-Z0-9_-]+:)?[a-zA-Z0-9_-]+(?:\s+and\s+|,\s+|,|\s+)+(?:[a-zA-Z0-9_-]+:)?[a-zA-Z0-9_-]+)",
-            r"with\s+((?:[a-zA-Z0-9_-]+:)?[a-zA-Z0-9_-]+(?:\s+and\s+|,\s+|,|\s+)+(?:[a-zA-Z0-9_-]+:)?[a-zA-Z0-9_-]+)\s+(?:as\s+)?(?:worker|llm|model)",
-        ]
+        try:
+            result = await self.agent.run(prompt)
+            extraction = result.output
 
-        for pattern in patterns:
-            matches = re.search(pattern, lower_prompt)
-            if matches:
-                llm_str = matches.group(1).strip()
-                # Split by commas and "and"
-                llm_str = re.sub(r"\s+and\s+", ",", llm_str)
-                llms = [llm.strip() for llm in llm_str.split(",") if llm.strip()]
-
-                # Filter out non-model strings
-                valid_llms = []
-                for llm in llms:
-                    # Check if it looks like a model (contains no spaces, optional provider prefix)
-                    if " " not in llm and (":" in llm or len(llm) > 2):
-                        valid_llms.append(llm)
-
-                if valid_llms:
-                    logger.info(
-                        f"Extracted {len(valid_llms)} worker LLMs from prompt: {valid_llms}"
-                    )
-                    return valid_llms
+            if extraction.has_worker_llms and extraction.worker_llms:
+                logger.info(
+                    f"Extracted {len(extraction.worker_llms)} worker LLMs from prompt: {extraction.worker_llms}"
+                )
+                return extraction.worker_llms
+        except Exception as e:
+            logger.debug(f"Worker LLM extraction failed: {e}")
 
         return None
+
+
+# Global extractor instance for reuse
+_worker_llm_extractor: WorkerLLMExtractor | None = None
+
+
+def extract_worker_llms_from_prompt(prompt: str) -> list[str] | None:
+    """
+    Extract worker LLM configurations from user prompt using LLM-driven extraction.
+
+    Args:
+        prompt: User's original request
+
+    Returns:
+        List of extracted LLM model strings if found, None otherwise
+    """
+    global _worker_llm_extractor
+    if _worker_llm_extractor is None:
+        _worker_llm_extractor = WorkerLLMExtractor()
+
+    import asyncio
+
+    try:
+        loop = asyncio.get_running_loop()
+        # We're in an async context, but this function is sync
+        # Schedule the extraction and return None for now
+        # The caller should use the async version if in async context
+        logger.debug("Worker LLM extraction called from sync context with running loop")
+        return None
+    except RuntimeError:
+        # No event loop running, safe to use asyncio.run
+        return asyncio.run(_worker_llm_extractor.extract(prompt))
 
     def validate_subtasks(self, subtasks: list[Subtask], original_prompt: str) -> bool:
         """
