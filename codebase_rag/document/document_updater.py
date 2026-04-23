@@ -12,6 +12,7 @@ import re
 from datetime import UTC, datetime
 from itertools import batched
 from pathlib import Path
+from typing import cast
 
 from loguru import logger
 
@@ -381,7 +382,12 @@ class DocumentGraphUpdater:
             )
         self.workspace = workspace
         self.concept_extractor = concept_extractor or (
-            LLMConceptExtractor() if settings.DOC_CONCEPT_EXTRACTION_ENABLED else None
+            LLMConceptExtractor(
+                timeout=settings.DOC_CONCEPT_BASE_TIMEOUT,
+                max_timeout=settings.DOC_CONCEPT_MAX_TIMEOUT,
+            )
+            if settings.DOC_CONCEPT_EXTRACTION_ENABLED
+            else None
         )
         self._concept_indexes_ensured = False
 
@@ -2383,8 +2389,11 @@ class DocumentGraphUpdater:
 
         async def _extract_one(chunk: DocumentChunk) -> ExtractionResult:
             async with semaphore:
-                return await self.concept_extractor.extract(
-                    chunk.content, chunk.qualified_name
+                extractor = cast(LLMConceptExtractor, self.concept_extractor)
+                return await extractor.extract_with_retry(
+                    chunk.content,
+                    chunk.qualified_name,
+                    dead_letter_queue=self.dead_letter_queue,
                 )
 
         extraction_results = await asyncio.gather(

@@ -2,11 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import random
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    from codebase_rag.document.circuit_breaker import CircuitBreaker
+    from codebase_rag.document.error_handling import DeadLetterQueue, ExtractionError
 
 
 class ExtractedConcept(BaseModel):
@@ -118,10 +124,33 @@ class ConceptExtractionStats:
         )
 
 
+def calculate_adaptive_timeout(
+    chunk_content: str,
+    base_timeout: float = 30.0,
+    max_timeout: float = 120.0,
+    timeout_per_1k_chars: float = 10.0,
+    timeout_per_code_block: float = 5.0,
+    max_size_factor: float = 30.0,
+    max_complexity_factor: float = 20.0,
+) -> float:
+    chunk_length = len(chunk_content)
+    size_factor = min(chunk_length / 1000 * timeout_per_1k_chars, max_size_factor)
+    code_block_count = chunk_content.count("```")
+    complexity_factor = min(code_block_count * timeout_per_code_block, max_complexity_factor)
+    timeout = base_timeout + size_factor + complexity_factor
+    return min(timeout, max_timeout)
+
+
 class LLMConceptExtractor:
     """LLM-based concept extraction implementation."""
 
-    __slots__ = ("agent", "timeout", "_initialization_failed")
+    __slots__ = (
+        "agent",
+        "timeout",
+        "max_timeout",
+        "_initialization_failed",
+        "_circuit_breaker",
+    )
 
     SYSTEM_PROMPT = """You are a concept extractor for technical documentation.
 Given a document chunk, identify:
@@ -154,17 +183,35 @@ Rules:
 - Relationship types must be one of: RELATED_TO, IS_A, PART_OF, CAUSES
 - Strength reflects how explicitly the relationship is stated"""
 
-    def __init__(self, timeout: float = 30.0) -> None:
+    def __init__(
+        self,
+        timeout: float | None = None,
+        max_timeout: float | None = None,
+        circuit_breaker: CircuitBreaker | None = None,
+    ) -> None:
+        from codebase_rag.config import settings
+        from codebase_rag.document.circuit_breaker import CircuitBreaker, CircuitBreakerConfig
+
         self.agent = None
-        self.timeout = timeout
+        self.timeout = timeout if timeout is not None else settings.DOC_CONCEPT_BASE_TIMEOUT
+        self.max_timeout = max_timeout if max_timeout is not None else settings.DOC_CONCEPT_MAX_TIMEOUT
         self._initialization_failed = False
+        if circuit_breaker is not None:
+            self._circuit_breaker = circuit_breaker
+        elif settings.CGR_CIRCUIT_BREAKER_ENABLED:
+            self._circuit_breaker = CircuitBreaker(
+                name="concept_extraction",
+                config=CircuitBreakerConfig(
+                    failure_threshold=settings.CGR_CIRCUIT_FAILURE_THRESHOLD,
+                    success_threshold=settings.CGR_CIRCUIT_SUCCESS_THRESHOLD,
+                    timeout_seconds=settings.CGR_CIRCUIT_TIMEOUT_SECONDS,
+                    window_size=settings.CGR_CIRCUIT_WINDOW_SIZE,
+                ),
+            )
+        else:
+            self._circuit_breaker = None
 
     def _initialize_agent(self) -> bool:
-        """Lazy initialization with error handling.
-
-        Returns:
-            True if agent is ready, False if initialization failed.
-        """
         if self.agent is not None:
             return True
         if self._initialization_failed:
@@ -193,55 +240,59 @@ Rules:
             self._initialization_failed = True
             return False
 
-    async def extract(self, chunk_content: str, chunk_qn: str) -> ExtractionResult:
-        """Extract concepts from chunk content."""
+    async def extract(
+        self,
+        chunk_content: str,
+        chunk_qn: str,
+        timeout: float | None = None,
+    ) -> ExtractionResult:
         if not self._initialize_agent():
             return ExtractionResult()
+
+        if self._circuit_breaker is not None and not self._circuit_breaker.can_execute():
+            from loguru import logger
+            from codebase_rag.document import logs as doc_ls
+
+            logger.warning(
+                doc_ls.DOC_CONCEPT_CIRCUIT_BREAKER_OPEN.format(chunk_qn=chunk_qn)
+            )
+            return ExtractionResult()
+
+        if timeout is None:
+            timeout = calculate_adaptive_timeout(
+                chunk_content,
+                base_timeout=self.timeout,
+                max_timeout=self.max_timeout,
+            )
 
         try:
             result = await asyncio.wait_for(
                 self.agent.run(chunk_content),
-                timeout=self.timeout,
+                timeout=timeout,
             )
-            # Add source attribution
             for concept in result.output.concepts:
                 concept.source_chunk_qn = chunk_qn
+            if self._circuit_breaker is not None:
+                self._circuit_breaker.record_success()
             return result.output
-        except Exception as e:
-            from loguru import logger
-
-            # Use structured error classification
-            error = classify_concept_extraction_error(e, chunk_content, chunk_qn)
-            logger.warning(error.to_log_message())
-
-            # Save debug data if enabled
-            save_failed_chunk_for_debug(error, chunk_content)
-
-            return ExtractionResult()
+        except asyncio.TimeoutError:
+            if self._circuit_breaker is not None:
+                self._circuit_breaker.record_failure()
+            raise
+        except Exception:
+            if self._circuit_breaker is not None:
+                self._circuit_breaker.record_failure()
+            raise
 
     async def extract_with_retry(
         self,
         chunk_content: str,
         chunk_qn: str,
-        dead_letter_queue: "DeadLetterQueue | None" = None,
+        dead_letter_queue: DeadLetterQueue | None = None,
     ) -> ExtractionResult:
-        """Extract concepts with quota-aware retry logic.
-
-        Uses existing DeadLetterQueue infrastructure for retry scheduling.
-        LLM-First Design: Retry decisions are deterministic based on error type.
-        - CONCEPT_RATE_LIMITED: Exponential backoff retry
-        - CONCEPT_QUOTA_EXCEEDED: No retry, queue for later with reset time
-
-        Args:
-            chunk_content: The text content of the chunk
-            chunk_qn: Qualified name of the chunk
-            dead_letter_queue: Optional DLQ for failed extractions
-
-        Returns:
-            ExtractionResult (empty on failure)
-        """
         from codebase_rag.config import settings
         from codebase_rag.document.error_handling import ErrorType
+        from codebase_rag.document import logs as doc_ls
         from loguru import logger
 
         max_retries = settings.DOC_CONCEPT_EXTRACTION_MAX_RETRIES
@@ -252,18 +303,14 @@ Rules:
         for attempt in range(max_retries + 1):
             try:
                 result = await self.extract(chunk_content, chunk_qn)
-                # Check if extraction actually succeeded (not empty)
                 if result.concepts or result.relationships:
                     return result
-                # Empty result might indicate failure, but we can't be sure
-                # so we don't retry on empty results
                 return result
             except Exception as e:
                 error = classify_concept_extraction_error(e, chunk_content, chunk_qn)
                 error.retry_count = attempt
                 last_error = error
 
-                # QUOTA EXCEEDED: Stop immediately, don't waste API calls
                 if error.error_type == ErrorType.CONCEPT_QUOTA_EXCEEDED:
                     logger.error(
                         f"LLM quota exceeded. Reset at: {error.retry_after or 'unknown'}. "
@@ -271,16 +318,15 @@ Rules:
                     )
                     break
 
-                # NON-RECOVERABLE: Stop immediately
                 if not error.recoverable:
                     logger.error(f"Non-recoverable error: {error.error_type.value}")
                     break
 
-                # RECOVERABLE: Retry with exponential backoff
                 if attempt < max_retries:
                     delay = base_delay * (2 ** attempt)
+                    jitter = delay * random.uniform(0.0, 0.25)
+                    delay = delay + jitter
 
-                    # For rate limits, use retry-after header if available
                     if error.error_type == ErrorType.CONCEPT_RATE_LIMITED:
                         if error.retry_after:
                             from datetime import datetime
@@ -288,20 +334,26 @@ Rules:
                             delay = max(delay, (retry_dt - datetime.now()).total_seconds())
 
                     logger.warning(
-                        f"Concept extraction failed (attempt {attempt + 1}/{max_retries + 1}), "
-                        f"retrying in {delay:.0f}s: {error.error_type.value}"
+                        doc_ls.DOC_CONCEPT_RETRY_ATTEMPT.format(
+                            attempt=attempt + 1,
+                            max_retries=max_retries + 1,
+                            chunk_qn=chunk_qn,
+                            delay=delay,
+                            error_type=error.error_type.value,
+                        )
                     )
                     await asyncio.sleep(delay)
 
-        # Queue for later retry if DLQ available
         if last_error and dead_letter_queue:
             dead_letter_queue.enqueue(last_error)
-            logger.info(f"Queued failed concept extraction for {chunk_qn}")
+            logger.info(
+                doc_ls.DOC_CONCEPT_RETRY_EXHAUSTED.format(chunk_qn=chunk_qn)
+            )
 
         return ExtractionResult()
 
 
-def _parse_quota_reset_time(message: str) -> "datetime | None":
+def _parse_quota_reset_time(message: str) -> datetime | None:
     """Parse quota reset time from API error message.
 
     Example: "It will reset at 2026-05-09 23:59:59 +0800 CST"
@@ -310,7 +362,6 @@ def _parse_quota_reset_time(message: str) -> "datetime | None":
         datetime object or None if parsing fails
     """
     import re
-    from datetime import datetime
 
     # Pattern: YYYY-MM-DD HH:MM:SS +/-HHMM TZ
     pattern = r"reset at (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4})"
@@ -331,7 +382,7 @@ def classify_concept_extraction_error(
     exc: Exception,
     chunk_content: str,
     chunk_qn: str,
-) -> "ExtractionError":
+) -> ExtractionError:
     """Classify a concept extraction error for better handling.
 
     LLM-First Design: Classification is deterministic Python logic.
@@ -431,7 +482,7 @@ def classify_concept_extraction_error(
     )
 
 
-def get_user_facing_message(error: "ExtractionError") -> str:
+def get_user_facing_message(error: ExtractionError) -> str:
     """Generate user-friendly error message with actionable guidance.
 
     LLM-First Design: Deterministic messages for infrastructure errors.
@@ -476,7 +527,7 @@ def get_user_facing_message(error: "ExtractionError") -> str:
 
 
 def save_failed_chunk_for_debug(
-    error: "ExtractionError",
+    error: ExtractionError,
     chunk_content: str,
     debug_dir: Path | None = None,
 ) -> Path | None:

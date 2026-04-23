@@ -10,12 +10,14 @@ Key components:
 """
 
 from .chunking import DocumentChunk, SemanticDocumentChunker
+from .circuit_breaker import CircuitBreaker, CircuitBreakerConfig
 from .concept_extraction import (
     ConceptExtractionStats,
     ExtractedConcept,
     ConceptRelationship,
     ExtractionResult,
     LLMConceptExtractor,
+    calculate_adaptive_timeout,
     classify_concept_extraction_error,
     get_user_facing_message,
 )
@@ -49,6 +51,10 @@ __all__ = [
     "ConceptRelationship",
     "ExtractionResult",
     "LLMConceptExtractor",
+    "calculate_adaptive_timeout",
     "classify_concept_extraction_error",
     "get_user_facing_message",
+    # Circuit breaker
+    "CircuitBreaker",
+    "CircuitBreakerConfig",
 ]

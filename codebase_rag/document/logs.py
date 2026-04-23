@@ -6,6 +6,9 @@ DOC_CONCEPT_EXTRACT_DONE = "Extracted {concept_count} concepts from document"
 DOC_CONCEPT_STORE_BATCH = "Storing {count} concept nodes via batch MERGE"
 DOC_MENTIONS_STORE_BATCH = "Creating {count} MENTIONS relationships"
 DOC_REL_STORE_BATCH = "Creating {count} concept-to-concept relationships"
+DOC_CONCEPT_CIRCUIT_BREAKER_OPEN = "Circuit breaker OPEN for concept extraction, skipping {chunk_qn}"
+DOC_CONCEPT_RETRY_ATTEMPT = "Concept extraction retry {attempt}/{max_retries} for {chunk_qn} after {delay:.1f}s ({error_type})"
+DOC_CONCEPT_RETRY_EXHAUSTED = "Concept extraction exhausted retries for {chunk_qn}, queued to DLQ"
 
 # Graph algorithms
 DOC_SHORTEST_PATH_QUERY = "Finding shortest path: {source} -> {target}"

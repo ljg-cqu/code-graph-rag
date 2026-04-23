@@ -151,6 +151,22 @@ Configure the separate document graph for indexing and querying documentation:
 | `DOC_MAX_FILE_SIZE_MB` | `50` | Maximum document file size |
 | `DOC_ENABLED` | `True` | Enable/disable document indexing |
 
+## Concept Extraction Timeout and Resilience
+
+Fine-tune LLM-based concept extraction timeouts and circuit breaker behavior:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DOC_CONCEPT_BASE_TIMEOUT` | `30.0` | Base timeout for concept extraction (seconds) |
+| `DOC_CONCEPT_MAX_TIMEOUT` | `120.0` | Maximum adaptive timeout cap (seconds) |
+| `DOC_CONCEPT_TIMEOUT_PER_1K_CHARS` | `10.0` | Additional timeout per 1000 characters |
+| `DOC_CONCEPT_TIMEOUT_PER_CODE_BLOCK` | `5.0` | Additional timeout per code block |
+| `CGR_CIRCUIT_BREAKER_ENABLED` | `True` | Enable circuit breaker for LLM calls |
+| `CGR_CIRCUIT_FAILURE_THRESHOLD` | `5` | Failures before opening circuit |
+| `CGR_CIRCUIT_SUCCESS_THRESHOLD` | `2` | Successes to close from half-open |
+| `CGR_CIRCUIT_TIMEOUT_SECONDS` | `60.0` | Seconds before recovery attempt |
+| `CGR_CIRCUIT_WINDOW_SIZE` | `10` | Rolling window size for failure rate |
+
 ## Setting Up Ollama
 
 ```bash

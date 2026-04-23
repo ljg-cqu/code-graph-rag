@@ -625,6 +625,62 @@ class AppConfig(BaseSettings):
     DOC_CONCEPT_EXTRACTION_MAX_RETRIES: int = Field(default=3, ge=0, le=10)
     DOC_CONCEPT_EXTRACTION_RETRY_DELAY: float = Field(default=1.0, ge=0.1, le=60.0)
 
+    # Adaptive timeout for concept extraction
+    DOC_CONCEPT_BASE_TIMEOUT: float = Field(
+        default=30.0,
+        ge=5.0,
+        le=300.0,
+        description="Base timeout for concept extraction (seconds)",
+    )
+    DOC_CONCEPT_MAX_TIMEOUT: float = Field(
+        default=120.0,
+        ge=30.0,
+        le=600.0,
+        description="Maximum timeout cap for concept extraction (seconds)",
+    )
+    DOC_CONCEPT_TIMEOUT_PER_1K_CHARS: float = Field(
+        default=10.0,
+        ge=0.0,
+        le=30.0,
+        description="Additional timeout per 1000 characters (seconds)",
+    )
+    DOC_CONCEPT_TIMEOUT_PER_CODE_BLOCK: float = Field(
+        default=5.0,
+        ge=0.0,
+        le=15.0,
+        description="Additional timeout per code block (seconds)",
+    )
+
+    # Circuit breaker for concept extraction
+    CGR_CIRCUIT_BREAKER_ENABLED: bool = Field(
+        default=True,
+        description="Enable circuit breaker for LLM concept extraction calls",
+    )
+    CGR_CIRCUIT_FAILURE_THRESHOLD: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="Failures before opening circuit breaker",
+    )
+    CGR_CIRCUIT_SUCCESS_THRESHOLD: int = Field(
+        default=2,
+        ge=1,
+        le=10,
+        description="Successes required to close circuit breaker from half-open",
+    )
+    CGR_CIRCUIT_TIMEOUT_SECONDS: float = Field(
+        default=60.0,
+        ge=10.0,
+        le=300.0,
+        description="Seconds before circuit breaker attempts recovery",
+    )
+    CGR_CIRCUIT_WINDOW_SIZE: int = Field(
+        default=10,
+        ge=1,
+        le=50,
+        description="Rolling window size for circuit breaker failure rate",
+    )
+
     # Debug mode for concept extraction failures
     CGR_DEBUG_CONCEPT_EXTRACTION: bool = Field(
         default=False,
@@ -1454,7 +1510,7 @@ class AppConfig(BaseSettings):
 
     @field_validator("DOC_MAX_FILE_SIZE_MB")
     @classmethod
-    def validate_doc_max_file_size(cls, v: int) -> str:
+    def validate_doc_max_file_size(cls, v: int) -> int:
         """Validate max file size is reasonable."""
         if v < 1:
             raise ValueError(f"DOC_MAX_FILE_SIZE_MB ({v}) must be >= 1")
