@@ -85,10 +85,10 @@ def get_embedding_provider(
         )
 
     cls = get_embedding_provider_class(provider)
-    effective_dimension = (
-        dimension if dimension is not None else settings.get_effective_vector_dim()
-    )
-    return cls(model_id=model_id, dimension=effective_dimension, **kwargs)
+    # Only pass dimension if explicitly provided; let providers determine from model_id
+    if dimension is not None:
+        return cls(model_id=model_id, dimension=dimension, **kwargs)
+    return cls(model_id=model_id, **kwargs)
 
 
 def _bootstrap_providers() -> None:
@@ -152,6 +152,12 @@ __all__ = [
     "AUTH_SOLUTIONS",
     "get_user_facing_message",
     "get_auth_solutions",
+    # Provider availability
+    "ProviderStatus",
+    "check_provider_availability",
+    "get_best_available_provider",
+    "get_best_available_provider_with_status",
+    "get_all_provider_statuses",
 ]
 
 for provider_name in (
@@ -188,4 +194,14 @@ def __getattr__(name: str):
         from . import errors
 
         return getattr(errors, name)
+    if name in (
+        "ProviderStatus",
+        "check_provider_availability",
+        "get_best_available_provider",
+        "get_best_available_provider_with_status",
+        "get_all_provider_statuses",
+    ):
+        from . import provider_availability
+
+        return getattr(provider_availability, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

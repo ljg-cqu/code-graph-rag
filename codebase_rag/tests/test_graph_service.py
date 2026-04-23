@@ -797,6 +797,137 @@ class TestCreateMode:
         assert "MERGE" not in call_args
 
 
+class TestTransactionConflictRetry:
+    def test_flush_retries_on_transaction_conflict(self) -> None:
+        ingestor = MemgraphIngestor(host="localhost", port=7687)
+        ingestor.conn = MagicMock()
+
+        with patch.object(
+            MemgraphIngestor, "_execute_batch_with_return_with_timeout"
+        ) as mock_exec:
+            mock_exec.side_effect = [
+                Exception("Cannot resolve conflicting transactions"),
+                Exception("Cannot resolve conflicting transactions"),
+                [{"created": 1}],
+            ]
+            with patch("codebase_rag.services.graph_service.time.sleep"):
+                result = ingestor._flush_rel_pattern_group(
+                    (
+                        "Module",
+                        "qualified_name",
+                        "IMPORTS",
+                        "Module",
+                        "qualified_name",
+                    ),
+                    [{"from_val": "a", "to_val": "b", "props": {}}],
+                )
+
+            assert result == (1, 1)
+            assert mock_exec.call_count == 3
+
+    def test_flush_raises_after_max_retries(self) -> None:
+        ingestor = MemgraphIngestor(host="localhost", port=7687)
+        ingestor.conn = MagicMock()
+
+        with patch.object(
+            MemgraphIngestor, "_execute_batch_with_return_with_timeout"
+        ) as mock_exec:
+            mock_exec.side_effect = Exception(
+                "Cannot resolve conflicting transactions"
+            )
+
+            with pytest.raises(Exception, match="conflicting transactions"):
+                ingestor._flush_rel_pattern_group(
+                    (
+                        "Module",
+                        "qualified_name",
+                        "IMPORTS",
+                        "Module",
+                        "qualified_name",
+                    ),
+                    [{"from_val": "a", "to_val": "b", "props": {}}],
+                )
+
+            assert mock_exec.call_count == 4  # Initial + 3 retries
+
+    def test_flush_disabled_feature_flag_no_retry(self) -> None:
+        ingestor = MemgraphIngestor(host="localhost", port=7687)
+        ingestor.conn = MagicMock()
+
+        with patch.object(
+            MemgraphIngestor, "_execute_batch_with_return_with_timeout"
+        ) as mock_exec:
+            mock_exec.side_effect = Exception(
+                "Cannot resolve conflicting transactions"
+            )
+            with patch.object(
+                settings, "MEMGRAPH_CONFLICT_RETRY_ENABLED", False
+            ):
+                with pytest.raises(Exception, match="conflicting transactions"):
+                    ingestor._flush_rel_pattern_group(
+                        (
+                            "Module",
+                            "qualified_name",
+                            "IMPORTS",
+                            "Module",
+                            "qualified_name",
+                        ),
+                        [{"from_val": "a", "to_val": "b", "props": {}}],
+                    )
+
+            assert mock_exec.call_count == 1
+
+    def test_flush_no_retry_for_non_conflict_error(self) -> None:
+        ingestor = MemgraphIngestor(host="localhost", port=7687)
+        ingestor.conn = MagicMock()
+
+        with patch.object(
+            MemgraphIngestor, "_execute_batch_with_return_with_timeout"
+        ) as mock_exec:
+            mock_exec.side_effect = Exception("syntax error")
+
+            with pytest.raises(Exception, match="syntax error"):
+                ingestor._flush_rel_pattern_group(
+                    (
+                        "Module",
+                        "qualified_name",
+                        "IMPORTS",
+                        "Module",
+                        "qualified_name",
+                    ),
+                    [{"from_val": "a", "to_val": "b", "props": {}}],
+                )
+
+            assert mock_exec.call_count == 1
+
+    def test_flush_rel_group_with_own_conn_retries_on_conflict(self) -> None:
+        ingestor = MemgraphIngestor(host="localhost", port=7687)
+        mock_conn = MagicMock()
+
+        with patch.object(
+            MemgraphIngestor, "_create_connection_with_timeout", return_value=mock_conn
+        ):
+            with patch.object(
+                MemgraphIngestor, "_execute_batch_with_return_with_timeout"
+            ) as mock_exec:
+                mock_exec.side_effect = [
+                    Exception("Cannot resolve conflicting transactions"),
+                    [{"created": 1}, {"created": 1}, {"created": 1}],
+                ]
+                with patch("codebase_rag.services.graph_service.time.sleep"):
+                    result = ingestor._flush_rel_group_with_own_conn(
+                        ("File", "path", "IMPORTS", "File", "path"),
+                        [
+                            {"from_val": "/a.py", "to_val": "/b.py", "props": {}},
+                            {"from_val": "/c.py", "to_val": "/d.py", "props": {}},
+                            {"from_val": "/e.py", "to_val": "/f.py", "props": {}},
+                        ],
+                    )
+
+                assert result == (3, 3)
+                assert mock_exec.call_count == 2
+
+
 class TestPreGroupedRelBuffer:
     def test_rel_groups_populated_on_ensure(self) -> None:
         ingestor = MemgraphIngestor(host="localhost", port=7687)
@@ -857,6 +988,57 @@ class TestPreGroupedRelBuffer:
         assert rows[0]["from_val"] == "/a.py"
         assert rows[0]["to_val"] == "/b.py"
         assert rows[0]["props"] == {"weight": 1}
+
+
+class TestClassifyImportFailure:
+    """Tests for _classify_import_failure method."""
+
+    def test_classifies_stdlib_os(self) -> None:
+        """os should be classified as STDLIB."""
+        ingestor = MemgraphIngestor(host="localhost", port=7687)
+        assert ingestor._classify_import_failure("os") == "STDLIB"
+
+    def test_classifies_stdlib_typing(self) -> None:
+        """typing should be classified as STDLIB."""
+        ingestor = MemgraphIngestor(host="localhost", port=7687)
+        assert ingestor._classify_import_failure("typing") == "STDLIB"
+
+    def test_classifies_stdlib_submodule(self) -> None:
+        """stdlib submodules should be classified as STDLIB."""
+        ingestor = MemgraphIngestor(host="localhost", port=7687)
+        assert ingestor._classify_import_failure("os.path") == "STDLIB"
+        assert ingestor._classify_import_failure("collections.abc") == "STDLIB"
+
+    def test_classifies_third_party_pydantic(self) -> None:
+        """pydantic should be classified as THIRD_PARTY."""
+        ingestor = MemgraphIngestor(host="localhost", port=7687)
+        assert ingestor._classify_import_failure("pydantic") == "THIRD_PARTY"
+
+    def test_classifies_third_party_numpy(self) -> None:
+        """numpy should be classified as THIRD_PARTY."""
+        ingestor = MemgraphIngestor(host="localhost", port=7687)
+        assert ingestor._classify_import_failure("numpy") == "THIRD_PARTY"
+
+    def test_classifies_third_party_loguru(self) -> None:
+        """loguru should be classified as THIRD_PARTY."""
+        ingestor = MemgraphIngestor(host="localhost", port=7687)
+        assert ingestor._classify_import_failure("loguru") == "THIRD_PARTY"
+
+    def test_classifies_third_party_submodule(self) -> None:
+        """third-party submodules should be classified as THIRD_PARTY."""
+        ingestor = MemgraphIngestor(host="localhost", port=7687)
+        assert ingestor._classify_import_failure("pydantic_ai.models") == "THIRD_PARTY"
+
+    def test_classifies_unknown_as_internal(self) -> None:
+        """Unknown modules should be classified as INTERNAL."""
+        ingestor = MemgraphIngestor(host="localhost", port=7687)
+        assert ingestor._classify_import_failure("my_internal_module") == "INTERNAL"
+
+    def test_classifies_project_code_as_internal(self) -> None:
+        """Project-specific code should be classified as INTERNAL."""
+        ingestor = MemgraphIngestor(host="localhost", port=7687)
+        assert ingestor._classify_import_failure("codebase_rag.services") == "INTERNAL"
+        assert ingestor._classify_import_failure("myproject.utils") == "INTERNAL"
 
 
 class TestSlots:

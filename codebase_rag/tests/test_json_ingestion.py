@@ -487,6 +487,9 @@ def test_recreate_json_vector_index_recreates_mismatched_dimension() -> None:
     with patch(
         "codebase_rag.json_ingestion._create_json_ingestor",
         return_value=fake_ingestor,
+    ), patch(
+        "codebase_rag.json_ingestion.are_json_embeddings_available",
+        return_value=(True, None),
     ):
         recreate_json_vector_index(batch_size=10, dimension=1024)
 
@@ -529,7 +532,7 @@ def test_ingest_json_data_calls_ensure_constraints() -> None:
         "codebase_rag.json_ingestion._create_json_ingestor",
         return_value=fake_ingestor,
     ):
-        result = ingest_json_data(pre_loaded_data=[(Path("test.json"), deepcopy(SAMPLE_VALID_JSON))])
+        ingest_json_data(pre_loaded_data=[(Path("test.json"), deepcopy(SAMPLE_VALID_JSON))])
 
     assert "ensure_constraints" in fake_ingestor.calls
 
@@ -562,6 +565,9 @@ def test_recreate_json_vector_index_keeps_matching_dimension() -> None:
     with patch(
         "codebase_rag.json_ingestion._create_json_ingestor",
         return_value=fake_ingestor,
+    ), patch(
+        "codebase_rag.json_ingestion.are_json_embeddings_available",
+        return_value=(True, None),
     ):
         recreate_json_vector_index(batch_size=10, dimension=1024)
 

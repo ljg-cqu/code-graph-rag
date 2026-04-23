@@ -5,11 +5,10 @@ from pathlib import Path
 from typing import Literal, cast
 
 from loguru import logger
-from pydantic_ai import Agent
-from pydantic_ai.usage import UsageLimits
 from rich.console import Console
 
 from codebase_rag import constants as cs
+from codebase_rag.compat.pydantic_ai import Agent, UsageLimits
 from codebase_rag import logs as lg
 from codebase_rag import tool_errors as te
 from codebase_rag.config import settings

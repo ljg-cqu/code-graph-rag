@@ -483,7 +483,7 @@ def test_get_function_source_code_handles_exception(mock_ingestor: MagicMock) ->
     not has_semantic_dependencies(), reason="semantic dependencies not installed"
 )
 def test_create_semantic_search_tool_returns_tool() -> None:
-    from pydantic_ai import Tool
+    from codebase_rag.compat.pydantic_ai import Tool
 
     from codebase_rag.tools.semantic_search import create_semantic_search_tool
     from codebase_rag.tools.tool_descriptions import AgenticToolName
@@ -498,7 +498,7 @@ def test_create_semantic_search_tool_returns_tool() -> None:
     not has_semantic_dependencies(), reason="semantic dependencies not installed"
 )
 def test_create_get_function_source_tool_returns_tool() -> None:
-    from pydantic_ai import Tool
+    from codebase_rag.compat.pydantic_ai import Tool
 
     from codebase_rag.tools.semantic_search import create_get_function_source_tool
     from codebase_rag.tools.tool_descriptions import AgenticToolName

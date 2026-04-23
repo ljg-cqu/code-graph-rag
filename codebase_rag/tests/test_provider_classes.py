@@ -4,8 +4,18 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-from pydantic_ai.models.google import GoogleModel
-from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
+
+from codebase_rag.compat.pydantic_ai import HAS_PYDANTIC_AI
+
+# Skip this test module if pydantic_ai is not installed
+pytestmark = pytest.mark.skipif(
+    not HAS_PYDANTIC_AI,
+    reason="pydantic_ai not installed (install with: uv sync --extra ai)"
+)
+
+if HAS_PYDANTIC_AI:
+    from pydantic_ai.models.google import GoogleModel
+    from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
 
 from codebase_rag.constants import GoogleProviderType, Provider
 from codebase_rag.providers.base import (

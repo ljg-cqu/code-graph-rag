@@ -216,3 +216,198 @@ def mock_updater(temp_repo: Path, mock_ingestor: MagicMock) -> MagicMock:
     mock.ast_cache = {}
 
     return mock
+
+
+# =============================================================================
+# Dependency Check Functions
+# =============================================================================
+
+def _check_pydantic_ai() -> bool:
+    """Check if pydantic_ai is available."""
+    try:
+        from codebase_rag.compat.pydantic_ai import HAS_PYDANTIC_AI
+        return HAS_PYDANTIC_AI
+    except ImportError:
+        return False
+
+
+def _check_memgraph() -> bool:
+    """Check if Memgraph is running and accessible."""
+    import socket
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(1)
+        result = sock.connect_ex(("localhost", 7687))
+        sock.close()
+        return result == 0
+    except Exception:
+        return False
+
+
+def _check_embeddings() -> bool:
+    """Check if embedding model is available."""
+    try:
+        # Check if semantic dependencies are installed
+        import torch  # noqa: F401
+        import transformers  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+# =============================================================================
+# Skipif Helpers (for use as pytest.mark.skipif)
+# =============================================================================
+
+requires_pydantic_ai = pytest.mark.skipif(
+    not _check_pydantic_ai(),
+    reason="pydantic_ai not installed (install with: uv sync --extra ai)"
+)
+
+requires_memgraph = pytest.mark.skipif(
+    not _check_memgraph(),
+    reason="Memgraph not running (start with: docker run -p 7687:7687 memgraph/memgraph)"
+)
+
+requires_embeddings = pytest.mark.skipif(
+    not _check_embeddings(),
+    reason="Embedding model not available (install with: uv sync --extra semantic)"
+)
+
+
+# =============================================================================
+# Mock Fixtures
+# =============================================================================
+
+@pytest.fixture
+def mock_pydantic_ai():
+    """Fixture providing mock pydantic_ai classes.
+
+    Returns:
+        Dict with MockAgent, MockTool, and MockRunResult classes
+    """
+    from codebase_rag.tests.mocks.pydantic_ai_mock import MockAgent, MockTool, MockRunResult
+    return {
+        "Agent": MockAgent,
+        "Tool": MockTool,
+        "RunResult": MockRunResult,
+    }
+
+
+@pytest.fixture
+def mock_memgraph():
+    """Fixture providing a mock Memgraph connection.
+
+    Yields:
+        MockMemgraphConnection instance
+    """
+    from codebase_rag.tests.mocks.memgraph_mock import MockMemgraphConnection
+    from unittest.mock import patch
+
+    conn = MockMemgraphConnection()
+    with patch("codebase_rag.services.graph_service.connect", return_value=conn):
+        yield conn
+
+
+@pytest.fixture
+def mock_embedding():
+    """Fixture providing a mock embedding provider.
+
+    Returns:
+        MockEmbeddingProvider instance
+    """
+    from codebase_rag.tests.mocks.embedding_mock import MockEmbeddingProvider
+    return MockEmbeddingProvider()
+
+
+@pytest.fixture
+def sample_code_file(temp_repo: Path) -> Path:
+    """Create a sample Python file for testing.
+
+    Args:
+        temp_repo: Temporary repository path
+
+    Returns:
+        Path to the created file
+    """
+    file_path = temp_repo / "sample.py"
+    file_path.write_text('''
+def hello():
+    """Return a greeting."""
+    return "world"
+
+
+class MyClass:
+    """A sample class."""
+
+    def method(self):
+        """A sample method."""
+        pass
+
+
+def add(a: int, b: int) -> int:
+    """Add two numbers."""
+    return a + b
+''')
+    return file_path
+
+
+@pytest.fixture
+def sample_document(temp_repo: Path) -> Path:
+    """Create a sample markdown document for testing.
+
+    Args:
+        temp_repo: Temporary repository path
+
+    Returns:
+        Path to the created file
+    """
+    file_path = temp_repo / "sample.md"
+    file_path.write_text('''
+# Sample Document
+
+This is a sample document for testing document indexing.
+
+## Features
+
+- Feature 1: Does something
+- Feature 2: Does something else
+
+## Code Example
+
+```python
+def example():
+    return "example"
+```
+''')
+    return file_path
+
+
+# =============================================================================
+# Mock Classification and Guidance Fixtures
+# =============================================================================
+
+@pytest.fixture
+def mock_classification():
+    """Provide a mock FailureClassification."""
+    from codebase_rag.services.failure_classifier import (
+        FailureClassification,
+        FailureType,
+    )
+    return FailureClassification(
+        failure_type=FailureType.TRANSIENT_NETWORK,
+        message="Mock error",
+        should_retry=True,
+        max_retries=3,
+    )
+
+
+@pytest.fixture
+def mock_guidance():
+    """Provide a mock ErrorGuidance."""
+    from codebase_rag.services.error_guidance import ErrorGuidance
+    return ErrorGuidance(
+        summary="Mock Summary",
+        explanation="Mock explanation.",
+        suggested_fix="Mock fix.",
+    )

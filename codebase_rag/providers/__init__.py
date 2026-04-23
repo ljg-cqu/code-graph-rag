@@ -6,6 +6,12 @@ from .base import (
     list_providers,
     register_provider,
 )
+from .fallback_chain import (
+    ProviderConfig,
+    ProviderFallbackChain,
+    build_fallback_chain_from_config,
+    get_default_query_chain,
+)
 
 __all__ = [
     "ModelProvider",
@@ -14,4 +20,8 @@ __all__ = [
     "register_provider",
     "list_providers",
     "check_ollama_running",
+    "ProviderConfig",
+    "ProviderFallbackChain",
+    "build_fallback_chain_from_config",
+    "get_default_query_chain",
 ]

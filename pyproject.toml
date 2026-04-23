@@ -36,7 +36,6 @@ keywords = [
 dependencies = [
     "loguru>=0.7.3",
     "mcp>=1.21.1",
-    "pydantic-ai>=1.70.0",
     "pydantic-settings>=2.0.0",
     "pymgclient>=1.4.0",
     "python-dotenv>=1.1.0",
@@ -84,6 +83,9 @@ include = ["codebase_rag*", "codec*", "cgr*"]
 exclude = ["*.tests", "*.tests.*"]
 
 [project.optional-dependencies]
+ai = [
+    "pydantic-ai>=1.70.0",
+]
 test = [
     "anyio>=4.0.0",
     "pytest>=8.4.1",
@@ -157,6 +159,9 @@ markers = [
     "integration: marks tests as integration tests requiring Docker",
     "e2e: marks tests as end-to-end tests",
     "anyio: marks tests that run with the AnyIO pytest plugin",
+    "requires_pydantic_ai: requires pydantic_ai package (install with: uv sync --extra ai)",
+    "requires_memgraph: requires running Memgraph instance",
+    "requires_embeddings: requires embedding model",
 ]
 
 [dependency-groups]

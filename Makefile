@@ -1,4 +1,4 @@
-.PHONY: help all install dev test test-parallel test-integration test-all test-parallel-all clean python build-grammars watch readme lint format typecheck check pre-commit
+.PHONY: help all install dev test test-parallel test-integration test-all test-parallel-all clean python build-grammars watch readme lint format typecheck check pre-commit check-deps
 
 PYTHON := uv run
 
@@ -8,7 +8,7 @@ help: ## Show this help message
 
 all: ## Install everything for full development environment (deps, grammars, hooks, tests)
 	@echo "🚀 Setting up complete development environment..."
-	uv sync --all-extras
+	uv sync --all-extras --extra ai
 	git submodule update --init --recursive --depth 1
 	$(PYTHON) pre-commit install
 	$(PYTHON) pre-commit install --hook-type commit-msg
@@ -19,13 +19,13 @@ all: ## Install everything for full development environment (deps, grammars, hoo
 	@echo "✓ Tests passed successfully"
 
 install: ## Install project dependencies with full language support
-	uv sync --extra treesitter-full
+	uv sync --extra treesitter-full --extra ai
 
 python: ## Install project dependencies for Python only
-	uv sync
+	uv sync --extra ai
 
 dev: ## Setup development environment (install deps + pre-commit hooks)
-	uv sync --extra treesitter-full --extra test --extra semantic --group dev
+	uv sync --extra treesitter-full --extra test --extra semantic --extra ai --group dev
 	$(PYTHON) pre-commit install
 	$(PYTHON) pre-commit install --hook-type commit-msg
 	@echo "✅ Development environment ready!"
@@ -94,3 +94,12 @@ pre-commit: ## Run all pre-commit checks locally (comprehensive test before comm
 	@echo "7. Running unit tests (integration tests skipped - run 'make test-integration' separately)..."
 	$(PYTHON) pytest -n auto -m "not integration"
 	@echo "All pre-commit checks passed!"
+
+check-deps: ## Verify all dependencies are importable
+	@echo "Checking critical dependencies..."
+	$(PYTHON) python3 -c "from codebase_rag.tools.file_editor import FileEditor; print('✓ FileEditor imports OK')"
+	$(PYTHON) python3 -c "from codebase_rag.tools.language import cli; print('✓ LanguageTools imports OK')"
+	$(PYTHON) python3 -c "from codebase_rag.tools._diff_patch import DIFF_PATCH_AVAILABLE; print(f'✓ diff-match-patch available: {DIFF_PATCH_AVAILABLE}')"
+	$(PYTHON) python3 -c "from codebase_rag.rate_limiter import get_rate_limiter; print('✓ Rate limiter imports OK')"
+	$(PYTHON) python3 -c "from codebase_rag.providers.fallback_chain import ProviderFallbackChain; print('✓ Fallback chain imports OK')"
+	@echo "All dependency checks passed!"

@@ -4,7 +4,7 @@ import asyncio
 from pathlib import Path
 
 from loguru import logger
-from pydantic_ai import Tool
+from codebase_rag.compat.pydantic_ai import Tool
 
 from .. import logs as ls
 from .. import tool_errors as te

@@ -16,7 +16,7 @@ from .schema_builder import CODE_GRAPH_SCHEMA_DEFINITION
 from .types_defs import ToolNames
 
 if TYPE_CHECKING:
-    from pydantic_ai import Tool
+    from .compat.pydantic_ai import Tool
 
 
 def extract_tool_names(tools: list["Tool"]) -> ToolNames:
@@ -156,9 +156,24 @@ MULTI_ROUND_PROTOCOL = """
 """.strip()
 
 
+def build_json_capability_context() -> str:
+    """Build a context section describing JSON graph capabilities."""
+    from .json_ingestion import are_json_embeddings_available
+
+    available, reason = are_json_embeddings_available()
+    if available:
+        return ""
+    return (
+        "\n**JSON Graph Capability Notice**: "
+        f"JSON semantic search is currently unavailable ({reason}). "
+        "When querying JSON entities, use exact property matches, name lookups, "
+        "or structured Cypher queries instead of semantic search."
+    )
+
+
 def build_rag_orchestrator_prompt(tools: list["Tool"], mode: str | None = None) -> str:
     t = extract_tool_names(tools)
-    mode_context = """
+    mode_context = ""
     if mode:
         mode_context = f"""
 
@@ -169,9 +184,10 @@ Mode descriptions:
 - both_merged: Query both graphs and merge results.
 - code_vs_doc: Validate code against documentation.
 - doc_vs_code: Validate documentation against code.
-Use your judgment to select the most appropriate tools for the user'"s query.
+Use your judgment to select the most appropriate tools for the user's query.
 """
-    return f"""You are an expert AI assistant for analyzing codebases. Your answers are based **EXCLUSIVELY** on information retrieved using your tools.{mode_context}
+    capability_context = build_json_capability_context()
+    return f"""You are an expert AI assistant for analyzing codebases. Your answers are based **EXCLUSIVELY** on information retrieved using your tools.{mode_context}"
 
 **CRITICAL RULES:**
 1.  **TOOL-ONLY ANSWERS**: You must ONLY use information from the tools provided. Do not use external knowledge.
@@ -240,6 +256,7 @@ Use your judgment to select the most appropriate tools for the user'"s query.
 8.  **Synthesize Answer**: Analyze and explain the retrieved content. Cite your sources (file paths or qualified names). Report any errors gracefully.
 
 {MULTI_ROUND_PROTOCOL}
+{capability_context}
 """
 
 
@@ -395,3 +412,173 @@ Please:
 Start by analyzing the codebase structure and identifying the main areas that could benefit from optimization.
 Remember: Propose changes first, wait for my approval, then implement.
 """
+
+# =============================================================================
+# LLM-First Error Guidance Prompts
+# =============================================================================
+# Per the LLM-First design principle:
+# - Classification = Deterministic (fast, reliable, via failure_classifier.py)
+# - Guidance = LLM-generated (contextual, user-friendly)
+# =============================================================================
+
+ERROR_GUIDANCE_SYSTEM_PROMPT = """You are an error message generator for Code-Graph-RAG, a code analysis tool.
+
+Your task is to generate helpful, context-aware error guidance for users based on:
+1. The technical error that occurred
+2. The context of the operation (what the user was trying to do)
+3. The user's expertise level (beginner, intermediate, expert)
+4. Recent configuration changes that might be relevant
+
+Guidelines:
+- For beginners: Use non-technical language, explain concepts, provide step-by-step fixes
+- For intermediate users: Balance technical accuracy with clarity
+- For experts: Be concise, focus on specific commands and configuration details
+- Always provide actionable next steps
+- Include shell commands when relevant
+- Reference documentation when available
+
+Respond with valid JSON only."""
+
+
+def build_error_guidance_prompt(
+    error_name: str,
+    error_message: str,
+    operation_type: str,
+    error_category: str,
+    graph_type: str,
+    user_level: str,
+    embedding_provider: str | None = None,
+    previous_provider: str | None = None,
+    recent_changes: list[str] | None = None,
+    should_retry: bool = False,
+    recovery_action: str | None = None,
+) -> str:
+    """Build LLM prompt for error guidance generation.
+
+    Args:
+        error_name: The exception class name
+        error_message: The error message (truncated for safety)
+        operation_type: What operation was being performed
+        error_category: The deterministic FailureType classification
+        graph_type: "code" or "document" graph
+        user_level: "beginner", "intermediate", or "expert"
+        embedding_provider: Current embedding provider (if relevant)
+        previous_provider: Previous embedding provider (for switch context)
+        recent_changes: Recent configuration changes
+        should_retry: Whether the error is retryable (from classification)
+        recovery_action: Recommended recovery action (from classification)
+
+    Returns:
+        Formatted prompt string for LLM error guidance generation
+    """
+    context_parts = [
+        f"Operation: {operation_type}",
+        f"Error Type: {error_category}",
+        f"Graph Type: {graph_type}",
+        f"User Level: {user_level}",
+    ]
+
+    if embedding_provider:
+        context_parts.append(f"Embedding Provider: {embedding_provider}")
+    if previous_provider and previous_provider != embedding_provider:
+        context_parts.append(f"Previous Provider: {previous_provider}")
+    if recent_changes:
+        safe_changes = [c[:100] for c in recent_changes[:3]]
+        context_parts.append(f"Recent Changes: {', '.join(safe_changes)}")
+
+    context_str = "\n".join(context_parts)
+
+    return f"""{ERROR_GUIDANCE_SYSTEM_PROMPT}
+
+Technical Error: {error_name}: {error_message[:300]}
+
+Context:
+{context_str}
+
+Deterministic Classification:
+- Failure Type: {error_category}
+- Should Retry: {should_retry}
+- Recovery Action: {recovery_action or 'none'}
+
+Generate a helpful error message following these rules:
+1. Explain what went wrong in 1 sentence (non-technical if user is beginner)
+2. Explain why it matters to their current operation
+3. Provide a specific, actionable fix
+4. Include a shell command example if applicable
+5. Link to relevant documentation (optional)
+
+Return JSON:
+{{
+  "summary": "Brief headline (5-7 words)",
+  "explanation": "What happened and why",
+  "suggested_fix": "Specific steps to resolve",
+  "code_example": "Shell command or config snippet (optional)",
+  "doc_link": "Relevant documentation URL (optional)",
+  "severity": "blocking|warning|info"
+}}
+"""
+
+
+# Static fallback messages for common error patterns
+# Used when LLM is unavailable or for fast-path responses
+STATIC_ERROR_GUIDANCE = {
+    "TRANSIENT_NETWORK": {
+        "summary": "Connection Issue",
+        "explanation": "The graph database connection was interrupted. This is usually temporary.",
+        "suggested_fix": "Wait a moment and try again. If the issue persists, check if Memgraph is running.",
+        "severity": "warning",
+        "code_example": "docker ps | grep memgraph",
+        "should_retry": True,
+    },
+    "CONNECTION_REFUSED": {
+        "summary": "Graph Database Not Running",
+        "explanation": "Cannot connect to the graph database. The Memgraph instance is not accessible.",
+        "suggested_fix": "Start the Memgraph database before indexing documents.",
+        "severity": "blocking",
+        "code_example": "docker run -p 7687:7687 memgraph/memgraph:latest",
+    },
+    "AUTHENTICATION_FAILURE": {
+        "summary": "Authentication Failed",
+        "explanation": "Could not authenticate with the graph database. Check your credentials.",
+        "suggested_fix": "Verify MEMGRAPH_USERNAME and MEMGRAPH_PASSWORD in your .env file.",
+        "severity": "blocking",
+    },
+    "VECTOR_DIMENSION_MISMATCH": {
+        "summary": "Embedding Dimension Mismatch",
+        "explanation": "The embedding dimensions don't match the vector index configuration.",
+        "suggested_fix": "Recreate the vector index with the correct dimensions for your embedding model.",
+        "severity": "blocking",
+        "code_example": "cgr-cli vector-index recreate --workspace default",
+    },
+    "SYNTAX_ERROR": {
+        "summary": "Query Syntax Error",
+        "explanation": "The database query contains invalid syntax.",
+        "suggested_fix": "Check the query syntax. Ensure it uses Memgraph-compatible Cypher.",
+        "severity": "blocking",
+    },
+}
+
+
+# Public API exports
+__all__ = [
+    # Graph schema and rules
+    "CYPHER_SCHEMA_INTROSPECTION_RULES",
+    "CYPHER_QUERY_RULES",
+    "GRAPH_SCHEMA_AND_RULES",
+    "build_graph_schema_and_rules",
+    # Cypher prompts
+    "CYPHER_SYSTEM_PROMPT",
+    "LOCAL_CYPHER_SYSTEM_PROMPT",
+    "build_cypher_repair_prompt",
+    # RAG prompts
+    "MULTI_ROUND_PROTOCOL",
+    "build_rag_orchestrator_prompt",
+    "build_json_capability_context",
+    # Optimization prompts
+    "OPTIMIZATION_PROMPT",
+    "OPTIMIZATION_PROMPT_WITH_REFERENCE",
+    # Error guidance prompts (LLM-First design)
+    "ERROR_GUIDANCE_SYSTEM_PROMPT",
+    "build_error_guidance_prompt",
+    "STATIC_ERROR_GUIDANCE",
+]

@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from pydantic_ai import Tool
+from codebase_rag.compat.pydantic_ai import Tool
 
 from codebase_rag.constants import Provider
 from codebase_rag.tools.document_analyzer import (

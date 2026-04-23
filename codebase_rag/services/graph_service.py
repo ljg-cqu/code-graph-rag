@@ -6,7 +6,7 @@ import threading
 import time
 import types
 from collections import defaultdict
-from collections.abc import Generator, Sequence
+from collections.abc import Callable, Generator, Sequence
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextlib import contextmanager, nullcontext
 from datetime import UTC, datetime
@@ -19,7 +19,14 @@ from codebase_rag.types_defs import CursorProtocol, ResultValue
 
 from .. import exceptions as ex
 from .. import logs as ls
-from .failure_classifier import classify_memgraph_failure
+from .error_guidance import (
+    ErrorContext,
+    ErrorGuidance,
+    LLMErrorGuidance,
+    UserExpertiseLevel,
+    format_user_error,
+)
+from .failure_classifier import FailureType, classify_memgraph_failure, is_stdlib_module, _KNOWN_THIRD_PARTY
 from ..constants import (
     ERR_SUBSTR_ALREADY_EXISTS,
     ERR_SUBSTR_CONSTRAINT,
@@ -32,6 +39,7 @@ from ..constants import (
     KEY_TO_VAL,
     NODE_UNIQUE_CONSTRAINTS,
     REL_TYPE_CALLS,
+    REL_TYPE_IMPORTS,
     NodeLabel,
 )
 from ..cypher_queries import (
@@ -392,6 +400,8 @@ class MemgraphIngestor:
             FailureType.TRANSIENT_NETWORK,
             FailureType.TRANSIENT_TIMEOUT,
             FailureType.RESOURCE_EXHAUSTION,
+            FailureType.TRANSACTION_CONFLICT,
+            FailureType.MGCLIENT_STATE_CORRUPTION,
         ):
             return False
         return attempt < min(max_attempts, classification.max_retries + 1)
@@ -493,6 +503,60 @@ class MemgraphIngestor:
                     logger.error(ls.MG_CYPHER_PARAMS.format(params=params))
                 raise
         return []
+
+    async def _execute_query_with_guidance(
+        self,
+        query: str,
+        params: dict[str, PropertyValue] | None = None,
+        operation_type: str = "cypher_query",
+        llm_guidance: LLMErrorGuidance | None = None,
+    ) -> list[ResultRow]:
+        """Execute a Cypher query with LLM-guided error handling.
+
+        Per LLM-First design:
+        - Classification is deterministic (via classify_memgraph_failure)
+        - User-facing guidance is LLM-generated (contextual, user-friendly)
+
+        Args:
+            query: Cypher query to execute
+            params: Query parameters
+            operation_type: Context for error messages (e.g., "cypher_query", "document_indexing")
+            llm_guidance: Optional LLM guidance generator. If None, uses static fallback.
+
+        Returns:
+            Query results as list of ResultRow
+
+        Raises:
+            GraphQueryError: With LLM-generated user guidance on failure
+        """
+        params = params or {}
+        try:
+            # Use sync _execute_query for the actual query execution
+            return self._execute_query(query, params)
+        except Exception as e:
+            # 1. Deterministic classification (fast, reliable)
+            classification = classify_memgraph_failure(e)
+
+            # 2. Build error context for LLM guidance
+            context = ErrorContext(
+                operation_type=operation_type,
+                error_category=classification.failure_type,
+                graph_type="code" if self._port == settings.MEMGRAPH_PORT else "document",
+                embedding_provider=settings.EMBEDDING_PROVIDER,
+                user_expertise=UserExpertiseLevel.INTERMEDIATE,
+            )
+
+            # 3. Generate LLM-based guidance (or fallback to static)
+            guidance_generator = llm_guidance or LLMErrorGuidance(model_call=None)
+            guidance = await guidance_generator.generate_guidance(e, context, classification)
+
+            # 4. Raise structured exception with LLM guidance
+            raise GraphQueryError(
+                original_error=e,
+                classification=classification,
+                user_guidance=guidance,
+                query=query,
+            ) from e
 
     def _get_connection_timeout(self) -> int:
         """Resolve the effective connection timeout based on port/config."""
@@ -1062,12 +1126,46 @@ class MemgraphIngestor:
             except Exception:
                 pass  # Best-effort close — consistent with _flush_rel_group_with_own_conn
 
+    def _flush_with_retry(
+        self,
+        flush_fn: Callable[[], tuple[int, int]],
+        pattern: tuple[str, str, str, str, str],
+        max_retries: int = 3,
+    ) -> tuple[int, int]:
+        """Execute flush operation with retry for transaction conflicts."""
+        from .failure_classifier import FailureType
+
+        for attempt in range(max_retries + 1):
+            try:
+                return flush_fn()
+            except Exception as e:
+                classification = classify_memgraph_failure(e)
+
+                if not classification.should_retry or attempt >= max_retries:
+                    raise
+
+                if classification.failure_type == FailureType.TRANSACTION_CONFLICT:
+                    backoff = (
+                        2 ** attempt * settings.MEMGRAPH_CONFLICT_RETRY_BASE_DELAY
+                    )
+                    logger.warning(
+                        ls.MG_TRANSACTION_CONFLICT_RETRY.format(
+                            pattern=pattern,
+                            backoff=backoff,
+                            attempt=attempt + 1,
+                            max_retries=max_retries,
+                        )
+                    )
+                    time.sleep(backoff)
+                else:
+                    raise
+
     def _flush_rel_group_with_own_conn(
         self,
         pattern: tuple[str, str, str, str, str],
         params_list: list[RelBatchRow],
     ) -> tuple[int, int]:
-        conn = self._create_connection_with_timeout()  # <-- CHANGED
+        conn = self._create_connection_with_timeout()
         try:
             return self._flush_rel_pattern_group(pattern, params_list, conn=conn)
         finally:
@@ -1172,7 +1270,29 @@ class MemgraphIngestor:
         if first_error is not None:
             raise first_error
 
-    def _flush_rel_pattern_group(
+    def _classify_import_failure(self, to_val: str) -> str:
+        """Classify import failure type.
+
+        Args:
+            to_val: Target module qualified name.
+
+        Returns:
+            "STDLIB", "THIRD_PARTY", or "INTERNAL"
+        """
+        base_module = to_val.split('.')[0]
+
+        # Fast path: deterministic stdlib check
+        if is_stdlib_module(base_module):
+            return "STDLIB"
+
+        # Known third-party packages (deterministic)
+        if base_module in _KNOWN_THIRD_PARTY:
+            return "THIRD_PARTY"
+
+        # Unknown - could be internal or third-party
+        return "INTERNAL"
+
+    def _flush_rel_pattern_group_impl(
         self,
         pattern: tuple[str, str, str, str, str],
         params_list: list[RelBatchRow],
@@ -1211,30 +1331,68 @@ class MemgraphIngestor:
         failed = len(params_list) - batch_successful
         if failed > 0:
             failure_rate = failed / len(params_list)
-            # Log at WARNING if high failure rate, DEBUG otherwise
-            log_fn = logger.warning if failure_rate > 0.1 else logger.debug
-            log_fn(
-                ls.MG_REL_FLUSH_FAILURES.format(
-                    rel_type=rel_type,
-                    failed=failed,
-                    total=len(params_list),
-                    from_label=from_label,
-                    to_label=to_label,
-                )
-            )
-            # Log sample failures for diagnosis (up to 3)
-            for idx, failed_idx in enumerate(failed_indices[:3]):
-                sample = params_list[failed_idx]
+
+            # IMPORTS-specific handling: classify failures
+            if rel_type == REL_TYPE_IMPORTS:
+                stdlib_count = 0
+                third_party_count = 0
+                internal_count = 0
+
+                for failed_idx in failed_indices:
+                    sample = params_list[failed_idx]
+                    classification = self._classify_import_failure(sample[KEY_TO_VAL])
+                    if classification == "STDLIB":
+                        stdlib_count += 1
+                    elif classification == "THIRD_PARTY":
+                        third_party_count += 1
+                    else:
+                        internal_count += 1
+
+                # External imports (stdlib, third-party) are expected - log at DEBUG if enabled
+                external_count = stdlib_count + third_party_count
+                if external_count > 0 and settings.LOG_EXTERNAL_IMPORT_FAILURES:
+                    logger.debug(
+                        f"IMPORTS failures: {external_count} external modules "
+                        f"(stdlib={stdlib_count}, third-party={third_party_count}) - expected"
+                    )
+
+                # Internal imports should be investigated - log at WARNING if enabled
+                if internal_count > 0 and settings.LOG_INTERNAL_IMPORT_FAILURES:
+                    logger.warning(
+                        f"IMPORTS failures: {internal_count} internal modules - investigate"
+                    )
+                    for idx, failed_idx in enumerate(failed_indices[:3]):
+                        sample = params_list[failed_idx]
+                        classification = self._classify_import_failure(sample[KEY_TO_VAL])
+                        if classification == "INTERNAL":
+                            logger.warning(
+                                f"  Internal import failed: {sample[KEY_FROM_VAL]} -> {sample[KEY_TO_VAL]}"
+                            )
+            else:
+                # Non-IMPORTS: existing behavior - WARNING if high failure rate, DEBUG otherwise
+                log_fn = logger.warning if failure_rate > 0.1 else logger.debug
                 log_fn(
-                    ls.MG_REL_FLUSH_FAILURE_SAMPLE.format(
-                        index=idx + 1,
+                    ls.MG_REL_FLUSH_FAILURES.format(
+                        rel_type=rel_type,
+                        failed=failed,
+                        total=len(params_list),
                         from_label=from_label,
-                        from_val=sample[KEY_FROM_VAL],
                         to_label=to_label,
-                        to_val=sample[KEY_TO_VAL],
-                        props=sample.get(KEY_PROPS, {}),
                     )
                 )
+                # Log sample failures for diagnosis (up to 3)
+                for idx, failed_idx in enumerate(failed_indices[:3]):
+                    sample = params_list[failed_idx]
+                    log_fn(
+                        ls.MG_REL_FLUSH_FAILURE_SAMPLE.format(
+                            index=idx + 1,
+                            from_label=from_label,
+                            from_val=sample[KEY_FROM_VAL],
+                            to_label=to_label,
+                            to_val=sample[KEY_TO_VAL],
+                            props=sample.get(KEY_PROPS, {}),
+                        )
+                    )
 
         # Keep existing CALLS-specific debug logging for backward compatibility
         if rel_type == REL_TYPE_CALLS and failed > 0:
@@ -1251,6 +1409,22 @@ class MemgraphIngestor:
                 )
 
         return len(params_list), batch_successful
+
+    def _flush_rel_pattern_group(
+        self,
+        pattern: tuple[str, str, str, str, str],
+        params_list: list[RelBatchRow],
+        conn: mgclient.Connection | None = None,
+    ) -> tuple[int, int]:
+        """Flush relationship group with automatic retry for transaction conflicts."""
+        if not settings.MEMGRAPH_CONFLICT_RETRY_ENABLED:
+            return self._flush_rel_pattern_group_impl(pattern, params_list, conn)
+
+        return self._flush_with_retry(
+            lambda: self._flush_rel_pattern_group_impl(pattern, params_list, conn),
+            pattern,
+            max_retries=settings.MEMGRAPH_CONFLICT_RETRY_MAX_ATTEMPTS,
+        )
 
     def flush_relationships(self) -> None:
         if not self._rel_count:

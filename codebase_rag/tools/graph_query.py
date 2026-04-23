@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from pydantic_ai import Tool
+from codebase_rag.compat.pydantic_ai import Tool
 
 if TYPE_CHECKING:
     from ..shared.query_router import QueryRouter

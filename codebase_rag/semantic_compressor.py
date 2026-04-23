@@ -6,9 +6,8 @@ import time
 from typing import Any
 
 from loguru import logger
-from pydantic_ai import Agent
-from pydantic_ai.usage import UsageLimits
 
+from .compat.pydantic_ai import Agent, UsageLimits
 from .compression_prompts import (
     build_distillation_prompt,
     reconstruct_messages,

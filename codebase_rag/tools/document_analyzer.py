@@ -6,11 +6,8 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn
 
-from google import genai
-from google.genai import types
-from google.genai.errors import ClientError
 from loguru import logger
-from pydantic_ai import Tool
+from codebase_rag.compat.pydantic_ai import Tool
 
 from .. import constants as cs
 from .. import exceptions as ex
@@ -20,6 +17,8 @@ from ..config import settings
 from . import tool_descriptions as td
 
 if TYPE_CHECKING:
+    from google import genai
+    from google.genai import types
     from ..services import QueryProtocol
 
 
@@ -57,6 +56,9 @@ class DocumentAnalyzer:
         orchestrator_provider = orchestrator_config.provider
 
         if orchestrator_provider == cs.Provider.GOOGLE:
+            # Lazy import google-genai to avoid import errors when not using Google provider
+            from google import genai
+
             if orchestrator_config.provider_type == cs.GoogleProviderType.VERTEX:
                 self.client = genai.Client(
                     vertexai=True,
@@ -101,7 +103,7 @@ class DocumentAnalyzer:
             return self._resolve_absolute_path(file_path)
         return self._resolve_relative_path(file_path)
 
-    def _extract_response_text(self, response: types.GenerateContentResponse) -> str:
+    def _extract_response_text(self, response) -> str:
         if hasattr(response, "text") and response.text:
             return str(response.text)
 
@@ -124,6 +126,9 @@ class DocumentAnalyzer:
                 return err_msg
             logger.error(ls.DOC_ANALYZER_API_ERR.format(error=error))
             return te.DOC_API_VALIDATION.format(error=error)
+
+        # Lazy import to avoid import errors when not using Google provider
+        from google.genai.errors import ClientError
 
         if isinstance(error, ClientError):
             logger.error(ls.DOC_API_ERROR.format(path=file_path, error=error))
@@ -153,6 +158,9 @@ class DocumentAnalyzer:
                 mime_type = cs.MIME_TYPE_DEFAULT
 
             file_bytes = full_path.read_bytes()
+
+            # Lazy import to avoid import errors when not using Google provider
+            from google.genai import types
 
             prompt_parts = [
                 types.Part.from_bytes(data=file_bytes, mime_type=mime_type),

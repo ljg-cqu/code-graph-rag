@@ -6,20 +6,43 @@ from urllib.parse import urljoin
 
 import httpx
 from loguru import logger
-from pydantic_ai.models.anthropic import AnthropicModel
-from pydantic_ai.models.google import GoogleModel, GoogleModelSettings
-from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
-from pydantic_ai.providers.anthropic import (
-    AnthropicProvider as PydanticAnthropicProvider,
-)
-from pydantic_ai.providers.azure import AzureProvider as PydanticAzureProvider
-from pydantic_ai.providers.google import GoogleProvider as PydanticGoogleProvider
-from pydantic_ai.providers.openai import OpenAIProvider as PydanticOpenAIProvider
 
 from .. import constants as cs
 from .. import exceptions as ex
 from .. import logs as ls
+from ..compat.pydantic_ai import HAS_PYDANTIC_AI, require_pydantic_ai
 from ..config import ModelConfig, settings
+
+# Import pydantic_ai model classes only when available
+if HAS_PYDANTIC_AI:
+    from pydantic_ai.models.anthropic import AnthropicModel
+    from pydantic_ai.models.google import GoogleModel, GoogleModelSettings
+    from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
+    from pydantic_ai.providers.anthropic import (
+        AnthropicProvider as PydanticAnthropicProvider,
+    )
+    from pydantic_ai.providers.azure import AzureProvider as PydanticAzureProvider
+    from pydantic_ai.providers.google import GoogleProvider as PydanticGoogleProvider
+    from pydantic_ai.providers.openai import OpenAIProvider as PydanticOpenAIProvider
+else:
+    # Stub classes for type hints when pydantic_ai is not installed
+    class _StubModel:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            require_pydantic_ai("LLM model")
+
+    class _StubProvider:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            require_pydantic_ai("LLM provider")
+
+    AnthropicModel = _StubModel  # type: ignore[misc,assignment]
+    GoogleModel = _StubModel  # type: ignore[misc,assignment]
+    GoogleModelSettings = _StubModel  # type: ignore[misc,assignment]
+    OpenAIChatModel = _StubModel  # type: ignore[misc,assignment]
+    OpenAIResponsesModel = _StubModel  # type: ignore[misc,assignment]
+    PydanticAnthropicProvider = _StubProvider  # type: ignore[misc,assignment]
+    PydanticAzureProvider = _StubProvider  # type: ignore[misc,assignment]
+    PydanticGoogleProvider = _StubProvider  # type: ignore[misc,assignment]
+    PydanticOpenAIProvider = _StubProvider  # type: ignore[misc,assignment]
 
 
 class ModelProvider(ABC):
@@ -43,6 +66,9 @@ class ModelProvider(ABC):
     @abstractmethod
     def provider_name(self) -> cs.Provider:
         pass
+
+    def _require_pydantic_ai(self) -> None:
+        require_pydantic_ai(self.provider_name.value)
 
     def get_model_context_window(self, model_id: str) -> int:
         """Get the context window size for a given model ID.
@@ -139,6 +165,7 @@ class GoogleProvider(ModelProvider):
             raise ValueError(ex.GOOGLE_VERTEX_NO_PROJECT)
 
     def create_model(self, model_id: str, **kwargs: str | int | None) -> GoogleModel:
+        self._require_pydantic_ai()
         self.validate_config()
 
         if self.provider_type == cs.GoogleProviderType.VERTEX:
@@ -201,6 +228,7 @@ class OpenAIProvider(ModelProvider):
     def create_model(
         self, model_id: str, **kwargs: str | int | None
     ) -> OpenAIChatModel:
+        self._require_pydantic_ai()
         self.validate_config()
 
         provider = PydanticOpenAIProvider(api_key=self.api_key, base_url=self.endpoint)
@@ -242,6 +270,7 @@ class OllamaProvider(ModelProvider):
     def create_model(
         self, model_id: str, **kwargs: str | int | None
     ) -> OpenAIChatModel:
+        self._require_pydantic_ai()
         self.validate_config()
 
         provider = PydanticOpenAIProvider(api_key=self.api_key, base_url=self.endpoint)
@@ -279,6 +308,7 @@ class AnthropicProvider(ModelProvider):
             raise ValueError(ex.ANTHROPIC_NO_KEY)
 
     def create_model(self, model_id: str, **kwargs: str | int | None) -> AnthropicModel:
+        self._require_pydantic_ai()
         self.validate_config()
         # (H) api_key is guaranteed to be set by validate_config
         assert self.api_key is not None
@@ -331,6 +361,7 @@ class AzureOpenAIProvider(ModelProvider):
     def create_model(
         self, model_id: str, **kwargs: str | int | None
     ) -> OpenAIChatModel:
+        self._require_pydantic_ai()
         self.validate_config()
         # (H) api_key and endpoint are guaranteed to be set by validate_config
         assert self.api_key is not None

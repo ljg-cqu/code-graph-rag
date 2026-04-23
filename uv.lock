@@ -508,7 +508,6 @@ dependencies = [
     { name = "prompt-toolkit" },
     { name = "protobuf" },
     { name = "psutil" },
-    { name = "pydantic-ai" },
     { name = "pydantic-settings" },
     { name = "pymgclient" },
     { name = "python-dotenv" },
@@ -533,6 +532,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+ai = [
+    { name = "pydantic-ai" },
+]
 semantic = [
     { name = "torch" },
     { name = "transformers" },
@@ -599,7 +601,7 @@ requires-dist = [
     { name = "prompt-toolkit", specifier = ">=3.0.0" },
     { name = "protobuf", specifier = ">=5.27.0" },
     { name = "psutil", specifier = ">=7.2.2" },
-    { name = "pydantic-ai", specifier = ">=1.70.0" },
+    { name = "pydantic-ai", marker = "extra == 'ai'", specifier = ">=1.70.0" },
     { name = "pydantic-settings", specifier = ">=2.0.0" },
     { name = "pymgclient", specifier = ">=1.4.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.4.1" },
@@ -641,7 +643,7 @@ requires-dist = [
     { name = "typer", specifier = ">=0.12.5" },
     { name = "watchdog", specifier = ">=6.0.0" },
 ]
-provides-extras = ["test", "treesitter-full", "semantic"]
+provides-extras = ["ai", "test", "treesitter-full", "semantic"]
 
 [package.metadata.requires-dev]
 dev = [

@@ -222,7 +222,7 @@ class EmbeddingConfig:
     ssl_verify: bool = True
     proxy: str | None = None
     fallback_to_local: bool = True
-    fallback_model: str = "BAAI/bge-large-en-v1.5"
+    fallback_model: str = "BAAI/bge-base-en-v1.5"  # 768 dim, matches default model
 
     def to_update_kwargs(self) -> EmbeddingConfigKwargs:
         result = asdict(self)
@@ -336,6 +336,9 @@ class AppConfig(BaseSettings):
     MEMGRAPH_CONNECTION_TIMEOUT: int = Field(default=600, gt=0)
     MEMGRAPH_QUERY_TIMEOUT: int = Field(default=120, gt=0)
     MEMGRAPH_USE_DYNAMIC_ALGORITHMS: bool | None = None
+    MEMGRAPH_CONFLICT_RETRY_ENABLED: bool = True
+    MEMGRAPH_CONFLICT_RETRY_MAX_ATTEMPTS: int = Field(default=3, ge=1, le=10)
+    MEMGRAPH_CONFLICT_RETRY_BASE_DELAY: float = Field(default=0.1, gt=0)
     AGENT_RETRIES: int = 3
     AGENT_REQUEST_LIMIT: int | None = None
     ORCHESTRATOR_OUTPUT_RETRIES: int = 100
@@ -515,7 +518,7 @@ class AppConfig(BaseSettings):
     EMBEDDING_SSL_VERIFY: bool = True
     EMBEDDING_PROXY: str | None = None
     EMBEDDING_FALLBACK_TO_LOCAL: bool = True
-    EMBEDDING_FALLBACK_MODEL: str = "BAAI/bge-large-en-v1.5"
+    EMBEDDING_FALLBACK_MODEL: str = "BAAI/bge-base-en-v1.5"  # 768 dim, matches default model
 
     EMBEDDING_MAX_LENGTH: int = 512
     EMBEDDING_PROGRESS_INTERVAL: int = 10
@@ -549,6 +552,12 @@ class AppConfig(BaseSettings):
 
     RUN_INGESTION_QUALITY_CHECKS: bool = True
     """Whether to run post-ingestion data quality validation checks after indexing completes."""
+
+    CREATE_EXTERNAL_NODES: bool = True
+    """Whether to create external nodes for unresolved imports and inheritance targets.
+    When True (default), external modules and classes are created as nodes with
+    is_external=true, eliminating relationship flush failures.
+    When False, restores previous behavior where unresolved targets cause silent failures."""
 
     INCLUDE_BUILTIN_CALLS: bool = False
     """Whether to include CALLS edges to built-in functions.
@@ -613,10 +622,32 @@ class AppConfig(BaseSettings):
     DOC_CONCEPT_EXTRACTION_ENABLED: bool = True
     DOC_CONCEPT_MIN_CONFIDENCE: float = Field(default=0.7, ge=0.0, le=1.0)
     DOC_CONCEPT_EXTRACTION_CONCURRENCY: int = Field(default=10, ge=1, le=50)
+    DOC_CONCEPT_EXTRACTION_MAX_RETRIES: int = Field(default=3, ge=0, le=10)
+    DOC_CONCEPT_EXTRACTION_RETRY_DELAY: float = Field(default=1.0, ge=0.1, le=60.0)
+
+    # Debug mode for concept extraction failures
+    CGR_DEBUG_CONCEPT_EXTRACTION: bool = Field(
+        default=False,
+        description="Save failed chunk content for debugging concept extraction failures",
+    )
+    CGR_DEBUG_DIR: str = Field(
+        default=".cgr/debug/concept_extraction",
+        description="Directory to save debug output for failed extractions",
+    )
 
     # Document graph algorithms
     DOC_GRAPH_MAX_PATH_DEPTH: int = Field(default=5, ge=1, le=10)
     DOC_GRAPH_MAX_NEIGHBORS: int = Field(default=50, ge=1, le=500)
+
+    # Document embedding mode (following JSON pattern for consistency)
+    DOC_EMBEDDINGS_ENABLED: bool = Field(
+        default=True,
+        validation_alias="CGR_DOC_EMBEDDINGS_ENABLED",
+    )
+    DOC_EMBEDDINGS_REQUIRED: bool = Field(
+        default=False,  # False = graceful degradation when embeddings unavailable
+        validation_alias="CGR_DOC_EMBEDDINGS_REQUIRED",
+    )
 
     # ─────────────────────────────────────────────────────────
     # JSON GRAPHRAG (NEW)
@@ -634,6 +665,14 @@ class AppConfig(BaseSettings):
     JSON_LAB_PORT: int = 3002  # Memgraph Lab for JSON graph
     JSON_VECTOR_STORE_BACKEND: str = "memgraph"
     JSON_ENABLED: bool = True  # Master switch for JSON features
+    JSON_EMBEDDINGS_ENABLED: bool = Field(
+        default=True,
+        validation_alias="CGR_JSON_EMBEDDINGS_ENABLED",
+    )
+    JSON_EMBEDDINGS_REQUIRED: bool = Field(
+        default=False,
+        validation_alias="CGR_JSON_EMBEDDINGS_REQUIRED",
+    )
 
     @property
     def json_memgraph(self) -> dict:
@@ -741,6 +780,15 @@ class AppConfig(BaseSettings):
     LOG_QUALITY_CHECK_STACKTRACES: bool = False
     """Whether to log full stack traces for quality check failures.
     Enable for debugging complex issues."""
+
+    # Import relationship logging configuration
+    LOG_EXTERNAL_IMPORT_FAILURES: bool = False
+    """Log import failures for external modules (stdlib, third-party) at DEBUG level.
+    Set True to see all import failures including expected ones."""
+
+    LOG_INTERNAL_IMPORT_FAILURES: bool = True
+    """Log import failures for internal modules at WARNING level.
+    These indicate potential ingestion issues and should be investigated."""
 
     OLLAMA_HEALTH_TIMEOUT: float = 5.0
 
@@ -1298,13 +1346,17 @@ class AppConfig(BaseSettings):
 
     @field_validator("EMBEDDING_MAX_LENGTH")
     @classmethod
-    def validate_embedding_max_length(cls, v: int) -> int:
-        """Validate EMBEDDING_MAX_LENGTH against UniXcoder context limit."""
-        max_context = cs.UNIXCODER_MAX_CONTEXT - 4  # Reserve for special tokens
+    def validate_embedding_max_length(cls, v: int, info) -> int:
+        """Validate EMBEDDING_MAX_LENGTH against model-specific context limits."""
+        model = info.data.get("EMBEDDING_MODEL", "")
+        if "unixcoder" in model.lower():
+            max_context = 512
+        else:
+            max_context = cs.UNIXCODER_MAX_CONTEXT - 4  # Reserve for special tokens
         if v > max_context:
             raise ValueError(
                 f"EMBEDDING_MAX_LENGTH ({v}) must be <= {max_context} "
-                f"(UNIXCODER_MAX_CONTEXT - 4 for special tokens)"
+                f"for model {model}"
             )
         if v < 64:
             raise ValueError(
@@ -1402,13 +1454,126 @@ class AppConfig(BaseSettings):
 
     @field_validator("DOC_MAX_FILE_SIZE_MB")
     @classmethod
-    def validate_doc_max_file_size(cls, v: int) -> int:
+    def validate_doc_max_file_size(cls, v: int) -> str:
         """Validate max file size is reasonable."""
         if v < 1:
             raise ValueError(f"DOC_MAX_FILE_SIZE_MB ({v}) must be >= 1")
         if v > 500:
             raise ValueError(f"DOC_MAX_FILE_SIZE_MB ({v}) must be <= 500")
         return v
+
+    # ─────────────────────────────────────────────────────────
+    # LLM Rate Limiting and Quota Management
+    # ─────────────────────────────────────────────────────────
+    RATE_LIMIT_ENABLED: bool = Field(
+        default=True,
+        validation_alias="CGR_RATE_LIMIT_ENABLED",
+    )
+    """Enable rate limiting for LLM calls."""
+
+    RATE_LIMIT_REQUESTS_PER_MINUTE: float = Field(
+        default=60.0,
+        gt=0,
+        validation_alias="CGR_RATE_LIMIT_RPM",
+    )
+    """Default rate limit for LLM requests per minute."""
+
+    RATE_LIMIT_BURST_SIZE: int = Field(
+        default=10,
+        gt=0,
+        validation_alias="CGR_RATE_LIMIT_BURST",
+    )
+    """Maximum burst size for rate limiting."""
+
+    # Quota Management
+    QUOTA_WARNING_THRESHOLD: float = Field(
+        default=0.80,
+        ge=0.0,
+        le=1.0,
+        validation_alias="CGR_QUOTA_WARNING_THRESHOLD",
+    )
+    """Quota usage ratio that triggers WARNING status (0-1)."""
+
+    QUOTA_CRITICAL_THRESHOLD: float = Field(
+        default=0.95,
+        ge=0.0,
+        le=1.0,
+        validation_alias="CGR_QUOTA_CRITICAL_THRESHOLD",
+    )
+    """Quota usage ratio that triggers CRITICAL status (0-1)."""
+
+    # Provider Fallback Configuration
+    PRIMARY_LLM_PROVIDER: str = Field(
+        default="",
+        validation_alias="CGR_PRIMARY_LLM_PROVIDER",
+    )
+    """Primary LLM provider for orchestration and queries."""
+
+    PRIMARY_LLM_MODEL: str = Field(
+        default="",
+        validation_alias="CGR_PRIMARY_LLM_MODEL",
+    )
+    """Primary LLM model identifier."""
+
+    FALLBACK_PROVIDERS: list[str] = Field(
+        default_factory=list,
+        validation_alias="CGR_FALLBACK_PROVIDERS",
+    )
+    """List of fallback provider names (e.g., ['openai', 'anthropic'])."""
+
+    FALLBACK_ON_QUOTA_EXHAUSTED: bool = Field(
+        default=True,
+        validation_alias="CGR_FALLBACK_ON_QUOTA_EXHAUSTED",
+    )
+    """Automatically fallback to alternate providers when quota is exhausted."""
+
+    # Provider-specific rate limits (requests per minute)
+    OPENAI_REQUESTS_PER_MINUTE: float = Field(
+        default=100.0,
+        gt=0,
+        validation_alias="CGR_OPENAI_RPM",
+    )
+    ANTHROPIC_REQUESTS_PER_MINUTE: float = Field(
+        default=50.0,
+        gt=0,
+        validation_alias="CGR_ANTHROPIC_RPM",
+    )
+    DOUBAO_REQUESTS_PER_MINUTE: float = Field(
+        default=60.0,
+        gt=0,
+        validation_alias="CGR_DOUBAO_RPM",
+    )
+    GOOGLE_REQUESTS_PER_MINUTE: float = Field(
+        default=60.0,
+        gt=0,
+        validation_alias="CGR_GOOGLE_RPM",
+    )
+    OLLAMA_REQUESTS_PER_MINUTE: float = Field(
+        default=1000.0,
+        gt=0,
+        validation_alias="CGR_OLLAMA_RPM",
+    )
+
+    # ─────────────────────────────────────────────────────────
+    # JSON Ingestion Filtering Configuration
+    # ─────────────────────────────────────────────────────────
+    JSON_FILTER_ENABLED: bool = Field(
+        default=True,
+        validation_alias="CGR_JSON_FILTER_ENABLED",
+    )
+    """Enable file filtering for JSON ingestion to skip non-CGR JSON files."""
+
+    JSON_FILTER_SKIP_DEFAULTS: bool = Field(
+        default=False,
+        validation_alias="CGR_JSON_FILTER_SKIP_DEFAULTS",
+    )
+    """Skip default filter patterns and use only custom patterns."""
+
+    JSON_FILTER_CUSTOM_PATTERNS: list[str] = Field(
+        default_factory=list,
+        validation_alias="CGR_JSON_FILTER_CUSTOM_PATTERNS",
+    )
+    """Additional glob patterns to exclude from JSON ingestion."""
 
 
 settings = AppConfig()
@@ -1417,6 +1582,55 @@ CGRIGNORE_FILENAME = ".cgrignore"
 
 
 EMPTY_CGRIGNORE = CgrignorePatterns(exclude=frozenset(), unignore=frozenset())
+
+
+def validate_ai_dependencies() -> None:
+    """Validate AI dependencies at application startup.
+
+    LLM-First Design Note:
+        This is infrastructure validation - we check prerequisites before
+        the LLM is invoked. Failures here are deterministic, not semantic.
+
+    Raises:
+        RuntimeError: If AI features are configured but pydantic_ai is unavailable.
+    """
+    from codebase_rag.compat.pydantic_ai import (
+        HAS_PYDANTIC_AI,
+        get_pydantic_ai_failure_reason,
+        refresh_pydantic_ai_status,
+    )
+
+    # Check if any AI provider is configured that requires pydantic-ai
+    # Note: ALL LLM providers require pydantic-ai for Agent/Model classes,
+    # including local providers like Ollama. The LOCAL_PROVIDERS check is for
+    # API key validation, not pydantic-ai requirement.
+    ai_configs = [
+        settings.active_cypher_config,
+        settings.active_orchestrator_config,
+    ]
+
+    # Any configured LLM requires pydantic-ai (regardless of provider type)
+    needs_pydantic_ai = len(ai_configs) > 0
+
+    if not needs_pydantic_ai:
+        return
+
+    # Re-check with fresh detection (in case env changed since module load)
+    if not HAS_PYDANTIC_AI:
+        refresh_pydantic_ai_status()
+
+    if not HAS_PYDANTIC_AI:
+        logger.error("AI features are configured but pydantic_ai is not available")
+        failure_reason = get_pydantic_ai_failure_reason()
+        if failure_reason:
+            logger.error(f"Reason: {failure_reason}")
+        logger.error("Install with: uv sync --extra ai")
+        raise RuntimeError(
+            f"AI dependencies not available. {failure_reason or 'Unknown reason'}\n"
+            "Install with: uv sync --extra ai"
+        )
+
+    logger.debug("AI dependencies validated successfully")
 
 
 def load_cgrignore_patterns(repo_path: Path) -> CgrignorePatterns:

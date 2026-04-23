@@ -395,6 +395,9 @@ def get_model() -> object:
     This function is provided for backward compatibility with existing tests.
     New code should use get_embedding_provider_instance() instead.
 
+    Note: This function only supports UniXcoder models (microsoft/unixcoder-*).
+    For other models (BGE, etc.), use get_embedding_provider_instance() instead.
+
     Returns:
         UniXcoder model instance.
 
@@ -407,7 +410,16 @@ def get_model() -> object:
     assert UniXcoder is not None  # for type checker
     assert torch is not None  # for type checker
 
-    model = UniXcoder(cs.UNIXCODER_MODEL)
+    # Use configured model if it's a UniXcoder model, otherwise use default
+    model_id = settings.EMBEDDING_MODEL
+    if not model_id.startswith("microsoft/unixcoder"):
+        model_id = cs.UNIXCODER_MODEL
+        logger.debug(
+            f"Configured model {settings.EMBEDDING_MODEL} is not a UniXcoder model, "
+            f"using default {cs.UNIXCODER_MODEL} for legacy get_model() path"
+        )
+
+    model = UniXcoder(model_id)
     model.eval()
 
     if torch.cuda.is_available():
@@ -432,21 +444,17 @@ def get_embedding_provider_instance() -> EmbeddingProvider:
 
         config = settings.active_embedding_config
 
+        if config.provider.lower() == "local":
+            from .embeddings.local import check_local_embedding_available
+
+            available, error = check_local_embedding_available()
+            if not available:
+                raise RuntimeError(error)
+
         _embedding_provider = get_embedding_provider(config=config)
         _embedding_provider.validate_config()
 
     return _embedding_provider
-
-
-def _check_semantic_dependencies() -> bool:
-    """Check if semantic dependencies are available."""
-    from .utils.dependencies import has_torch, has_transformers
-
-    # For local provider, need torch/transformers
-    if settings.EMBEDDING_PROVIDER.lower() == "local":
-        return has_torch() and has_transformers()
-    # For external providers, we don't need local ML dependencies
-    return True
 
 
 def _embed_with_local_model(
@@ -553,21 +561,22 @@ def embed_code(code: str, max_length: int | None = None) -> list[float]:
     cache = get_embedding_cache()
 
     # For backward compatibility with tests, use get_model() for local provider
-    # This allows tests to patch get_model and mock the model behavior
-    if settings.EMBEDDING_PROVIDER.lower() == "local":
-        if not _check_semantic_dependencies():
-            raise RuntimeError(
-                "Semantic search requires torch and transformers. "
-                "Install with: uv sync --extra semantic"
-            )
+    # with UniXcoder models only. Other local models use the provider system.
+    model_id = settings.EMBEDDING_MODEL
+    is_unixcoder_model = model_id.startswith("microsoft/unixcoder")
 
-        model_id = settings.EMBEDDING_MODEL
+    if settings.EMBEDDING_PROVIDER.lower() == "local" and is_unixcoder_model:
+        from .embeddings.local import check_local_embedding_available
+
+        available, error = check_local_embedding_available()
+        if not available:
+            raise RuntimeError(error)
 
         # Check cache first
         if (cached := cache.get(code, model_id)) is not None:
             return cached
 
-        # Use backward-compatible get_model() path
+        # Use backward-compatible get_model() path for UniXcoder models
         model = cast(LegacyEmbeddingModel, get_model())
         embedding = _embed_with_local_model(code, model, effective_max_length)
 
@@ -642,14 +651,16 @@ def embed_code_batch(
     cache = get_embedding_cache()
 
     # For backward compatibility with tests, use get_model() for local provider
-    if settings.EMBEDDING_PROVIDER.lower() == "local":
-        if not _check_semantic_dependencies():
-            raise RuntimeError(
-                "Semantic search requires torch and transformers. "
-                "Install with: uv sync --extra semantic"
-            )
+    # with UniXcoder models only. Other local models use the provider system.
+    model_id = settings.EMBEDDING_MODEL
+    is_unixcoder_model = model_id.startswith("microsoft/unixcoder")
 
-        model_id = settings.EMBEDDING_MODEL
+    if settings.EMBEDDING_PROVIDER.lower() == "local" and is_unixcoder_model:
+        from .embeddings.local import check_local_embedding_available
+
+        available, error = check_local_embedding_available()
+        if not available:
+            raise RuntimeError(error)
 
         # Check cache for all snippets
         cached_results = cache.get_many(snippets, model_id)

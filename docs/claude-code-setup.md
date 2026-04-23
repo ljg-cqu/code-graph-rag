@@ -46,10 +46,10 @@ claude mcp add --transport stdio code-graph-rag \
 ## Prerequisites
 
 ```bash
-# 1. Install code-graph-rag
+# 1. Install code-graph-rag with AI features
 git clone https://github.com/vitali87/code-graph-rag.git
 cd code-graph-rag
-uv sync
+uv sync --extra ai
 
 # 2. Start Memgraph
 docker run -p 7687:7687 -p 7444:7444 memgraph/memgraph:latest

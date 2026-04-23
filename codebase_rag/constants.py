@@ -53,6 +53,7 @@ EMBEDDING_MODEL_DIMENSIONS: dict[str, int] = {
     "microsoft/unixcoder-base": 768,
     "sentence-transformers/all-MiniLM-L6-v2": 384,
     "BAAI/bge-small-en-v1.5": 384,
+    "BAAI/bge-base-en-v1.5": 768,  # Matches unixcoder-base dimension
     "BAAI/bge-large-en-v1.5": 1024,
     # Ollama embedding models
     "nomic-embed-text": 768,
@@ -203,7 +204,7 @@ V1_PATH = "/v1"
 # (H) HTTP status codes
 HTTP_OK = 200
 
-UNIXCODER_MODEL = "BAAI/bge-large-en-v1.5"
+UNIXCODER_MODEL = "microsoft/unixcoder-base"  # Actual UniXcoder model (RoBERTa-based)
 EMBEDDING_DEFAULT_BATCH_SIZE = 32
 EMBEDDING_CACHE_FILENAME = ".embedding_cache.json"
 
@@ -775,12 +776,11 @@ RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
 CYPHER_REPAIR_LEGACY_FUNCTION_DEFINES = """
 MATCH (f:Function)
 WHERE f.qualified_name STARTS WITH ($project_name + '.')
-  AND NOT EXISTS {
-      MATCH (:Module)-[:DEFINES]->(f)
-  }
-  AND NOT EXISTS {
-      MATCH (:Function)-[:DEFINES]->(f)
-  }
+WITH f
+OPTIONAL MATCH (module_def:Module)-[:DEFINES]->(f)
+OPTIONAL MATCH (func_def:Function)-[:DEFINES]->(f)
+WITH f, module_def, func_def
+WHERE module_def IS NULL AND func_def IS NULL
 WITH f, split(f.qualified_name, '.') AS parts
 WITH f, parts, last(parts) AS leaf_name
 WHERE size(parts) > 1
@@ -1535,6 +1535,7 @@ UNIXCODER_BUFFER_BIAS = "bias"
 UNIXCODER_MAX_CONTEXT = 1024
 
 REL_TYPE_CALLS = "CALLS"
+REL_TYPE_IMPORTS = "IMPORTS"
 
 NODE_UNIQUE_CONSTRAINTS: dict[str, str] = {
     label.value: key.value for label, key in _NODE_LABEL_UNIQUE_KEYS.items()
@@ -4077,6 +4078,7 @@ HEALTH_CHECK_INGESTION_VALIDATION_FAILED = "Ingestion validation failed"
 HEALTH_CHECK_INGESTION_VALIDATION_ERROR_MSG = (
     "Validation could not complete due to an error"
 )
+HEALTH_CHECK_PARTIAL_FAILURE_MSG = "Check partially failed but other checks may still succeed"
 
 QUERY_GEN_SHOW_VERSION = "SHOW VERSION;"
 QUERY_GEN_SHOW_LICENSE = "SHOW LICENSE INFO;"

@@ -16,12 +16,12 @@ import mgclient
 from . import constants as cs
 from . import logs as ls
 from .config import settings
+from .exceptions import DimensionMismatchError
 from .graph.query_generator import MemgraphQueryGenerator
 from .types_defs import ResultRow
 from .vector_backend import VectorBackend
 
 # Model info
-UNIXCODER_MODEL = "BAAI/bge-large-en-v1.5"
 EMBEDDING_VERSION = 1
 
 
@@ -141,6 +141,67 @@ class MemgraphBackend(VectorBackend):
             self._query_generator = MemgraphQueryGenerator(self._conn)
         return self._query_generator
 
+    def _recreate_vector_index(
+        self, label: str, index_name: str, new_dim: int
+    ) -> None:
+        """Recreate a single vector index, verifying each DDL step.
+
+        Raises DimensionMismatchError if verification fails.
+        """
+        # Step 1: Clear embeddings
+        self._execute_query(
+            f"MATCH (n:{label}) "
+            f"SET n.embedding = NULL, n.embedding_model = NULL, n.embedding_version = NULL"
+        )
+
+        # Step 2: Drop index
+        try:
+            self._execute_query(f"DROP VECTOR INDEX {index_name};")
+        except Exception as e:
+            if "does not exist" not in str(e).lower():
+                raise DimensionMismatchError(
+                    message=f"Failed to drop vector index {index_name}: {e}",
+                    expected=new_dim,
+                    actual=None,
+                ) from e
+
+        # Step 3: Verify drop
+        indexes = self._execute_query("SHOW VECTOR INDEX INFO;")
+        if _find_vector_index(indexes, index_name):
+            raise DimensionMismatchError(
+                message=f"Vector index {index_name} still exists after DROP",
+                expected=new_dim,
+                actual=None,
+            )
+
+        # Step 4: Create index
+        cypher, params = self.query_generator.generate_vector_index_creation_query(
+            index_name=index_name,
+            node_label=label,
+            vector_property="embedding",
+            vector_dim=new_dim,
+            metric=settings.MEMGRAPH_VECTOR_METRIC,
+            capacity=settings.MEMGRAPH_VECTOR_CAPACITY,
+        )
+        self._execute_query(cypher, params)
+
+        # Step 5: Verify create
+        indexes = self._execute_query("SHOW VECTOR INDEX INFO;")
+        new_index = _find_vector_index(indexes, index_name)
+        if not new_index:
+            raise DimensionMismatchError(
+                message=f"Vector index {index_name} not found after CREATE",
+                expected=new_dim,
+                actual=None,
+            )
+        actual_dim = _read_vector_index_dimension(new_index)
+        if actual_dim != new_dim:
+            raise DimensionMismatchError(
+                message=f"Vector index {index_name} has dimension {actual_dim}, expected {new_dim}",
+                expected=new_dim,
+                actual=actual_dim,
+            )
+
     def initialize(self) -> None:
         """Create vector indexes for embeddable node types.
 
@@ -185,35 +246,19 @@ class MemgraphBackend(VectorBackend):
                 try:
                     if capabilities.supports_vector_index:
                         if needs_recreate:
-                            # Clear embeddings for this label only when recreating due to dimension mismatch
-                            try:
-                                clear_cypher = f"MATCH (n:{label}) SET n.embedding = NULL, n.embedding_model = NULL, n.embedding_version = NULL"
-                                self._execute_query(clear_cypher)
-                                logger.debug(
-                                    f"Cleared old embeddings for {label} nodes"
+                            self._recreate_vector_index(label, index_name, effective_dim)
+                        else:
+                            cypher, params = (
+                                self.query_generator.generate_vector_index_creation_query(
+                                    index_name=index_name,
+                                    node_label=label,
+                                    vector_property="embedding",
+                                    vector_dim=effective_dim,
+                                    metric=settings.MEMGRAPH_VECTOR_METRIC,
+                                    capacity=settings.MEMGRAPH_VECTOR_CAPACITY,
                                 )
-                            except Exception as e:
-                                logger.warning(
-                                    f"Failed to clear old embeddings for {label} nodes: {e}"
-                                )
-                            # Drop existing index
-                            try:
-                                self._execute_query(f"DROP VECTOR INDEX {index_name};")
-                            except Exception as e:
-                                logger.debug(f"Failed to drop index {index_name}: {e}")
-
-                        # Use query generator to create compatible index creation query
-                        cypher, params = (
-                            self.query_generator.generate_vector_index_creation_query(
-                                index_name=index_name,
-                                node_label=label,
-                                vector_property="embedding",
-                                vector_dim=effective_dim,
-                                metric=settings.MEMGRAPH_VECTOR_METRIC,
-                                capacity=settings.MEMGRAPH_VECTOR_CAPACITY,
                             )
-                        )
-                        self._execute_query(cypher, params)
+                            self._execute_query(cypher, params)
                     else:
                         # Fallback: no vector index support, just proceed without indexes
                         logger.debug(
@@ -272,29 +317,19 @@ class MemgraphBackend(VectorBackend):
             try:
                 if capabilities.supports_vector_index:
                     if needs_recreate:
-                        try:
-                            self._execute_query(
-                                "MATCH (n:Chunk) SET n.embedding = NULL, n.embedding_model = NULL, n.embedding_version = NULL"
+                        self._recreate_vector_index("Chunk", index_name, effective_dim)
+                    else:
+                        cypher, params = (
+                            self.query_generator.generate_vector_index_creation_query(
+                                index_name=index_name,
+                                node_label="Chunk",
+                                vector_property="embedding",
+                                vector_dim=effective_dim,
+                                metric=settings.MEMGRAPH_VECTOR_METRIC,
+                                capacity=settings.DOC_MEMGRAPH_VECTOR_CAPACITY,
                             )
-                            logger.debug("Cleared old embeddings for Chunk nodes")
-                        except Exception as e:
-                            logger.warning(f"Failed to clear old embeddings for Chunk nodes: {e}")
-                        try:
-                            self._execute_query(f"DROP VECTOR INDEX {index_name};")
-                        except Exception as e:
-                            logger.debug(f"Failed to drop index {index_name}: {e}")
-
-                    cypher, params = (
-                        self.query_generator.generate_vector_index_creation_query(
-                            index_name=index_name,
-                            node_label="Chunk",
-                            vector_property="embedding",
-                            vector_dim=effective_dim,
-                            metric=settings.MEMGRAPH_VECTOR_METRIC,
-                            capacity=settings.DOC_MEMGRAPH_VECTOR_CAPACITY,
                         )
-                    )
-                    self._execute_query(cypher, params)
+                        self._execute_query(cypher, params)
                 else:
                     logger.debug(
                         "Vector index not supported for Chunk nodes, skipping index creation"
@@ -904,61 +939,8 @@ class MemgraphBackend(VectorBackend):
             if new_dimension is None:
                 new_dimension = settings.get_effective_vector_dim("document")
             logger.info(f"Recreating document vector index with dimension {new_dimension}...")
-            capabilities = self.query_generator.capabilities
             index_name = settings.DOC_MEMGRAPH_VECTOR_INDEX_NAME
-
-            if clear_existing_embeddings:
-                logger.info("Clearing document embedding properties from Chunk nodes...")
-                try:
-                    self._execute_query(
-                        "MATCH (n:Chunk) SET n.embedding = NULL, n.embedding_model = NULL, n.embedding_version = NULL"
-                    )
-                    logger.debug("Cleared embeddings for Chunk nodes")
-                except Exception as e:
-                    logger.warning(f"Failed to clear embeddings for Chunk nodes: {e}")
-
-            try:
-                self._execute_query(f"DROP VECTOR INDEX {index_name};")
-                logger.debug(f"Dropped index {index_name}")
-            except Exception as e:
-                logger.debug(f"Could not drop index {index_name}: {e}")
-
-            try:
-                if capabilities.supports_vector_index:
-                    cypher, params = (
-                        self.query_generator.generate_vector_index_creation_query(
-                            index_name=index_name,
-                            node_label="Chunk",
-                            vector_property="embedding",
-                            vector_dim=new_dimension,
-                            metric=settings.MEMGRAPH_VECTOR_METRIC,
-                            capacity=settings.DOC_MEMGRAPH_VECTOR_CAPACITY,
-                        )
-                    )
-                    self._execute_query(cypher, params)
-                else:
-                    logger.debug(
-                        "Vector index not supported for Chunk nodes, skipping index creation"
-                    )
-                    return
-
-                logger.info(
-                    ls.MG_VECTOR_INDEX_CREATED.format(
-                        index=index_name,
-                        label="Chunk",
-                        dim=new_dimension,
-                        capacity=settings.DOC_MEMGRAPH_VECTOR_CAPACITY,
-                    )
-                )
-            except Exception as e:
-                logger.error(
-                    ls.MG_VECTOR_INDEX_FAILED.format(
-                        index=index_name,
-                        error=e,
-                    )
-                )
-                raise
-
+            self._recreate_vector_index("Chunk", index_name, new_dimension)
             logger.info(
                 f"Document vector index recreated successfully with dimension {new_dimension}"
             )
@@ -967,64 +949,18 @@ class MemgraphBackend(VectorBackend):
         if new_dimension is None:
             new_dimension = settings.get_effective_vector_dim()
         logger.info(f"Recreating vector indexes with dimension {new_dimension}...")
-        capabilities = self.query_generator.capabilities
-
-        if clear_existing_embeddings:
-            logger.info("Clearing all existing embedding properties from nodes...")
-            for label in self.LABELS_TO_INDEX:
-                try:
-                    cypher = f"MATCH (n:{label}) SET n.embedding = NULL, n.embedding_model = NULL, n.embedding_version = NULL"
-                    self._execute_query(cypher)
-                    logger.debug(f"Cleared embeddings for {label} nodes")
-                except Exception as e:
-                    logger.warning(f"Failed to clear embeddings for {label} nodes: {e}")
 
         for label in self.LABELS_TO_INDEX:
             index_name = f"{label.lower()}_embedding_index"
-
-            # Drop existing index
-            try:
-                self._execute_query(f"DROP VECTOR INDEX {index_name};")
-                logger.debug(f"Dropped index {index_name}")
-            except Exception as e:
-                logger.debug(f"Could not drop index {index_name}: {e}")
-
-            # Create new index using the same query generator logic as initialize for consistency
-            try:
-                if capabilities.supports_vector_index:
-                    cypher, params = (
-                        self.query_generator.generate_vector_index_creation_query(
-                            index_name=index_name,
-                            node_label=label,
-                            vector_property="embedding",
-                            vector_dim=new_dimension,
-                            metric=settings.MEMGRAPH_VECTOR_METRIC,
-                            capacity=settings.MEMGRAPH_VECTOR_CAPACITY,
-                        )
-                    )
-                    self._execute_query(cypher, params)
-                else:
-                    logger.debug(
-                        f"Vector index not supported for label {label}, skipping index creation"
-                    )
-                    continue
-
-                logger.info(
-                    ls.MG_VECTOR_INDEX_CREATED.format(
-                        index=index_name,
-                        label=label,
-                        dim=new_dimension,
-                        capacity=settings.MEMGRAPH_VECTOR_CAPACITY,
-                    )
+            self._recreate_vector_index(label, index_name, new_dimension)
+            logger.info(
+                ls.MG_VECTOR_INDEX_CREATED.format(
+                    index=index_name,
+                    label=label,
+                    dim=new_dimension,
+                    capacity=settings.MEMGRAPH_VECTOR_CAPACITY,
                 )
-            except Exception as e:
-                logger.error(
-                    ls.MG_VECTOR_INDEX_FAILED.format(
-                        index=index_name,
-                        error=e,
-                    )
-                )
-                raise
+            )
 
         logger.info(
             f"Vector indexes recreated successfully with dimension {new_dimension}"

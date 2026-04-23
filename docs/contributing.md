@@ -74,7 +74,7 @@ This project uses automated code review bots (**Greptile** and **Gemini Code Ass
 
 ## Technical Requirements
 
-- **PydanticAI Only**: Do not introduce other agentic frameworks (LangChain, CrewAI, AutoGen, etc.)
+- **PydanticAI Only**: Do not introduce other agentic frameworks (LangChain, CrewAI, AutoGen, etc.). Note: PydanticAI is optional - install with `uv sync --extra ai` or `pip install 'code-graph-rag[ai]'`.
 - **Heavy Pydantic Usage**: Use Pydantic models for data validation, serialization, and configuration
 - **Package Management**: Use `uv` for all dependency management
 - **Code Quality**: Use `ruff` for linting and formatting

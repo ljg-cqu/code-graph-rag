@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from pydantic_ai import Tool
+from codebase_rag.compat.pydantic_ai import Tool
 
 from codebase_rag.tools.file_editor import (
     EditResult,

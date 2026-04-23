@@ -9,7 +9,11 @@ from loguru import logger
 
 from .. import constants as cs
 from ..config import settings
-from ..exceptions import EmbeddingGenerationError
+from ..exceptions import (
+    EmbeddingGenerationError,
+    SEMANTIC_EXTRA_DETAIL,
+    SEMANTIC_EXTRA_MODEL_LOAD,
+)
 from .base import EmbeddingProvider
 
 if TYPE_CHECKING:
@@ -24,7 +28,7 @@ _module_model_instance: LocalEmbeddingProvider | None = None
 
 
 def get_local_embedding_provider(
-    model_id: str = "BAAI/bge-large-en-v1.5",
+    model_id: str = "BAAI/bge-base-en-v1.5",
     device: str = "cpu",
 ) -> LocalEmbeddingProvider:
     """Get or create the process-level singleton LocalEmbeddingProvider.
@@ -34,7 +38,7 @@ def get_local_embedding_provider(
     eliminating the redundant loads observed when OpenAI auth fails.
 
     Args:
-        model_id: HuggingFace model identifier. Defaults to "BAAI/bge-large-en-v1.5".
+        model_id: HuggingFace model identifier. Defaults to "BAAI/bge-base-en-v1.5" (768 dim).
         device: Device for inference (auto, cpu, cuda). Defaults to "cpu".
 
     Returns:
@@ -86,8 +90,26 @@ KNOWN_MODEL_DIMENSIONS: dict[str, int] = {
     "microsoft/unixcoder-base": 768,
     "sentence-transformers/all-MiniLM-L6-v2": 384,
     "BAAI/bge-small-en-v1.5": 384,
+    "BAAI/bge-base-en-v1.5": 768,  # Matches unixcoder-base dimension
     "BAAI/bge-large-en-v1.5": 1024,
 }
+
+
+def check_local_embedding_available() -> tuple[bool, str | None]:
+    """Check if local embedding dependencies are installed.
+
+    This is a fast, non-blocking check that does not load the model
+    or probe hardware capabilities.
+
+    Returns:
+        Tuple of (is_available, error_message_if_not_available)
+    """
+    try:
+        import torch  # noqa: F401
+        from transformers import AutoModel, AutoTokenizer  # noqa: F401
+        return True, None
+    except ImportError as e:
+        return False, SEMANTIC_EXTRA_DETAIL.format(error=e)
 
 
 class LocalEmbeddingProvider(EmbeddingProvider):
@@ -118,7 +140,7 @@ class LocalEmbeddingProvider(EmbeddingProvider):
         ssl_verify: bool = True,
         proxy: str | None = None,
         fallback_to_local: bool = True,
-        fallback_model: str = "BAAI/bge-large-en-v1.5",
+        fallback_model: str = "BAAI/bge-base-en-v1.5",  # 768 dim, matches unixcoder
     ) -> None:
         # Determine dimension from known models or default
         if dimension is None:
@@ -128,6 +150,11 @@ class LocalEmbeddingProvider(EmbeddingProvider):
         self._device = device
         self._model: object | None = None
         self._tokenizer: object | None = None
+        # Clamp max_length for UniXcoder to its position embedding limit (512)
+        if "unixcoder" in self.model_id.lower():
+            self._effective_max_length = min(settings.EMBEDDING_MAX_LENGTH, 512)
+        else:
+            self._effective_max_length = settings.EMBEDDING_MAX_LENGTH
 
     @property
     def provider_name(self) -> cs.EmbeddingProvider:
@@ -180,8 +207,9 @@ class LocalEmbeddingProvider(EmbeddingProvider):
 
         except ImportError as e:
             raise EmbeddingGenerationError(
-                f"Failed to load embedding model {self.model_id}: {e}. "
-                "Install semantic dependencies with: uv sync --extra semantic",
+                SEMANTIC_EXTRA_MODEL_LOAD.format(
+                    model=self.model_id, error=e
+                ),
                 provider="local",
                 model=self.model_id,
             ) from e
@@ -192,16 +220,13 @@ class LocalEmbeddingProvider(EmbeddingProvider):
         For local providers, this checks that the required dependencies
         (torch, transformers) are available.
         """
-        try:
-            import torch  # noqa: F401
-            from transformers import AutoModel, AutoTokenizer  # noqa: F401
-        except ImportError as e:
+        available, error = check_local_embedding_available()
+        if not available:
             raise EmbeddingGenerationError(
-                f"Local embedding requires torch and transformers: {e}. "
-                "Install with: uv sync --extra semantic",
+                error,
                 provider="local",
                 model=self.model_id,
-            ) from e
+            )
 
     def embed(self, text: str) -> list[float]:
         """Generate embedding for a single text.
@@ -212,8 +237,6 @@ class LocalEmbeddingProvider(EmbeddingProvider):
         Returns:
             List of floats representing the embedding vector.
         """
-        from ..config import settings
-
         self._ensure_model_loaded()
 
         assert self._model is not None, "Local embedding model failed to load"
@@ -221,10 +244,6 @@ class LocalEmbeddingProvider(EmbeddingProvider):
 
         device = self._get_device()
         model = self._model
-
-        # Truncate long texts to avoid tokenization issues (consistent with OpenAI provider)
-        max_chars = settings.EMBEDDING_MAX_LENGTH * 4
-        truncated_text = text[:max_chars]
 
         if "bge-" in self.model_id.lower():
             # BGE model processing
@@ -236,10 +255,10 @@ class LocalEmbeddingProvider(EmbeddingProvider):
                     model=self.model_id,
                 )
             inputs = cast(BatchTokenizer, tokenizer)(
-                [truncated_text],
+                [text],
                 padding=True,
                 truncation=True,
-                max_length=settings.EMBEDDING_MAX_LENGTH,
+                max_length=self._effective_max_length,
                 return_tensors="pt",
             ).to(device)
 
@@ -263,8 +282,11 @@ class LocalEmbeddingProvider(EmbeddingProvider):
         else:
             # UniXcoder model processing
             tokens = cast(UniXcoderLikeModel, model).tokenize(
-                [truncated_text], max_length=settings.EMBEDDING_MAX_LENGTH
+                [text], max_length=self._effective_max_length
             )
+            assert all(
+                len(t) <= self._effective_max_length for t in tokens
+            ), "UniXcoder tokenization exceeded effective max_length"
             tokens_tensor = torch.tensor(tokens).to(device)
 
             with torch.no_grad():
@@ -298,10 +320,6 @@ class LocalEmbeddingProvider(EmbeddingProvider):
 
         all_embeddings: list[list[float]] = []
 
-        # Truncate long texts to avoid tokenization issues (consistent with OpenAI provider)
-        max_chars = settings.EMBEDDING_MAX_LENGTH * 4
-        truncated_texts = [text[:max_chars] for text in texts]
-
         if "bge-" in self.model_id.lower():
             # BGE model batch processing
             tokenizer = self._tokenizer
@@ -311,13 +329,13 @@ class LocalEmbeddingProvider(EmbeddingProvider):
                     provider="local",
                     model=self.model_id,
                 )
-            for start in range(0, len(truncated_texts), batch_size):
-                batch = truncated_texts[start : start + batch_size]
+            for start in range(0, len(texts), batch_size):
+                batch = texts[start : start + batch_size]
                 inputs = cast(BatchTokenizer, tokenizer)(
                     batch,
                     padding=True,
                     truncation=True,
-                    max_length=settings.EMBEDDING_MAX_LENGTH,
+                    max_length=self._effective_max_length,
                     return_tensors="pt",
                 ).to(device)
 
@@ -344,10 +362,10 @@ class LocalEmbeddingProvider(EmbeddingProvider):
                     all_embeddings.append(row.tolist())
         else:
             # UniXcoder model batch processing
-            for start in range(0, len(truncated_texts), batch_size):
-                batch = truncated_texts[start : start + batch_size]
+            for start in range(0, len(texts), batch_size):
+                batch = texts[start : start + batch_size]
                 tokens_list = cast(UniXcoderLikeModel, model).tokenize(
-                    batch, max_length=settings.EMBEDDING_MAX_LENGTH, padding=True
+                    batch, max_length=self._effective_max_length, padding=True
                 )
                 tokens_tensor = torch.tensor(tokens_list).to(device)
 

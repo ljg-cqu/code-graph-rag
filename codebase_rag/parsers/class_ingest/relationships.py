@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from tree_sitter import Node
 
 from ... import constants as cs
+from ...config import settings
 from ...types_defs import NodeType
 from . import parent_extraction as pe
 
@@ -74,6 +75,19 @@ def create_inheritance_relationship(
     ingestor: IngestorProtocol,
 ) -> None:
     parent_type = get_node_type_for_inheritance(parent_qn, function_registry)
+    if (
+        settings.CREATE_EXTERNAL_NODES
+        and parent_type == str(NodeType.CLASS)
+        and parent_qn not in function_registry
+    ):
+        ingestor.ensure_node_batch(
+            cs.NodeLabel.CLASS,
+            {
+                cs.KEY_QUALIFIED_NAME: parent_qn,
+                cs.KEY_NAME: parent_qn.rsplit(".", 1)[-1],
+                cs.KEY_IS_EXTERNAL: True,
+            },
+        )
     ingestor.ensure_relationship_batch(
         (child_node_type, cs.KEY_QUALIFIED_NAME, child_qn),
         cs.RelationshipType.INHERITS,

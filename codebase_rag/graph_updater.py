@@ -838,6 +838,9 @@ class GraphUpdater:
         Returns:
             Tuple of (nodes list, structural relationships list) - call relationships are processed separately in main process
         """
+        # Mark as subprocess for debugging environment issues (per LLM-First Design spec)
+        os.environ["CGR_SUBPROCESS"] = "1"
+
         from tree_sitter import Parser
 
         from .language_spec import get_language_spec, get_supported_languages

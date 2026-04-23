@@ -45,6 +45,10 @@ def test_vector_recreate_indexes_uses_doc_and_json_helpers() -> None:
     with (
         patch("codebase_rag.cli.MemgraphBackend") as mock_backend_class,
         patch("codebase_rag.cli.recreate_json_vector_index") as mock_json_helper,
+        patch(
+            "codebase_rag.cli.are_json_embeddings_available",
+            return_value=(True, None),
+        ),
     ):
         mock_doc_backend = MagicMock()
         mock_backend_class.return_value = mock_doc_backend

@@ -67,7 +67,7 @@ class GoogleEmbeddingProvider(EmbeddingProvider):
         ssl_verify: bool = True,
         proxy: str | None = None,
         fallback_to_local: bool = True,
-        fallback_model: str = "BAAI/bge-large-en-v1.5",
+        fallback_model: str = "BAAI/bge-base-en-v1.5",  # 768 dim, matches unixcoder
     ) -> None:
         # Determine dimension from known models or default
         if dimension is None:

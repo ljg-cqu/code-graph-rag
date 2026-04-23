@@ -166,14 +166,24 @@ cd code-graph-rag
 
 2. **Install dependencies**:
 
-For basic Python support:
+For basic Python support (no AI agent features):
 ```bash
 uv sync
 ```
 
-For full multi-language support:
+For AI agent features (includes pydantic-ai):
 ```bash
-uv sync --extra treesitter-full
+uv sync --extra ai
+```
+
+For local embeddings (includes torch, transformers):
+```bash
+uv sync --extra semantic
+```
+
+For full multi-language support with all features:
+```bash
+uv sync --extra treesitter-full --extra ai --extra semantic
 ```
 
 For development (including tests and pre-commit hooks):
@@ -350,6 +360,7 @@ Use the Makefile for common development tasks:
 | `make format` | Run ruff format |
 | `make typecheck` | Run type checking with ty |
 | `make check` | Run all checks: lint, typecheck, test |
+| `make check-deps` | Verify all dependencies are importable |
 | `make pre-commit` | Run all pre-commit checks locally (comprehensive test before commit) |
 <!-- /SECTION:makefile_commands -->
 
@@ -673,6 +684,20 @@ See [JSON Data Ingestion Commands](#json-data-ingestion-commands) in the CLI sec
 
 Index and query documentation alongside your codebase. This feature enables comprehensive RAG across both code and documentation, with powerful validation capabilities.
 
+#### Graceful Degradation
+
+Document indexing uses **graceful degradation** by default - if embeddings are unavailable (e.g., missing `transformers`/`torch` dependencies), documents are still indexed structurally without semantic search capability. This ensures the system continues to function even in minimal installations.
+
+**Configuration:**
+- `CGR_DOC_EMBEDDINGS_ENABLED=true` - Enable embeddings for documents (default)
+- `CGR_DOC_EMBEDDINGS_REQUIRED=false` - Continue without embeddings if unavailable (default)
+- Set `CGR_DOC_EMBEDDINGS_REQUIRED=true` to fail if embeddings cannot be generated
+
+**Behavior:**
+- When `DOC_EMBEDDINGS_REQUIRED=false` (default): Documents indexed with structure only if embeddings fail
+- When `DOC_EMBEDDINGS_REQUIRED=true`: Indexing fails if embeddings cannot be generated
+- Fallback to local model is attempted if `EMBEDDING_FALLBACK_TO_LOCAL=true` and primary provider fails
+
 #### Unified Dual-Graph Session
 
 The `cgr start` command now supports unified dual-graph querying from a single session:
@@ -811,6 +836,8 @@ All CLI commands produce deterministic, consistent output and follow the same re
 | `--batch-size <n>` | Number of operations per transaction | Default: 100, adjust for large imports |
 | `--skip-existing` | Skip entities/relationships that already exist | Useful for incremental updates |
 | `--incremental` | Run incremental update, only process changed entities/relationships | Optimizes performance for large datasets |
+| `--json-filter <preset>` | File filtering preset | Options: `lenient` (default), `strict` (only `.cgr.json` files), `none` (no filtering) |
+| `--exclude <pattern>` | Additional glob patterns to exclude | Can be specified multiple times |
 
 **Examples:**
 ```bash
@@ -831,7 +858,23 @@ cgr ingest-json my_data.json --skip-existing
 
 # Incremental update for large datasets
 cgr ingest-json my_data.json --incremental --batch-size 500
+
+# Use strict filter to only process .cgr.json files
+cgr ingest-json ./data/ --json-filter strict
+
+# Disable filtering to process all JSON files
+cgr ingest-json ./data/ --json-filter none
+
+# Combine filter with custom exclude patterns
+cgr ingest-json ./data/ --json-filter lenient --exclude "**/test_data/**"
 ```
+
+**File Filtering Presets:**
+| Preset | Description |
+|--------|-------------|
+| `lenient` | Default. Filters venv, node_modules, AWS SDK files, and other common non-CGR JSON |
+| `strict` | Only processes files ending in `.cgr.json` |
+| `none` | Disables all default filtering (use with caution) |
 
 ##### 🔹 `delete-dataset` - Delete all data in a dataset
 Atomic operation that removes all nodes and relationships belonging to a specific dataset, with no impact on other data.
@@ -883,6 +926,60 @@ CGR_YOLO_MODE=true cgr mcp-server
 
 **Security Warning:**
 When yolo mode is enabled, a prominent red warning banner is displayed at session start. All auto-approved actions are logged with `YOLO:` prefix for audit trail. Use with caution on production codebases.
+
+### LLM Provider Management
+
+#### 🔹 `quota` - Display LLM Provider Quota Status
+
+Check the quota status for configured LLM providers:
+
+```bash
+cgr quota
+```
+
+This displays a table showing:
+- Provider and model names
+- Current quota status (HEALTHY, WARNING, CRITICAL, EXHAUSTED)
+- Usage counts
+- Reset times
+
+**Rate Limiting Configuration:**
+
+Configure rate limiting and fallback behavior via environment variables:
+
+```bash
+# Enable rate limiting (default: true)
+CGR_RATE_LIMIT_ENABLED=true
+
+# Requests per minute limit
+CGR_RATE_LIMIT_RPM=60
+
+# Burst capacity
+CGR_RATE_LIMIT_BURST=10
+
+# Quota thresholds
+CGR_QUOTA_WARNING_THRESHOLD=0.80   # 80% usage triggers WARNING
+CGR_QUOTA_CRITICAL_THRESHOLD=0.95  # 95% usage triggers CRITICAL
+
+# Primary LLM provider
+CGR_PRIMARY_LLM_PROVIDER=openai
+CGR_PRIMARY_LLM_MODEL=gpt-4o
+
+# Fallback providers (comma-separated)
+CGR_FALLBACK_PROVIDERS=anthropic,google
+
+# Enable automatic fallback on quota exhaustion
+CGR_FALLBACK_ON_QUOTA_EXHAUSTED=true
+```
+
+**Provider-Specific Rate Limits:**
+```bash
+CGR_OPENAI_RPM=100
+CGR_ANTHROPIC_RPM=50
+CGR_DOUBAO_RPM=60
+CGR_GOOGLE_RPM=60
+CGR_OLLAMA_RPM=1000
+```
 
 ## 🔒 Security Best Practices
 Follow these recommendations to ensure secure deployment and usage of Code-Graph-RAG:
@@ -1167,6 +1264,42 @@ Code-Graph-RAG supports multiple embedding providers for semantic search:
 - `EMBEDDING_PROJECT_ID`: Google Cloud project ID (for Vertex AI)
 - `EMBEDDING_REGION`: Google Cloud region (default: `us-central1`)
 - `EMBEDDING_PROVIDER_TYPE`: Google provider type (`gla` or `vertex`)
+- `EMBEDDING_FALLBACK_TO_LOCAL`: Fall back to local model on API failure (default: `true`)
+- `EMBEDDING_FALLBACK_MODEL`: Local model for fallback (default: `BAAI/bge-base-en-v1.5`, 768 dimensions)
+
+**Document Embedding Settings:**
+
+- `CGR_DOC_EMBEDDINGS_ENABLED`: Enable embeddings for document indexing (default: `true`)
+- `CGR_DOC_EMBEDDINGS_REQUIRED`: Fail if embeddings unavailable (default: `false` - graceful degradation)
+
+**Graceful Degradation:**
+
+When `CGR_DOC_EMBEDDINGS_REQUIRED=false` (default), document indexing continues without embeddings if the provider fails, enabling structural-only search. This is useful for minimal installations without local embedding dependencies.
+
+**Installing Local Embedding Dependencies:**
+
+For the `local` embedding provider (default), install the semantic extra:
+```bash
+uv sync --extra semantic
+```
+
+This installs `torch` and `transformers` for local embedding generation with UniXcoder. If you don't install these dependencies, document indexing will automatically fall back to structural-only mode (no semantic search).
+
+**Alternative: Use Cloud Embedding Providers**
+
+Cloud providers don't require local dependencies:
+```bash
+# OpenAI (no torch/transformers needed)
+EMBEDDING_PROVIDER=openai
+EMBEDDING_MODEL=text-embedding-3-small
+EMBEDDING_API_KEY=your-key
+MEMGRAPH_VECTOR_DIM=1536  # Match embedding dimension
+
+# Google (no torch/transformers needed)
+EMBEDDING_PROVIDER=google
+EMBEDDING_MODEL=text-embedding-004
+EMBEDDING_API_KEY=your-key
+```
 
 **Available Providers:**
 
@@ -1269,7 +1402,7 @@ docs/tree-sitter.txt
 <!-- SECTION:dependencies -->
 - **loguru**: Python logging made (stupidly) simple
 - **mcp**: Model Context Protocol SDK
-- **pydantic-ai**: Agent Framework / shim to use Pydantic with LLMs
+- **pydantic-ai**: Agent Framework / shim to use Pydantic with LLMs (optional, install with `--extra ai`)
 - **pydantic-settings**: Settings management using Pydantic
 - **pymgclient**: Memgraph database adapter for Python language
 - **python-dotenv**: Read key-value pairs from a .env file and set them as environment variables

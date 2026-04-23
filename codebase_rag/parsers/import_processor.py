@@ -6,6 +6,7 @@ from tree_sitter import Node
 
 from .. import constants as cs
 from .. import logs as ls
+from ..config import settings
 from ..language_spec import LanguageSpec
 from ..services import IngestorProtocol
 from ..types_defs import FunctionRegistryTrieProtocol, LanguageQueries
@@ -252,6 +253,8 @@ class ImportProcessor:
         return import_path.startswith(cs.RUST_CRATE_PREFIX)
 
     def _ensure_external_module_node(self, module_path: str, full_name: str) -> None:
+        if not settings.CREATE_EXTERNAL_NODES:
+            return
         if not self.ingestor or not module_path:
             return
         if cs.SEPARATOR_DOUBLE_COLON in module_path:
@@ -312,6 +315,12 @@ class ImportProcessor:
                     return self._resolve_js_internal_module(full_name)
             case cs.SupportedLanguage.RUST:
                 return self._resolve_rust_import_path(full_name, module_qn)
+            case cs.SupportedLanguage.PYTHON:
+                if full_name.startswith(project_prefix):
+                    return full_name
+                top_level = full_name.split(cs.SEPARATOR_DOT)[0]
+                if self._is_local_module(top_level):
+                    return f"{project_prefix}{full_name}"
 
         module_path = self.stdlib_extractor.extract_module_path(full_name, language)
         if not module_path.startswith(project_prefix):

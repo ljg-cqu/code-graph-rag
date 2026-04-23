@@ -10,7 +10,19 @@ Key components:
 """
 
 from .chunking import DocumentChunk, SemanticDocumentChunker
-from .document_updater import DocumentGraphUpdater
+from .concept_extraction import (
+    ConceptExtractionStats,
+    ExtractedConcept,
+    ConceptRelationship,
+    ExtractionResult,
+    LLMConceptExtractor,
+    classify_concept_extraction_error,
+    get_user_facing_message,
+)
+from .document_updater import (
+    DocumentGraphUnavailableError,
+    DocumentGraphUpdater,
+)
 from .error_handling import (
     DeadLetterQueue,
     ErrorType,
@@ -21,6 +33,7 @@ from .versioning import ContentVersionTracker, DocumentVersion, VersionCache
 
 __all__ = [
     "DocumentGraphUpdater",
+    "DocumentGraphUnavailableError",
     "SemanticDocumentChunker",
     "DocumentChunk",
     "ErrorType",
@@ -30,4 +43,12 @@ __all__ = [
     "ContentVersionTracker",
     "VersionCache",
     "DocumentVersion",
+    # Concept extraction
+    "ConceptExtractionStats",
+    "ExtractedConcept",
+    "ConceptRelationship",
+    "ExtractionResult",
+    "LLMConceptExtractor",
+    "classify_concept_extraction_error",
+    "get_user_facing_message",
 ]

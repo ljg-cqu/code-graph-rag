@@ -179,7 +179,7 @@ class TaskSplitter:
     def _get_strategy_agent(self):
         """Lazy initialization of strategy agent."""
         if getattr(self, "_strategy_agent", None) is None:
-            from pydantic_ai import Agent
+            from codebase_rag.compat.pydantic_ai import Agent
 
             from codebase_rag.services.llm import _create_provider_model
 
@@ -494,7 +494,7 @@ Rules:
     def _initialize_agent(self) -> None:
         """Lazy initialization."""
         if self.agent is None:
-            from pydantic_ai import Agent
+            from codebase_rag.compat.pydantic_ai import Agent
 
             from codebase_rag.services.llm import _create_provider_model
 

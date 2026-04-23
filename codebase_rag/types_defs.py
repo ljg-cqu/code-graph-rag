@@ -5,9 +5,7 @@ from collections.abc import Awaitable, Callable, ItemsView, KeysView, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, NamedTuple, Protocol, TypedDict
-
-from typing import Literal
+from typing import TYPE_CHECKING, Literal, NamedTuple, Protocol, TypedDict
 
 from prompt_toolkit.styles import Style
 
@@ -655,7 +653,10 @@ RELATIONSHIP_SCHEMAS: tuple[RelationshipSchema, ...] = (
     RelationshipSchema(
         (NodeLabel.MODULE,),
         RelationshipType.IMPORTS,
-        (NodeLabel.MODULE,),
+        (
+            NodeLabel.MODULE,
+            NodeLabel.EXTERNAL_PACKAGE,
+        ),
     ),
     RelationshipSchema(
         (NodeLabel.MODULE,),

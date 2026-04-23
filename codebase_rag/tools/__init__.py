@@ -1,6 +1,6 @@
 """Tools for code analysis, retrieval, and manipulation."""
 
-from pydantic_ai import Tool
+from ..compat.pydantic_ai import Tool
 
 from .graph_algorithms_tools import (
     analyze_path,

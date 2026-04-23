@@ -44,6 +44,12 @@ description: "Install Code-Graph-RAG and set up Memgraph for multi-language code
 pip install code-graph-rag
 ```
 
+With AI agent features (includes pydantic-ai):
+
+```bash
+pip install 'code-graph-rag[ai]'
+```
+
 With all Tree-sitter grammars (Python, JS, TS, Rust, Go, Java, Scala, C++, Lua):
 
 ```bash
@@ -56,10 +62,10 @@ With semantic code search (UniXcoder embeddings):
 pip install 'code-graph-rag[semantic]'
 ```
 
-With both full language support and semantic search:
+With full features (AI, all languages, semantic search):
 
 ```bash
-pip install 'code-graph-rag[treesitter-full,semantic]'
+pip install 'code-graph-rag[ai,treesitter-full,semantic]'
 ```
 
 ## Install from Source
@@ -69,19 +75,25 @@ git clone https://github.com/vitali87/code-graph-rag.git
 cd code-graph-rag
 ```
 
-For basic Python support:
+For basic Python support (no AI agent features):
 
 ```bash
 uv sync
 ```
 
-For full multi-language support:
+For AI agent features (includes pydantic-ai):
 
 ```bash
-uv sync --extra treesitter-full
+uv sync --extra ai
 ```
 
-For development (including tests and pre-commit hooks):
+For full multi-language support with AI:
+
+```bash
+uv sync --extra treesitter-full --extra ai
+```
+
+For development (including tests, pre-commit hooks, and AI features):
 
 ```bash
 make dev

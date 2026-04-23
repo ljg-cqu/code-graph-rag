@@ -1,6 +1,19 @@
 from typing import Protocol, runtime_checkable
 
 from ..types_defs import PropertyDict, PropertyValue, ResultRow
+from .error_guidance import (
+    CachedGuidanceGenerator,
+    ErrorContext,
+    ErrorGuidance,
+    LLMErrorGuidance,
+    UserExpertiseLevel,
+    format_user_error,
+)
+from .failure_classifier import (
+    FailureClassification,
+    FailureType,
+    classify_memgraph_failure,
+)
 
 
 @runtime_checkable
@@ -39,3 +52,18 @@ class QueryProtocol(Protocol):
     ) -> list[ResultRow]: ...
 
     def execute_write(self, query: str, params: PropertyDict | None = None) -> None: ...
+
+
+__all__ = [
+    "IngestorProtocol",
+    "QueryProtocol",
+    "ErrorContext",
+    "ErrorGuidance",
+    "LLMErrorGuidance",
+    "CachedGuidanceGenerator",
+    "UserExpertiseLevel",
+    "format_user_error",
+    "FailureClassification",
+    "FailureType",
+    "classify_memgraph_failure",
+]

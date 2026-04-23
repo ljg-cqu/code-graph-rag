@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Literal, cast
 
 from loguru import logger
-from pydantic_ai import Tool
+from codebase_rag.compat.pydantic_ai import Tool
 
 from ..config import settings
 from ..shared.query_router import QueryMode, QueryRequest, QueryRouter

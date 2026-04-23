@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import os
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum, auto
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
 
 import mgclient
 from ..exceptions import QueryExecutionError
+from ..services.failure_classifier import classify_memgraph_failure
 from ..services.graph_service import MemgraphIngestor
 
 from .. import constants as cs
@@ -221,6 +224,49 @@ class HealthChecker:
             error=error_msg,
         )
 
+    def check_embedding_provider(self) -> HealthCheckResult:
+        """Check if embedding provider is available and configured correctly.
+
+        LLM-First Design: This is deterministic infrastructure validation.
+        Uses existing provider availability checking - no semantic decisions.
+        """
+        from ..embeddings.provider_availability import (
+            get_best_available_provider_with_status,
+        )
+
+        provider, status = get_best_available_provider_with_status()
+
+        if provider and status and status.is_available:
+            model = settings.EMBEDDING_MODEL
+            if status.fallback_available:
+                return HealthCheckResult(
+                    name="Embedding Provider (Fallback)",
+                    passed=True,
+                    message=f"Using fallback provider '{provider}' with model '{model}' "
+                    f"(primary '{status.name}' unavailable)",
+                    error=None,
+                )
+            return HealthCheckResult(
+                name="Embedding Provider",
+                passed=True,
+                message=f"Provider '{provider}' with model '{model}' is available",
+                error=None,
+            )
+
+        # Provider unavailable
+        error_parts = [f"Provider '{settings.EMBEDDING_PROVIDER}' is unavailable"]
+        if status and status.reason:
+            error_parts.append(f"Reason: {status.reason}")
+        if status and status.install_command:
+            error_parts.append(f"Fix: {status.install_command}")
+
+        return HealthCheckResult(
+            name="Embedding Provider",
+            passed=False,
+            message="No embedding provider available - document indexing will run in structural-only mode",
+            error="; ".join(error_parts),
+        )
+
     def check_api_keys(self) -> list[HealthCheckResult]:
         return [
             self.check_api_key(env_name, display_name)
@@ -277,6 +323,7 @@ class HealthChecker:
         self.results = []
         self.results.append(self.check_docker())
         self.results.append(self.check_memgraph_connection())
+        self.results.append(self.check_embedding_provider())
         self.results.extend(self.check_api_keys())
         for tool_name, cmd in cs.HEALTH_CHECK_EXTERNAL_TOOLS:
             self.results.append(self.check_external_tool(tool_name, cmd))
@@ -820,50 +867,26 @@ class HealthChecker:
                 error=cs.HEALTH_CHECK_VECTOR_SEARCH_ERROR_MSG.format(error=str(e)),
             )
 
-    def validate_ingestion_quality(
+    def _check_node_count(
         self,
-        expected_node_count: int | None = None,
-        expected_edge_count: int | None = None,
-        node_label: str = "File",
-        embedded_node_label: str = "Function",
-        embedding_property: str = "embedding",
-        vector_dim: int | None = None,
+        node_label: str,
+        expected_node_count: int | None,
     ) -> list[HealthCheckResult]:
-        """Run post-ingestion data quality validation checks.
-
-        Args:
-            expected_node_count: Expected number of nodes ingested (optional).
-            expected_edge_count: Expected number of edges ingested (optional).
-            node_label: Label of nodes to validate (default: "File").
-            embedding_property: Name of embedding property on nodes (default: "embedding").
-            vector_dim: Expected vector dimension (optional, auto-detected if not provided).
-
-        Returns:
-            List of HealthCheckResult objects for each validation check.
-        """
-        results: list[HealthCheckResult] = []
+        """Check node count using an isolated connection."""
         conn = None
         cursor = None
-
-        if vector_dim is None:
-            vector_dim = settings.get_effective_vector_dim()
-
-        embedded_labels = self._parse_label_expression(embedded_node_label)
-
         try:
             conn = mgclient.connect(
                 host=settings.MEMGRAPH_HOST,
                 port=settings.MEMGRAPH_PORT,
             )
             cursor = conn.cursor()
-
-            # 1. Check node count
             actual_node_count = self._fetch_single_int(
                 cursor, f"MATCH (n:{node_label}) RETURN count(n) AS count"
             )
             if expected_node_count is not None:
                 node_count_passed = actual_node_count == expected_node_count
-                results.append(
+                return [
                     HealthCheckResult(
                         name=cs.HEALTH_CHECK_NODE_COUNT,
                         passed=node_count_passed,
@@ -880,26 +903,49 @@ class HealthChecker:
                         if node_count_passed
                         else f"Expected {expected_node_count} nodes, got {actual_node_count}",
                     )
+                ]
+            return [
+                HealthCheckResult(
+                    name=cs.HEALTH_CHECK_NODE_COUNT,
+                    passed=True,
+                    message=cs.HEALTH_CHECK_NODE_COUNT_SKIP_MSG.format(
+                        count=actual_node_count
+                    ),
+                    error=None,
                 )
-            else:
-                results.append(
-                    HealthCheckResult(
-                        name=cs.HEALTH_CHECK_NODE_COUNT,
-                        passed=True,
-                        message=cs.HEALTH_CHECK_NODE_COUNT_SKIP_MSG.format(
-                            count=actual_node_count
-                        ),
-                        error=None,
-                    )
-                )
+            ]
+        finally:
+            if cursor is not None:
+                try:
+                    HealthChecker._consume_all_results(cursor)
+                    cursor.close()
+                except Exception:
+                    pass
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
-            # 2. Check edge count
+    def _check_edge_count(
+        self,
+        expected_edge_count: int | None,
+    ) -> list[HealthCheckResult]:
+        """Check edge count using an isolated connection."""
+        conn = None
+        cursor = None
+        try:
+            conn = mgclient.connect(
+                host=settings.MEMGRAPH_HOST,
+                port=settings.MEMGRAPH_PORT,
+            )
+            cursor = conn.cursor()
             actual_edge_count = self._fetch_single_int(
                 cursor, "MATCH ()-->() RETURN count(*) AS count"
             )
             if expected_edge_count is not None:
                 edge_count_passed = actual_edge_count == expected_edge_count
-                results.append(
+                return [
                     HealthCheckResult(
                         name=cs.HEALTH_CHECK_EDGE_COUNT,
                         passed=edge_count_passed,
@@ -916,20 +962,44 @@ class HealthChecker:
                         if edge_count_passed
                         else f"Expected {expected_edge_count} edges, got {actual_edge_count}",
                     )
+                ]
+            return [
+                HealthCheckResult(
+                    name=cs.HEALTH_CHECK_EDGE_COUNT,
+                    passed=True,
+                    message=cs.HEALTH_CHECK_EDGE_COUNT_SKIP_MSG.format(
+                        count=actual_edge_count
+                    ),
+                    error=None,
                 )
-            else:
-                results.append(
-                    HealthCheckResult(
-                        name=cs.HEALTH_CHECK_EDGE_COUNT,
-                        passed=True,
-                        message=cs.HEALTH_CHECK_EDGE_COUNT_SKIP_MSG.format(
-                            count=actual_edge_count
-                        ),
-                        error=None,
-                    )
-                )
+            ]
+        finally:
+            if cursor is not None:
+                try:
+                    HealthChecker._consume_all_results(cursor)
+                    cursor.close()
+                except Exception:
+                    pass
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
-            # 3. Check missing embeddings (exclude builtin functions)
+    def _check_missing_embeddings(
+        self,
+        embedded_labels: list[str],
+        embedding_property: str,
+    ) -> list[HealthCheckResult]:
+        """Check missing embeddings using an isolated connection."""
+        conn = None
+        cursor = None
+        try:
+            conn = mgclient.connect(
+                host=settings.MEMGRAPH_HOST,
+                port=settings.MEMGRAPH_PORT,
+            )
+            cursor = conn.cursor()
             missing_embeddings_count = self._fetch_single_int(
                 cursor,
                 f"""
@@ -952,7 +1022,6 @@ class HealthChecker:
                 {"embedded_labels": embedded_labels},
             )
 
-            # Calculate allowed missing embeddings based on threshold
             if embedded_node_count == 0:
                 missing_embeddings_passed = True
             else:
@@ -960,7 +1029,7 @@ class HealthChecker:
                 missing_embeddings_passed = (
                     missing_pct <= settings.MAX_MISSING_EMBEDDINGS_PCT
                 )
-            results.append(
+            return [
                 HealthCheckResult(
                     name=cs.HEALTH_CHECK_MISSING_EMBEDDINGS,
                     passed=missing_embeddings_passed,
@@ -975,43 +1044,41 @@ class HealthChecker:
                     if missing_embeddings_passed
                     else f"{missing_embeddings_count} nodes have missing embeddings",
                 )
+            ]
+        finally:
+            if cursor is not None:
+                try:
+                    HealthChecker._consume_all_results(cursor)
+                    cursor.close()
+                except Exception:
+                    pass
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    def _check_duplicate_nodes(self, node_label: str) -> list[HealthCheckResult]:
+        """Check duplicate nodes using an isolated connection."""
+        conn = None
+        cursor = None
+        try:
+            conn = mgclient.connect(
+                host=settings.MEMGRAPH_HOST,
+                port=settings.MEMGRAPH_PORT,
             )
-
-            # 4. Check invalid embeddings dimension
-            if missing_embeddings_count < embedded_node_count:
-                actual_dim = self._fetch_embedding_dim(
-                    cursor, embedded_labels, embedding_property
-                )
-                if actual_dim is not None:
-                    dim_passed = actual_dim == vector_dim
-                    results.append(
-                        HealthCheckResult(
-                            name=cs.HEALTH_CHECK_EMBEDDING_DIMENSION,
-                            passed=dim_passed,
-                            message=(
-                                cs.HEALTH_CHECK_EMBEDDING_DIMENSION_OK_MSG.format(
-                                    dim=actual_dim
-                                )
-                                if dim_passed
-                                else cs.HEALTH_CHECK_EMBEDDING_DIMENSION_MISMATCH_MSG.format(
-                                    actual=actual_dim, expected=vector_dim
-                                )
-                            ),
-                            error=None
-                            if dim_passed
-                            else f"Expected dimension {vector_dim}, got {actual_dim}",
-                        )
-                    )
-
-            # 5. Check duplicate nodes (by path)
-            duplicate_count = self._fetch_single_int(cursor, f"""
+            cursor = conn.cursor()
+            duplicate_count = self._fetch_single_int(
+                cursor,
+                f"""
                 MATCH (n:{node_label})
                 WITH n.path AS path, count(n) AS cnt
                 WHERE cnt > 1
                 RETURN count(path) AS duplicate_count
-            """)
+            """,
+            )
             duplicates_passed = duplicate_count == 0
-            results.append(
+            return [
                 HealthCheckResult(
                     name=cs.HEALTH_CHECK_DUPLICATE_NODES,
                     passed=duplicates_passed,
@@ -1026,51 +1093,95 @@ class HealthChecker:
                     if duplicates_passed
                     else f"{duplicate_count} duplicate node paths found",
                 )
-            )
-
-        except QueryExecutionError as e:
-            # Handle query execution errors with full context
-            error_detail = str(e)
-            logger.warning(
-                f"Quality validation query failed: {error_detail}"
-            )
-            results.append(
-                HealthCheckResult(
-                    name=cs.HEALTH_CHECK_INGESTION_VALIDATION_FAILED,
-                    passed=False,
-                    message=cs.HEALTH_CHECK_INGESTION_VALIDATION_ERROR_MSG,
-                    error=error_detail,
-                )
-            )
-        except Exception as e:
-            error_detail = str(e)
-            if settings.LOG_QUALITY_CHECK_STACKTRACES:
-                import traceback
-                error_detail = f"{e}\n{traceback.format_exc()}"
-            logger.warning(f"Quality validation error: {error_detail}")
-            results.append(
-                HealthCheckResult(
-                    name=cs.HEALTH_CHECK_INGESTION_VALIDATION_FAILED,
-                    passed=False,
-                    message=cs.HEALTH_CHECK_INGESTION_VALIDATION_ERROR_MSG,
-                    error=error_detail,
-                )
-            )
+            ]
         finally:
             if cursor is not None:
                 try:
-                    # Consume any pending results before closing
                     HealthChecker._consume_all_results(cursor)
                     cursor.close()
-                except Exception as e:
-                    logger.debug(f"Failed to close Memgraph cursor: {e}")
+                except Exception:
+                    pass
             if conn is not None:
                 try:
                     conn.close()
-                except Exception as e:
-                    logger.debug(f"Failed to close Memgraph connection: {e}")
+                except Exception:
+                    pass
 
-        return results
+    def validate_ingestion_quality(
+        self,
+        expected_node_count: int | None = None,
+        expected_edge_count: int | None = None,
+        node_label: str = "File",
+        embedded_node_label: str = "Function",
+        embedding_property: str = "embedding",
+        vector_dim: int | None = None,
+    ) -> list[HealthCheckResult]:
+        """Validate ingestion quality with graceful degradation.
+
+        Each check is isolated - failure of one doesn't prevent others.
+        Connections are created and closed within each check.
+
+        Args:
+            expected_node_count: Expected number of nodes ingested (optional).
+            expected_edge_count: Expected number of edges ingested (optional).
+            node_label: Label of nodes to validate (default: "File").
+            embedded_node_label: Label of embedded nodes (default: "Function").
+            embedding_property: Name of embedding property on nodes (default: "embedding").
+            vector_dim: Expected vector dimension (optional, auto-detected if not provided).
+
+        Returns:
+            List of HealthCheckResult objects for each validation check.
+        """
+        from functools import partial
+
+        if vector_dim is None:
+            vector_dim = settings.get_effective_vector_dim()
+
+        embedded_labels = self._parse_label_expression(embedded_node_label)
+
+        all_results: list[HealthCheckResult] = []
+
+        # Use partial to bind check-specific parameters
+        checks = [
+            partial(
+                self._check_node_count,
+                node_label=node_label,
+                expected_node_count=expected_node_count,
+            ),
+            partial(
+                self._check_edge_count,
+                expected_edge_count=expected_edge_count,
+            ),
+            partial(
+                self._check_missing_embeddings,
+                embedded_labels=embedded_labels,
+                embedding_property=embedding_property,
+            ),
+            partial(
+                self._check_duplicate_nodes,
+                node_label=node_label,
+            ),
+        ]
+
+        for check_fn in checks:
+            try:
+                results = check_fn()  # Each creates its own connection
+                all_results.extend(results)
+            except Exception as e:
+                classification = classify_memgraph_failure(e)
+                logger.warning(
+                    f"Check {check_fn.func.__name__} failed: {classification.failure_type.name}"
+                )
+                all_results.append(
+                    HealthCheckResult(
+                        name=f"{check_fn.func.__name__}_unavailable",
+                        passed=False,
+                        message=cs.HEALTH_CHECK_PARTIAL_FAILURE_MSG,
+                        error=str(e),
+                    )
+                )
+
+        return all_results
 
     def get_missing_embeddings(
         self,

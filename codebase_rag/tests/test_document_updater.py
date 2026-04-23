@@ -1,13 +1,18 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from codebase_rag.config import settings
 from codebase_rag.document.chunking import DocumentChunk
 from codebase_rag.document.document_updater import (
+    DocumentGraphUnavailableError,
     DocumentGraphUpdater,
+    _check_graph_availability,
     ensure_document_vector_index,
 )
 from codebase_rag.document.extractors.base import ExtractedDocument
+from codebase_rag.services.failure_classifier import FailureType
 
 
 def test_collect_documents_skips_internal_artifacts(tmp_path: Path) -> None:
@@ -367,3 +372,81 @@ def test_ensure_vector_index_recreates_mismatched_dimension() -> None:
         f"CREATE VECTOR INDEX {settings.DOC_MEMGRAPH_VECTOR_INDEX_NAME}" in query
         for query in queries
     )
+
+
+class TestCheckGraphAvailability:
+    """Tests for _check_graph_availability pre-flight health check."""
+
+    def test_returns_none_on_successful_query(self) -> None:
+        """Should return None when health check query succeeds."""
+        ingestor = MagicMock()
+        ingestor.fetch_all.return_value = [{"health": 1}]
+
+        # Should not raise
+        _check_graph_availability(ingestor, "document")
+
+        ingestor.fetch_all.assert_called_once_with("RETURN 1 as health")
+
+    def test_raises_on_connection_refused(self) -> None:
+        """Should raise DocumentGraphUnavailableError on connection refused."""
+        ingestor = MagicMock()
+        ingestor.fetch_all.side_effect = Exception("Connection refused")
+
+        with pytest.raises(DocumentGraphUnavailableError) as exc_info:
+            _check_graph_availability(ingestor, "document")
+
+        assert "not accessible" in str(exc_info.value).lower()
+        assert exc_info.value.failure_type == FailureType.TRANSIENT_NETWORK
+        assert exc_info.value.should_retry is True
+
+    def test_raises_on_authentication_failure(self) -> None:
+        """Should raise DocumentGraphUnavailableError on auth failure."""
+        ingestor = MagicMock()
+        ingestor.fetch_all.side_effect = Exception("Authentication failed")
+
+        with pytest.raises(DocumentGraphUnavailableError) as exc_info:
+            _check_graph_availability(ingestor, "document")
+
+        assert exc_info.value.failure_type == FailureType.AUTHENTICATION_FAILURE
+        assert exc_info.value.should_retry is False
+
+    def test_includes_memgraph_in_message(self) -> None:
+        """Should include Memgraph in error message for clarity."""
+        ingestor = MagicMock()
+        ingestor.fetch_all.side_effect = Exception("Connection refused")
+
+        with pytest.raises(DocumentGraphUnavailableError) as exc_info:
+            _check_graph_availability(ingestor, "code")
+
+        # Static guidance includes "Memgraph" in the error message
+        assert "memgraph" in str(exc_info.value).lower()
+
+
+class TestDocumentGraphUnavailableError:
+    """Tests for DocumentGraphUnavailableError exception."""
+
+    def test_creates_with_all_fields(self) -> None:
+        """Should create exception with all fields."""
+        original = Exception("Connection refused")
+        error = DocumentGraphUnavailableError(
+            "Graph unavailable",
+            suggested_action="Start Memgraph",
+            original_error=original,
+            failure_type=FailureType.TRANSIENT_NETWORK,
+            should_retry=True,
+        )
+
+        assert error.message == "Graph unavailable"
+        assert error.suggested_action == "Start Memgraph"
+        assert error.original_error is original
+        assert error.failure_type == FailureType.TRANSIENT_NETWORK
+        assert error.should_retry is True
+
+    def test_str_returns_message(self) -> None:
+        """Should return message when converted to string."""
+        error = DocumentGraphUnavailableError(
+            "Test error message",
+            failure_type=FailureType.UNKNOWN,
+        )
+
+        assert str(error) == "Test error message"

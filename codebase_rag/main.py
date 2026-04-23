@@ -24,15 +24,17 @@ from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.shortcuts import print_formatted_text
-from pydantic_ai import (
-    DeferredToolRequests,
-    DeferredToolResults,
+from .compat.pydantic_ai import (
+    HAS_PYDANTIC_AI,
+    ModelHTTPError,
     Tool,
     ToolCallPart,
-    ToolDenied,
+    UsageLimits,
 )
-from pydantic_ai.exceptions import ModelHTTPError
-from pydantic_ai.usage import UsageLimits
+
+# Additional imports for tool handling (only available when pydantic_ai is installed)
+if HAS_PYDANTIC_AI:
+    from pydantic_ai import DeferredToolRequests, DeferredToolResults, ToolDenied
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -44,7 +46,7 @@ from . import constants as cs
 from . import exceptions as ex
 from . import logs as ls
 from . import tool_errors as te
-from .config import ModelConfig, load_cgrignore_patterns, settings
+from .config import ModelConfig, load_cgrignore_patterns, settings, validate_ai_dependencies
 from .graph_updater import GraphUpdater
 from .models import AppContext
 from .models_dynamic import DynamicModelInfo
@@ -112,9 +114,8 @@ from .utils.shutdown_manager import shutdown_manager
 
 if TYPE_CHECKING:
     from prompt_toolkit.key_binding import KeyPressEvent
-    from pydantic_ai import Agent
-    from pydantic_ai.messages import ModelMessage
-    from pydantic_ai.models import Model
+
+    from .compat.pydantic_ai import Agent, Model, ModelMessage
 
 
 def style(
@@ -147,13 +148,14 @@ def _stringify_message_content(content: object) -> str:
 
 
 def _message_history_to_context(message_history: list[ModelMessage]) -> list[dict[str, str]]:
-    from pydantic_ai.messages import (
-        ModelRequest,
-        ModelResponse,
-        SystemPromptPart,
-        TextPart,
-        UserPromptPart,
-    )
+    from .compat.pydantic_ai import ModelRequest, ModelResponse, UserPromptPart
+
+    # Additional message parts (only available when pydantic_ai is installed)
+    if HAS_PYDANTIC_AI:
+        from pydantic_ai.messages import SystemPromptPart, TextPart
+    else:
+        SystemPromptPart = None  # type: ignore[misc,assignment]
+        TextPart = None  # type: ignore[misc,assignment]
 
     context: list[dict[str, str]] = []
     for message in message_history:
@@ -182,13 +184,14 @@ def _message_history_to_context(message_history: list[ModelMessage]) -> list[dic
 
 
 def _context_to_message_history(context: list[dict[str, Any]]) -> list[ModelMessage]:
-    from pydantic_ai.messages import (
-        ModelRequest,
-        ModelResponse,
-        SystemPromptPart,
-        TextPart,
-        UserPromptPart,
-    )
+    from .compat.pydantic_ai import ModelRequest, ModelResponse, UserPromptPart
+
+    # Additional message parts (only available when pydantic_ai is installed)
+    if HAS_PYDANTIC_AI:
+        from pydantic_ai.messages import SystemPromptPart, TextPart
+    else:
+        SystemPromptPart = None  # type: ignore[misc,assignment]
+        TextPart = None  # type: ignore[misc,assignment]
 
     message_history: list[ModelMessage] = []
     for entry in context:
@@ -442,6 +445,10 @@ def _process_tool_approvals(
 
 
 def _setup_common_initialization(repo_path: str) -> Path:
+    # Validate AI dependencies at application startup
+    # Per LLM-First Design: dependency availability is deterministic infrastructure
+    validate_ai_dependencies()
+
     project_root = Path(repo_path).resolve()
     if not project_root.exists():
         raise FileNotFoundError(
@@ -729,12 +736,13 @@ def _cleanup_unprocessed_tool_calls(message_history: list) -> None:
     """
     from dataclasses import replace
 
-    from pydantic_ai.messages import (
-        BuiltinToolCallPart,
-        ModelRequest,
-        ModelResponse,
-        ToolCallPart,
-    )
+    from .compat.pydantic_ai import ModelRequest, ModelResponse, ToolCallPart
+
+    # Additional message parts (only available when pydantic_ai is installed)
+    if HAS_PYDANTIC_AI:
+        from pydantic_ai.messages import BuiltinToolCallPart
+    else:
+        BuiltinToolCallPart = None  # type: ignore[misc,assignment]
 
     cleaned = []
     for msg in message_history:
@@ -815,7 +823,7 @@ async def _run_agent_response_loop(
     model_override: Model | None = None,
     model_override_config: ModelConfig | None = None,
 ) -> None:
-    from pydantic_ai.messages import ModelRequest, UserPromptPart
+    from .compat.pydantic_ai import ModelRequest, UserPromptPart
 
     from .orchestrator.investigation_tracker import InvestigationState
     from .orchestrator.sufficiency_analyzer import (
@@ -1070,10 +1078,12 @@ async def _run_agent_response_loop(
                         denial_msg
                     )
                     if dup_count >= 3 and not injected_warning:
-                        from pydantic_ai.messages import (
-                            ModelRequest,
-                            SystemPromptPart,
-                        )
+                        from .compat.pydantic_ai import ModelRequest
+
+                        if HAS_PYDANTIC_AI:
+                            from pydantic_ai.messages import SystemPromptPart
+                        else:
+                            SystemPromptPart = None  # type: ignore[misc,assignment]
 
                         message_history.append(
                             ModelRequest(
@@ -1179,7 +1189,7 @@ def _update_state_from_tool_returns(
     new_messages: list[ModelMessage],
     state: object,
 ) -> None:
-    from pydantic_ai.messages import ModelRequest, ToolReturnPart
+    from .compat.pydantic_ai import ModelRequest, ToolReturnPart
 
     from .orchestrator.investigation_tracker import InvestigationState
 

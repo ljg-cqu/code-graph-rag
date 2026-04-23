@@ -5,8 +5,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 from loguru import logger
-from pydantic_ai import Tool
 
+from codebase_rag.compat.pydantic_ai import Tool
 from codebase_rag.services.llm import create_rag_orchestrator
 
 pytestmark = [pytest.mark.anyio, pytest.mark.integration]
@@ -17,8 +17,7 @@ def anyio_backend(request: pytest.FixtureRequest) -> str:
     return str(request.param)
 
 if TYPE_CHECKING:
-    from pydantic_ai import Agent
-    from pydantic_ai.messages import ModelMessage
+    from codebase_rag.compat.pydantic_ai import Agent, ModelMessage
 
 logger.remove()
 logger.add(sys.stderr, level="INFO")

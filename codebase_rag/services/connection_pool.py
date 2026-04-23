@@ -106,22 +106,43 @@ class MemgraphConnectionPool:
     def return_connection(self, conn: mgclient.Connection) -> None:
         with self._lock:
             if self._closed:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
+                self._safe_close(conn)
                 self._active_count -= 1
                 return
+
+        # Health check: discard corrupted connections
+        if not self._is_connection_healthy(conn):
+            self._safe_close(conn)
+            with self._lock:
+                self._active_count -= 1
+            return
 
         try:
             self._connections.put_nowait(conn)
         except Exception:
-            try:
-                conn.close()
-            except Exception:
-                pass
+            self._safe_close(conn)
             with self._lock:
                 self._active_count -= 1
+
+    def _is_connection_healthy(self, conn: mgclient.Connection) -> bool:
+        """Check if a connection is healthy before returning to pool."""
+        try:
+            cursor = conn.cursor()
+            try:
+                cursor.execute("RETURN 1")
+                cursor.fetchone()
+                return True
+            finally:
+                cursor.close()
+        except Exception:
+            return False
+
+    def _safe_close(self, conn: mgclient.Connection) -> None:
+        """Close connection, ignoring errors."""
+        try:
+            conn.close()
+        except Exception:
+            pass
 
     def _create_connection(self) -> mgclient.Connection:
         """Create connection using MemgraphIngestor's proven logic."""

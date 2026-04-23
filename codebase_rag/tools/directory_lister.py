@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 from loguru import logger
-from pydantic_ai import Tool
+from codebase_rag.compat.pydantic_ai import Tool
 
 from .. import exceptions as ex
 from .. import logs as ls

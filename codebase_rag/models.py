@@ -11,7 +11,7 @@ from .constants import SupportedLanguage
 from .types_defs import MCPHandlerType, MCPInputSchema, PropertyValue
 
 if TYPE_CHECKING:
-    from pydantic_ai.messages import ModelMessage
+    from .compat.pydantic_ai import ModelMessage
     from tree_sitter import Node
 
 

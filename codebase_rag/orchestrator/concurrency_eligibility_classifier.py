@@ -11,9 +11,8 @@ from pathlib import Path
 from typing import cast
 
 from loguru import logger
-from pydantic_ai import Agent
-from pydantic_ai.usage import UsageLimits
 
+from codebase_rag.compat.pydantic_ai import Agent, UsageLimits
 from codebase_rag.config import settings
 from codebase_rag.providers import get_provider_from_config
 from codebase_rag.shared.query_router import QueryMode

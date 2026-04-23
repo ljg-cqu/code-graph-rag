@@ -11,12 +11,14 @@ class CLICommandName(StrEnum):
     LANGUAGE = "language"
     DOCTOR = "doctor"
     STATS = "stats"
+    QUOTA = "quota"
     # Document GraphRAG commands
     QUERY_DOCS = "query-docs"
     QUERY_ALL = "query-all"
     VALIDATE_SPEC = "validate-spec"
     VALIDATE_DOC = "validate-doc"
     INDEX_DOCS = "index-docs"
+    CLEAN_DOCS = "clean-docs"
     # JSON Data Ingestion commands
     INGEST_JSON = "ingest-json"
     DELETE_DATASET = "delete-dataset"
@@ -45,12 +47,14 @@ CMD_GRAPH_LOADER = "Load and display summary of exported graph JSON"
 CMD_LANGUAGE = "Manage language grammars (add, remove, list)"
 CMD_DOCTOR = "Verify that all dependencies and configurations are properly set up"
 CMD_STATS = "Display node and relationship statistics for the indexed graph"
+CMD_QUOTA = "Display LLM provider quota status and usage information"
 # Document GraphRAG commands
 CMD_QUERY_DOCS = "Query the document graph using natural language"
 CMD_QUERY_ALL = "Query both code and document graphs, merge results"
 CMD_VALIDATE_SPEC = "Validate code against a specification document"
 CMD_VALIDATE_DOC = "Validate documentation against actual code"
 CMD_INDEX_DOCS = "Index documents into the document graph"
+CMD_CLEAN_DOCS = "Remove documents from graph that match .cgrignore patterns"
 # JSON Data Ingestion commands
 CMD_INGEST_JSON = "Ingest pre-extracted JSON data containing entities/relationships into graph and vector databases"
 CMD_DELETE_DATASET = (
@@ -214,6 +218,7 @@ CLI_COMMANDS: dict[CLICommandName, str] = {
     CLICommandName.VALIDATE_SPEC: CMD_VALIDATE_SPEC,
     CLICommandName.VALIDATE_DOC: CMD_VALIDATE_DOC,
     CLICommandName.INDEX_DOCS: CMD_INDEX_DOCS,
+    CLICommandName.CLEAN_DOCS: CMD_CLEAN_DOCS,
     # JSON Data Ingestion commands
     CLICommandName.INGEST_JSON: CMD_INGEST_JSON,
     CLICommandName.DELETE_DATASET: CMD_DELETE_DATASET,

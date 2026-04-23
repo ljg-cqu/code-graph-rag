@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from typing import NamedTuple
 
 import click
-import diff_match_patch as dmp
 from loguru import logger
 from rich.console import Console
 from rich.table import Table
@@ -18,6 +17,7 @@ from rich.table import Table
 from .. import cli_help as ch
 from .. import constants as cs
 from ..language_spec import LANGUAGE_SPECS, LanguageSpec
+from ._diff_patch import DIFF_PATCH_AVAILABLE, get_diff_match_patch
 
 
 class LanguageInfo(NamedTuple):
@@ -510,12 +510,19 @@ def remove_language(language_name: str, keep_submodule: bool = False) -> None:
         click.echo(f"List: {cs.LANG_MSG_AVAILABLE_LANGS.format(langs=available_langs)}")
         return
 
+    if not DIFF_PATCH_AVAILABLE:
+        click.echo(
+            "Error: diff-match-patch package is required for language removal. "
+            "Install with: pip install diff-match-patch>=20241021"
+        )
+        return
+
     try:
         original_content = pathlib.Path(cs.LANG_CONFIG_FILE).read_text(encoding="utf-8")
         pattern = rf'    "{language_name}": LanguageSpec\([\s\S]*?\),\n'
         new_content = re.sub(pattern, "", original_content)
 
-        dmp_obj = dmp.diff_match_patch()
+        dmp_obj = get_diff_match_patch()
         patches = dmp_obj.patch_make(original_content, new_content)
         result, _ = dmp_obj.patch_apply(patches, original_content)
 

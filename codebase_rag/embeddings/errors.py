@@ -196,6 +196,35 @@ Options:
   3. Keep the existing model:
      Set EMBEDDING_MODEL={existing_model}
 """,
+    # Availability errors (4xx) - for fallback scenarios
+    EmbeddingErrorCode.PROVIDER_UNAVAILABLE: """
+Embedding provider '{provider}' is unavailable: {reason}
+
+Available options:
+  1. Install semantic dependencies: uv sync --extra semantic
+  2. Configure OpenAI: export OPENAI_API_KEY=your-key && CGR_EMBEDDING_PROVIDER=openai
+  3. Configure Ollama: install Ollama && CGR_EMBEDDING_PROVIDER=ollama
+
+{fallback_message}
+""",
+    EmbeddingErrorCode.FALLBACK_TO_LOCAL: """
+Primary embedding provider failed, falling back to local model.
+
+Original error: {original_error}
+Fallback model: {fallback_model}
+
+Documents will be indexed with full semantic search capability.
+""",
+    EmbeddingErrorCode.NO_EMBEDDINGS_MODE: """
+Warning: No embedding providers available for {path}
+
+Continuing with structural-only indexing.
+Documents can be browsed and searched by structure, but semantic search will be limited.
+
+To enable semantic search:
+  1. Install dependencies: uv sync --extra semantic
+  2. Or configure a cloud provider (OpenAI, Google, Ollama)
+""",
 }
 
 

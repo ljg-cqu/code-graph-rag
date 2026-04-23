@@ -3,7 +3,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from pydantic_ai import Tool
+from codebase_rag.compat.pydantic_ai import Tool
 from rich.console import Console
 
 from codebase_rag.exceptions import LLMGenerationError

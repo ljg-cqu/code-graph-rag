@@ -266,6 +266,10 @@ MG_FLUSH_TIMEOUT = (
 MG_FLUSH_NO_PROGRESS = (
     "No flush progress for {interval}s, {pending} groups pending"
 )
+MG_TRANSACTION_CONFLICT_RETRY = (
+    "Transaction conflict on '{pattern}', retrying in {backoff}s "
+    "(attempt {attempt}/{max_retries})"
+)
 MG_FETCH_QUERY = "Executing fetch query: {query} with params: {params}"
 MG_WRITE_QUERY = "Executing write query: {query} with params: {params}"
 MG_EXPORTING = "Exporting graph data..."

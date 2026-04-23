@@ -199,7 +199,7 @@ def test_embed_code_raises_without_dependencies() -> None:
 
     from codebase_rag.embedder import embed_code
 
-    with pytest.raises(RuntimeError, match="Semantic search requires"):
+    with pytest.raises(RuntimeError, match="Local embedding requires"):
         embed_code("x = 1")
 
 
@@ -484,7 +484,7 @@ def test_embed_code_batch_raises_without_dependencies() -> None:
 
     from codebase_rag.embedder import embed_code_batch
 
-    with pytest.raises(RuntimeError, match="Semantic search requires"):
+    with pytest.raises(RuntimeError, match="Local embedding requires"):
         embed_code_batch(["x = 1"])
 
 

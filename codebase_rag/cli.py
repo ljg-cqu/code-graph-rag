@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import Callable
+from dataclasses import dataclass
 from importlib.metadata import version as get_version
 from pathlib import Path
 from typing import Literal, cast
@@ -14,7 +15,7 @@ from . import constants as cs
 from . import logs as ls
 from .config import load_cgrignore_patterns, settings
 from .graph_updater import GraphUpdater
-from .json_ingestion import recreate_json_vector_index
+from .json_ingestion import are_json_embeddings_available, recreate_json_vector_index
 from .main import (
     ParallelExecutionConfig,
     RealtimeConfig,
@@ -40,6 +41,150 @@ from .types_defs import ResultRow
 from .vector_store_memgraph import MemgraphBackend
 
 type ValidationScope = Literal["all", "sections", "claims"]
+
+
+@dataclass
+class EmbeddingAvailabilityInfo:
+    """Information about embedding provider availability for startup display."""
+
+    status: Literal["available", "fallback", "unavailable"]
+    provider: str | None = None
+    model: str | None = None
+    original_provider: str | None = None
+    error: str | None = None
+    install_command: str | None = None
+
+
+def _validate_embedding_provider() -> EmbeddingAvailabilityInfo:
+    """Validate embedding provider at startup.
+
+    LLM-First Design: This is deterministic infrastructure validation.
+    Uses existing get_best_available_provider_with_status() for availability checks.
+
+    Returns:
+        EmbeddingAvailabilityInfo with provider status for display.
+    """
+    from .embeddings.provider_availability import (
+        get_best_available_provider_with_status,
+    )
+
+    provider, status = get_best_available_provider_with_status()
+
+    if provider and status and status.is_available:
+        if status.fallback_available:
+            # Using fallback
+            logger.warning(
+                f"Primary embedding provider unavailable: {status.reason}. "
+                f"Falling back to {provider}."
+            )
+            return EmbeddingAvailabilityInfo(
+                status="fallback",
+                provider=provider,
+                original_provider=status.name,
+                error=status.reason,
+            )
+        return EmbeddingAvailabilityInfo(
+            status="available",
+            provider=provider,
+            model=settings.EMBEDDING_MODEL,
+        )
+
+    # No provider available
+    return EmbeddingAvailabilityInfo(
+        status="unavailable",
+        provider=settings.EMBEDDING_PROVIDER,
+        error=status.reason if status else "Unknown error",
+        install_command=status.install_command if status else None,
+    )
+
+
+def _display_embedding_status(info: EmbeddingAvailabilityInfo) -> None:
+    """Display embedding provider status banner at startup.
+
+    LLM-First Design: Banner content is deterministic based on status.
+    User-facing messaging can be enhanced by LLM later if needed.
+    """
+    if info.status == "available":
+        return  # Silent success
+
+    if info.status == "fallback":
+        _warning(
+            f"Embedding provider: Using fallback '{info.provider}' "
+            f"(primary '{info.original_provider}' unavailable: {info.error})"
+        )
+        return
+
+    # Unavailable - show helpful banner
+    lines = [
+        f"Provider: {info.provider} ({settings.EMBEDDING_MODEL})",
+        "Status:   UNAVAILABLE",
+        f"Reason:   {info.error}",
+        "",
+        "Document indexing will run in structural-only mode.",
+    ]
+
+    if info.install_command:
+        lines.append(f"Fix:      {info.install_command}")
+
+    lines.append("Run 'cgr doctor' for more diagnostics.")
+
+    panel = Panel(
+        "\n".join(lines),
+        title="⚠ Embedding Provider Status",
+        border_style="yellow",
+    )
+    app_context.console.print(panel)
+
+
+def _check_large_excluded_documents(
+    repo_path: Path,
+    workspace: str = "default",
+) -> None:
+    """Check for large excluded documents in the graph at startup.
+
+    LLM-First Design: Deterministic check using existing .cgrignore patterns.
+    """
+    try:
+        from .document.document_updater import DocumentGraphUpdater
+
+        updater = DocumentGraphUpdater(
+            host=settings.DOC_MEMGRAPH_HOST,
+            port=settings.DOC_MEMGRAPH_PORT,
+            repo_path=repo_path,
+            workspace=workspace,
+        )
+
+        excluded_large = updater.check_for_large_excluded_documents()
+
+        if not excluded_large:
+            return
+
+        lines = [
+            "The following documents are in the graph but should be excluded:",
+            "",
+        ]
+        for doc_path, chunk_count in excluded_large:
+            lines.append(f"  {doc_path} ({chunk_count:,} chunks)")
+
+        lines.extend([
+            "",
+            "These documents consume significant graph space and may slow queries.",
+            "",
+            "To remove them, run:",
+            "  cgr clean-docs",
+            "",
+            "Or run indexing with --clean to rebuild the entire graph.",
+        ])
+
+        panel = Panel(
+            "\n".join(lines),
+            title="⚠ Large Excluded Documents Detected",
+            border_style="yellow",
+        )
+        app_context.console.print(panel)
+
+    except Exception as e:
+        logger.debug(f"Failed to check for large excluded documents: {e}")
 
 
 def _normalize_validation_scope(scope: str) -> ValidationScope:
@@ -99,13 +244,17 @@ def vector_recreate_indexes(
         doc_backend.close()
 
     if json:
-        _info("Recreating vector indexes for JSON graph...")
-        recreate_json_vector_index(
-            batch_size=settings.JSON_MEMGRAPH_BATCH_SIZE,
-            dimension=dimension or settings.get_effective_vector_dim("json"),
-            clear_existing_embeddings=clear_embeddings,
-            force_recreate=True,
-        )
+        available, reason = are_json_embeddings_available()
+        if not available:
+            _warning(f"Skipping JSON vector index recreation: {reason}")
+        else:
+            _info("Recreating vector indexes for JSON graph...")
+            recreate_json_vector_index(
+                batch_size=settings.JSON_MEMGRAPH_BATCH_SIZE,
+                dimension=dimension or settings.get_effective_vector_dim("json"),
+                clear_existing_embeddings=clear_embeddings,
+                force_recreate=True,
+            )
 
     _success(
         "Vector indexes recreated successfully! Reindex your data to generate new compatible embeddings."
@@ -470,6 +619,11 @@ def _error(msg: str) -> None:
         app_context.console.print(style(msg, cs.Color.RED))
 
 
+def _warning(msg: str) -> None:
+    if not settings.QUIET:
+        app_context.console.print(style(msg, cs.Color.YELLOW))
+
+
 def _success(msg: str) -> None:
     if not settings.QUIET:
         app_context.console.print(style(msg, cs.Color.GREEN))
@@ -809,6 +963,16 @@ def start(
     effective_batch_size = settings.resolve_batch_size(batch_size)
 
     _update_and_validate_models(orchestrator, cypher)
+
+    # === Validate Embedding Provider ===
+    # Show warning if embedding provider is unavailable
+    embedding_info = _validate_embedding_provider()
+    _display_embedding_status(embedding_info)
+
+    # === Check for Large Excluded Documents ===
+    # Warn if large documents that should be excluded are in the graph
+    if effective_with_docs:
+        _check_large_excluded_documents(Path(target_repo_path), doc_workspace)
 
     # === Handle indexing with new flags ===
     code_indexed, docs_indexed, effective_with_docs = _handle_indexing(
@@ -1377,6 +1541,15 @@ def stats() -> None:
         raise typer.Exit(1) from e
 
 
+@app.command(name=ch.CLICommandName.QUOTA, help=ch.CMD_QUOTA)
+def quota() -> None:
+    """Display LLM provider quota status and usage information."""
+    from .quota_status_reporter import QuotaStatusReporter
+
+    reporter = QuotaStatusReporter(app_context.console)
+    reporter.print_status(settings)
+
+
 # Document GraphRAG CLI commands
 
 
@@ -1795,6 +1968,75 @@ def index_docs(
         raise typer.Exit(1) from e
 
 
+@app.command(name=ch.CLICommandName.CLEAN_DOCS, help=ch.CMD_CLEAN_DOCS)
+def clean_docs(
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Show what would be removed without actually removing.",
+    ),
+    workspace: str = typer.Option(
+        "default",
+        "--workspace",
+        help="Workspace to clean (default: 'default').",
+    ),
+    repo_path: str | None = typer.Option(
+        None, "-r", "--repo-path", help=ch.HELP_REPO_PATH_RETRIEVAL
+    ),
+) -> None:
+    """Remove documents from graph that match .cgrignore patterns.
+
+    This command is useful when you've updated .cgrignore and want to
+    remove previously indexed documents that should now be excluded.
+
+    Examples:
+        # Preview what would be removed
+        cgr clean-docs --dry-run
+
+        # Remove excluded documents
+        cgr clean-docs
+    """
+    from .document.document_updater import DocumentGraphUpdater
+
+    target_repo_path = repo_path or settings.TARGET_REPO_PATH
+    repo_to_clean = Path(target_repo_path)
+
+    if not repo_to_clean.exists():
+        typer.echo(
+            f"ERROR: Repository path '{target_repo_path}' does not exist.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    updater = DocumentGraphUpdater(
+        host=settings.DOC_MEMGRAPH_HOST,
+        port=settings.DOC_MEMGRAPH_PORT,
+        repo_path=repo_to_clean,
+        workspace=workspace,
+    )
+
+    if dry_run:
+        # Preview mode
+        excluded = updater.preview_excluded_documents()
+        if not excluded:
+            _info("No documents would be removed.")
+            return
+
+        table = Table(title=style("Documents that would be removed", cs.Color.YELLOW))
+        table.add_column("Path", style=cs.Color.CYAN)
+        table.add_column("Reason", style=cs.Color.YELLOW)
+
+        for doc_path, reason in excluded:
+            table.add_row(str(doc_path), reason or "Excluded by .cgrignore")
+
+        app_context.console.print(table)
+        _info(f"Total: {len(excluded)} documents would be removed.")
+    else:
+        # Actual cleanup
+        removed = updater.cleanup_excluded_documents()
+        _success(f"Removed {removed} excluded documents from graph.")
+
+
 @app.command(
     name=ch.CLICommandName.INGEST_JSON,
     help=ch.CMD_INGEST_JSON,
@@ -1831,6 +2073,11 @@ def ingest_json(
         "--conflict-resolution",
         help="Conflict resolution strategy: last-write-wins (default), highest-confidence-wins, manual-review.",
     ),
+    json_filter: str = typer.Option(
+        "lenient",
+        "--json-filter",
+        help="JSON file filtering preset: lenient (default), strict (only .cgr.json files), none (no filtering).",
+    ),
     exclude: list[str] | None = typer.Option(
         None,
         "--exclude",
@@ -1853,6 +2100,7 @@ def ingest_json(
             dry_run=dry_run,
             conflict_resolution=conflict_resolution,
             exclude_patterns=exclude,
+            filter_preset=json_filter,
         )
 
         # Display results

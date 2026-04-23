@@ -7,12 +7,12 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent, DeferredToolRequests, Tool
-from pydantic_ai.usage import UsageLimits
 
 from .. import constants as cs
 from .. import exceptions as ex
 from .. import logs as ls
+from ..compat.pydantic_ai import Agent, Tool, UsageLimits
+from ..compat.pydantic_ai import HAS_PYDANTIC_AI
 from ..config import ModelConfig, settings
 from ..prompts import (
     CYPHER_SYSTEM_PROMPT,
@@ -21,9 +21,13 @@ from ..prompts import (
     build_rag_orchestrator_prompt,
 )
 from ..providers import get_provider_from_config
+from ..rate_limiter import QuotaStatus, get_rate_limiter
 
 if TYPE_CHECKING:
-    from pydantic_ai.models import Model
+    from ..compat.pydantic_ai import Model
+
+if HAS_PYDANTIC_AI:
+    from pydantic_ai import DeferredToolRequests
 
 
 def _create_provider_model(config: ModelConfig) -> Model:
@@ -282,7 +286,7 @@ async def _validate_cypher_read_only_async(query: str) -> None:
 
 
 class CypherGenerator:
-    __slots__ = ("agent", "_fallback_agent")
+    __slots__ = ("agent", "_fallback_agent", "_provider", "_model")
 
     def __init__(self) -> None:
         try:
@@ -302,8 +306,31 @@ class CypherGenerator:
                 retries=settings.AGENT_RETRIES,
             )
             self._fallback_agent = None
+            self._provider = config.provider
+            self._model = config.model_id
+
+            # Register with rate limiter
+            if settings.RATE_LIMIT_ENABLED:
+                limiter = get_rate_limiter()
+                rpm = self._get_provider_rpm(config.provider)
+                limiter.register_provider(
+                    config.provider,
+                    config.model_id,
+                    requests_per_minute=rpm,
+                )
         except Exception as e:
             raise ex.LLMGenerationError(ex.LLM_INIT_CYPHER.format(error=e)) from e
+
+    def _get_provider_rpm(self, provider: str) -> float:
+        """Get rate limit for provider from settings."""
+        provider_rpm = {
+            cs.Provider.OPENAI: settings.OPENAI_REQUESTS_PER_MINUTE,
+            cs.Provider.ANTHROPIC: settings.ANTHROPIC_REQUESTS_PER_MINUTE,
+            cs.Provider.GOOGLE: settings.GOOGLE_REQUESTS_PER_MINUTE,
+            "doubao": settings.DOUBAO_REQUESTS_PER_MINUTE,
+            cs.Provider.OLLAMA: settings.OLLAMA_REQUESTS_PER_MINUTE,
+        }
+        return provider_rpm.get(provider.lower(), settings.RATE_LIMIT_REQUESTS_PER_MINUTE)
 
     async def _run_query_prompt(self, prompt: str) -> str:
         result = await self.agent.run(prompt, usage_limits=UsageLimits(request_limit=settings.AGENT_REQUEST_LIMIT))
@@ -321,13 +348,76 @@ class CypherGenerator:
 
     async def generate(self, natural_language_query: str) -> str:
         logger.info(ls.CYPHER_GENERATING.format(query=natural_language_query))
+
+        # Check quota before making LLM call
+        if settings.RATE_LIMIT_ENABLED:
+            limiter = get_rate_limiter()
+            status = limiter.check_quota(self._provider, self._model)
+            if status == QuotaStatus.EXHAUSTED:
+                logger.warning(
+                    f"Quota exhausted for {self._provider}/{self._model}, "
+                    "attempting fallback"
+                )
+                return await self._generate_with_fallback(natural_language_query)
+            elif status == QuotaStatus.CRITICAL:
+                logger.warning(
+                    f"Quota critical for {self._provider}/{self._model}"
+                )
+
         try:
             query = await self._run_query_prompt(natural_language_query)
             logger.info(ls.CYPHER_GENERATED.format(query=query))
             return query
         except Exception as e:
+            # Record error for rate limiter tracking
+            if settings.RATE_LIMIT_ENABLED:
+                limiter = get_rate_limiter()
+                error_code = getattr(e, "status_code", None)
+                if error_code:
+                    limiter.record_error(self._provider, self._model, error_code)
+
+            # Try fallback on quota exceeded
+            if settings.FALLBACK_ON_QUOTA_EXHAUSTED:
+                logger.warning(f"Primary LLM failed, trying fallback: {e}")
+                return await self._generate_with_fallback(natural_language_query)
+
             logger.error(ls.CYPHER_ERROR.format(error=e))
             raise ex.LLMGenerationError(ex.LLM_GENERATION_FAILED.format(error=e)) from e
+
+    async def _generate_with_fallback(self, natural_language_query: str) -> str:
+        """Generate Cypher using fallback chain when primary fails."""
+        from ..providers.fallback_chain import get_default_query_chain
+
+        chain = get_default_query_chain()
+
+        async def try_generate(provider: str, model: str) -> str:
+            # Create a temporary agent with fallback provider
+            config = settings._get_model_config_for_provider(provider, model)
+            fallback_llm = _create_provider_model(config)
+
+            temp_agent = Agent(
+                model=fallback_llm,
+                system_prompt=CYPHER_SYSTEM_PROMPT,
+                output_type=str,
+                retries=1,
+            )
+
+            result = await temp_agent.run(
+                natural_language_query,
+                usage_limits=UsageLimits(request_limit=settings.AGENT_REQUEST_LIMIT),
+            )
+
+            if not isinstance(result.output, str):
+                raise ex.LLMGenerationError("Fallback LLM returned invalid output")
+
+            query = _clean_cypher_response(result.output)
+            await _validate_cypher_read_only_async(query)
+            return query
+
+        try:
+            return await chain.execute_async(try_generate)
+        except RuntimeError as e:
+            raise ex.LLMGenerationError(f"All providers failed: {e}") from e
 
     async def repair(
         self,
@@ -365,7 +455,7 @@ class CypherGenerator:
             A conservative Cypher query string, or None if generation fails.
         """
         if self._fallback_agent is None:
-            from pydantic_ai import Agent
+            from ..compat.pydantic_ai import Agent
 
             self._fallback_agent = Agent(
                 model=self.agent.model,

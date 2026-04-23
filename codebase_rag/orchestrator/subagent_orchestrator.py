@@ -14,9 +14,9 @@ from enum import StrEnum
 from typing import Any
 
 from loguru import logger
-from pydantic_ai import Agent, Tool
-from pydantic_ai.usage import UsageLimits
 from rich.console import Console
+
+from codebase_rag.compat.pydantic_ai import Agent, Tool, UsageLimits
 
 from codebase_rag.config import ModelConfig, settings
 from codebase_rag.providers import get_provider_from_config

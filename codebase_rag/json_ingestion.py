@@ -8,6 +8,7 @@ import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from enum import StrEnum
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,7 @@ from loguru import logger
 
 from .config import settings
 from .embedder import EmbeddingCache, get_embedding_provider_instance
+from .embeddings.base import EmbeddingProvider
 from .schemas import IngestionResult, JSONEntity, JSONRelationship, UpdateResult
 from .services.graph_service import MemgraphIngestor
 
@@ -28,6 +30,7 @@ __all__ = [
     "validate_json_input",
     "load_json_files",
     "recreate_json_vector_index",
+    "are_json_embeddings_available",
     "IngestionResult",
     "UpdateResult",
 ]
@@ -43,12 +46,46 @@ with open(SCHEMA_PATH, encoding="utf-8") as schema_file:
 JSON_ENTITY_LABEL = "JsonEntity"
 EMBEDDING_VERSION = 1
 
-embedding_provider = get_embedding_provider_instance()
-embedding_cache = EmbeddingCache(
-    dimension=getattr(
-        embedding_provider, "dimension", settings.get_effective_vector_dim("json")
-    )
-)
+# Lazy-initialized embedding provider and cache
+_embedding_provider: EmbeddingProvider | None = None
+_embedding_cache: EmbeddingCache | None = None
+
+
+def _get_embedding_provider() -> EmbeddingProvider:
+    """Get the embedding provider instance lazily."""
+    global _embedding_provider
+    if _embedding_provider is None:
+        _embedding_provider = get_embedding_provider_instance()
+    return _embedding_provider
+
+
+def _get_embedding_cache() -> EmbeddingCache:
+    """Get the embedding cache instance lazily."""
+    global _embedding_cache
+    if _embedding_cache is None:
+        provider = _get_embedding_provider()
+        _embedding_cache = EmbeddingCache(
+            dimension=getattr(
+                provider, "dimension", settings.get_effective_vector_dim("json")
+            )
+        )
+    return _embedding_cache
+
+
+def are_json_embeddings_available() -> tuple[bool, str | None]:
+    """Check if JSON embeddings are available.
+
+    Returns:
+        Tuple of (is_available, reason_if_not_available)
+    """
+    if not settings.JSON_EMBEDDINGS_ENABLED:
+        return False, "JSON embeddings disabled via configuration"
+
+    try:
+        _get_embedding_provider()
+        return True, None
+    except Exception as e:
+        return False, f"Embedding provider not available: {e}"
 
 
 @dataclass(frozen=True)
@@ -280,13 +317,36 @@ def validate_json_input(
 def load_json_files(
     input_path: str, exclude_patterns: list[str] | None = None
 ) -> list[tuple[Path, dict[str, Any]]]:
-    json_files, load_errors = _load_json_files_with_errors(input_path, exclude_patterns)
+    json_files, load_errors, skip_count = _load_json_files_with_errors(
+        input_path, exclude_patterns
+    )
+    if skip_count:
+        logger.debug(f"Skipped {skip_count} non-entity JSON file(s)")
     for error in load_errors:
         logger.warning(error)
     return json_files
 
 
-def _detect_json_purpose(data: Any, file_path: Path) -> tuple[str, str | None]:
+class JSONFilePurpose(StrEnum):
+    """Classification of JSON file purposes for ingestion."""
+
+    ENTITY_DATA = "entity_data"
+    JSON_SCHEMA = "json_schema"
+    CONFIG = "config"
+    PACKAGE_METADATA = "package_metadata"
+    CACHE = "cache"
+    TELEMETRY = "telemetry"
+    VERSION = "version"
+    RAW_ARRAY = "raw_array"
+    METADATA_ONLY = "metadata_only"
+    RELATIONSHIP_DOCS = "relationship_docs"
+    DATA_WRAPPER = "data_wrapper"
+    GRAPH_FORMAT = "graph_format"
+    SINGLE_ENTITY = "single_entity"
+    UNKNOWN = "unknown"
+
+
+def _detect_json_purpose(data: Any, file_path: Path) -> tuple[JSONFilePurpose, str | None]:
     """
     Detect the purpose/type of a JSON file and provide guidance.
 
@@ -295,74 +355,170 @@ def _detect_json_purpose(data: Any, file_path: Path) -> tuple[str, str | None]:
     """
     if not isinstance(data, dict):
         if isinstance(data, list):
-            return "raw_array", "This appears to be a raw JSON array. For ingestion, wrap it in an object with 'entities' and optional 'metadata' fields."
-        return "unknown", "Unrecognized JSON format. Expected an object with 'entities' and/or 'relationships' arrays."
+            return JSONFilePurpose.RAW_ARRAY, "This appears to be a raw JSON array. For ingestion, wrap it in an object with 'entities' and optional 'metadata' fields."
+        return JSONFilePurpose.UNKNOWN, "Unrecognized JSON format. Expected an object with 'entities' and/or 'relationships' arrays."
 
     # Check for schema definition
     if "$schema" in data or "definitions" in data or "properties" in data:
-        return "schema_definition", "This appears to be a JSON Schema file, not entity data. Schema files define structure but don't contain ingestable entities."
+        return JSONFilePurpose.JSON_SCHEMA, "This appears to be a JSON Schema file, not entity data. Schema files define structure but don't contain ingestable entities."
 
     # Check for configuration
     if any(k in data for k in ["config", "settings", "options", "parameters"]):
-        return "configuration", "This appears to be a configuration file, not entity data. Configuration files control behavior but don't define entities."
+        return JSONFilePurpose.CONFIG, "This appears to be a configuration file, not entity data. Configuration files control behavior but don't define entities."
 
     # Check for metadata-only
     if "metadata" in data and "entities" not in data and "relationships" not in data:
-        return "metadata_only", "This file contains only metadata. For ingestion, add an 'entities' array with the actual entity definitions."
+        return JSONFilePurpose.METADATA_ONLY, "This file contains only metadata. For ingestion, add an 'entities' array with the actual entity definitions."
 
     # Check for valid ingestion payload
     has_entities = "entities" in data and isinstance(data.get("entities"), list)
     has_relationships = "relationships" in data and isinstance(data.get("relationships"), list)
 
     if has_entities or has_relationships:
-        return "ingestion_payload", None  # Valid format, no guidance needed
+        return JSONFilePurpose.ENTITY_DATA, None  # Valid format, no guidance needed
 
     # Check for relationship documentation (common in this repo)
     if "relationships" in data and not isinstance(data.get("relationships"), list):
-        return "relationship_docs", "This appears to document relationships but not in the ingestable format. The 'relationships' field should be an array of relationship objects."
+        return JSONFilePurpose.RELATIONSHIP_DOCS, "This appears to document relationships but not in the ingestable format. The 'relationships' field should be an array of relationship objects."
 
     # Check for other common patterns
     if "data" in data and isinstance(data.get("data"), list):
-        return "data_wrapper", "This has a 'data' array. For ingestion, rename 'data' to 'entities' or wrap the array appropriately."
+        return JSONFilePurpose.DATA_WRAPPER, "This has a 'data' array. For ingestion, rename 'data' to 'entities' or wrap the array appropriately."
 
     if "nodes" in data and "links" in data:
-        return "graph_format", "This appears to be a graph format (nodes/links). For ingestion, rename 'nodes' to 'entities' and 'links' to 'relationships'."
+        return JSONFilePurpose.GRAPH_FORMAT, "This appears to be a graph format (nodes/links). For ingestion, rename 'nodes' to 'entities' and 'links' to 'relationships'."
 
     if "name" in data and "description" in data and len(data) <= 5:
-        return "single_entity", "This appears to be a single entity object. For ingestion, wrap it in an 'entities' array."
+        return JSONFilePurpose.SINGLE_ENTITY, "This appears to be a single entity object. For ingestion, wrap it in an 'entities' array."
 
-    return "unknown", f"Unrecognized JSON format. Keys found: {list(data.keys())[:5]}. Expected 'entities' and/or 'relationships' arrays."
+    return JSONFilePurpose.UNKNOWN, f"Unrecognized JSON format. Keys found: {list(data.keys())[:5]}. Expected 'entities' and/or 'relationships' arrays."
 
 
 def _load_json_files_with_errors(
-    input_path: str, exclude_patterns: list[str] | None = None
-) -> tuple[list[tuple[Path, dict[str, Any]]], list[str]]:
+    input_path: str, exclude_patterns: list[str] | None = None, filter_preset: str = "lenient"
+) -> tuple[list[tuple[Path, dict[str, Any]]], list[str], int]:
     path = Path(input_path)
     json_files: list[tuple[Path, dict[str, Any]]] = []
     load_errors: list[str] = []
+    skip_count = 0
+
     # Common JSON files to exclude by default
+    # Includes: virtual environments, package managers, IDE files, build artifacts,
+    # and known non-CGR JSON patterns (AWS SDK metadata, etc.)
+    # Note: Patterns use fnmatch syntax. For directory matching, the pattern should
+    # match the relative path from the base directory.
     default_exclude_patterns = {
-        "**/node_modules/**/*.json",
-        "**/package-lock.json",
-        "**/yarn.lock",
-        "**/pnpm-lock.yaml",
-        "**/*.min.json",
-        "**/tsconfig*.json",
-        "**/.eslintrc*.json",
-        "**/prettierrc*.json",
-        "**/.vscode/**/*.json",
-        "**/.idea/**/*.json",
-        "**/build/**/*.json",
-        "**/dist/**/*.json",
-        "**/coverage/**/*.json",
-        "**/.embedding_cache/**/*.json",
-        "**/.cgr/**/*.json",
-        "**/.cgr-*.json",  # Exclude CGR internal cache files (e.g., .cgr-hash-cache.json)
-        "**/*.egg-info/**/*.json",
-        "**/benchmarks/results/**/*.json",
+        # Virtual environment directories (match any depth)
+        ".venv/*",
+        ".venv/**/*",
+        "venv/*",
+        "venv/**/*",
+        "env/*",
+        "env/**/*",
+        "*/.venv/*",
+        "*/venv/*",
+        "*/env/*",
+        # pip packages
+        "site-packages/*",
+        "site-packages/**/*",
+        "*/site-packages/*",
+        "*/site-packages/**/*",
+        "dist-packages/*",
+        "dist-packages/**/*",
+        "*/dist-packages/*",
+        "*/dist-packages/**/*",
+        # Package manager directories
+        "node_modules/*",
+        "node_modules/**/*",
+        "*/node_modules/*",
+        "*/node_modules/**/*",
+        ".poetry/*",
+        ".poetry/**/*",
+        "*/.poetry/*",
+        "*/.poetry/**/*",
+        ".cache/pip/*",
+        ".cache/pip/**/*",
+        "*/.cache/pip/*",
+        "*/.cache/pip/**/*",
+        "package-lock.json",
+        "*/package-lock.json",
+        "yarn.lock",
+        "*/yarn.lock",
+        "pnpm-lock.yaml",
+        "*/pnpm-lock.yaml",
+        "poetry.lock",
+        "*/poetry.lock",
+        # Build artifacts
+        "*.min.json",
+        "tsconfig*.json",
+        "*/tsconfig*.json",
+        ".eslintrc*.json",
+        "*/.eslintrc*.json",
+        "prettierrc*.json",
+        "*/prettierrc*.json",
+        ".vscode/*",
+        ".vscode/**/*",
+        "*/.vscode/*",
+        "*/.vscode/**/*",
+        ".idea/*",
+        ".idea/**/*",
+        "*/.idea/*",
+        "*/.idea/**/*",
+        "build/*",
+        "build/**/*",
+        "*/build/*",
+        "*/build/**/*",
+        "dist/*",
+        "dist/**/*",
+        "*/dist/*",
+        "*/dist/**/*",
+        "coverage/*",
+        "coverage/**/*",
+        "*/coverage/*",
+        "*/coverage/**/*",
+        "*.egg-info/*",
+        "*.egg-info/**/*",
+        "*/*.egg-info/*",
+        "*/*.egg-info/**/*",
+        "benchmarks/results/*",
+        "benchmarks/results/**/*",
+        "*/benchmarks/results/*",
+        "*/benchmarks/results/**/*",
+        # Known non-CGR JSON patterns (AWS SDK metadata, etc.)
+        "paginators-*.json",
+        "*/paginators-*.json",
+        "examples-*.json",
+        "*/examples-*.json",
+        "service-*.json",
+        "*/service-*.json",
+        "waiters-*.json",
+        "*/waiters-*.json",
+        "resources-*.json",
+        "*/resources-*.json",
+        "endpoints-*.json",
+        "*/endpoints-*.json",
+        "tools/*",
+        "tools/**/*",
+        "*/tools/*",
+        "*/tools/**/*",
+        # Note: .cgr, .embedding_cache, .tmp_cache_*, .cgr-* handled by should_exclude()
     }
-    # Combine default excludes with user-provided excludes
-    all_exclude_patterns = default_exclude_patterns.copy()
+
+    # Apply filter preset
+    if filter_preset == "none":
+        # No default filtering - only use user-provided patterns
+        all_exclude_patterns: set[str] = set()
+        logger.debug("JSON filter preset 'none': skipping all default filters")
+    elif filter_preset == "strict":
+        # Strict mode: only process .cgr.json files
+        # We'll handle this specially in should_exclude
+        all_exclude_patterns = default_exclude_patterns.copy()
+        logger.debug("JSON filter preset 'strict': only processing .cgr.json files")
+    else:
+        # lenient (default): use default patterns
+        all_exclude_patterns = default_exclude_patterns.copy()
+
+    # Combine with user-provided excludes
     if exclude_patterns:
         all_exclude_patterns.update(set(exclude_patterns))
 
@@ -372,18 +528,31 @@ def _load_json_files_with_errors(
         return isinstance(data, dict) and "entities" in data
 
     def should_exclude(file_path: Path) -> bool:
+        # Strict mode: only allow .cgr.json files
+        if filter_preset == "strict":
+            if not file_path.name.endswith(".cgr.json"):
+                return True
+
         if file_path.name.startswith(".tmp_cache_") and file_path.suffix == ".json":
             return True
 
         # Exclude CGR internal cache files (e.g., .cgr-hash-cache.json)
+        # Note: This only excludes files STARTING with .cgr- (like .cgr-hash-cache.json)
+        # NOT files inside the .cgr directory
         if file_path.name.startswith(".cgr-") and file_path.suffix == ".json":
             return True
 
+        # Exclude .embedding_cache and .egg-info directories
         if any(
-            part in {".embedding_cache", ".cgr"} or part.endswith(".egg-info")
+            part == ".embedding_cache" or part.endswith(".egg-info")
             for part in file_path.parts
         ):
             return True
+
+        # Exclude hidden directories (except .cgr which is allowed for CGR data)
+        for part in file_path.parts[:-1]:  # Don't check the filename itself
+            if part.startswith(".") and part != ".cgr":
+                return True
 
         try:
             relative_path = str(file_path.relative_to(base_path))
@@ -397,19 +566,20 @@ def _load_json_files_with_errors(
 
     if path.is_file() and path.suffix == ".json":
         if should_exclude(path):
-            return [], []
+            return [], [], 1
         try:
             with open(path, encoding="utf-8") as json_file:
                 data = json.load(json_file)
                 purpose, guidance = _detect_json_purpose(data, path)
-                if purpose == "ingestion_payload":
+                if purpose == JSONFilePurpose.ENTITY_DATA:
                     json_files.append((path, data))
                 elif guidance:
-                    load_errors.append(f"Skipping {path}: {guidance}")
+                    skip_count += 1
+                    logger.debug(f"Skipping {path}: {guidance}")
         except Exception as exc:
             load_errors.append(f"Skipping invalid JSON file {path}: {exc}")
     elif path.is_dir():
-        skipped_files_with_guidance: list[tuple[Path, str]] = []
+        skipped_files_with_guidance: list[tuple[Path, str, JSONFilePurpose]] = []
         for file_path in path.rglob("*.json"):
             if should_exclude(file_path):
                 continue
@@ -417,38 +587,51 @@ def _load_json_files_with_errors(
                 with open(file_path, encoding="utf-8") as json_file:
                     data = json.load(json_file)
                     purpose, guidance = _detect_json_purpose(data, file_path)
-                    if purpose == "ingestion_payload":
+                    if purpose == JSONFilePurpose.ENTITY_DATA:
                         json_files.append((file_path, data))
                     elif guidance:
-                        skipped_files_with_guidance.append((file_path, guidance))
+                        skipped_files_with_guidance.append((file_path, guidance, purpose))
             except Exception as exc:
                 load_errors.append(f"Skipping invalid JSON file {file_path}: {exc}")
 
         # Log summary of skipped files with guidance
         if skipped_files_with_guidance:
             purpose_counts: dict[str, int] = {}
-            for fp, guidance in skipped_files_with_guidance:
-                purpose, _ = _detect_json_purpose({}, fp)
-                purpose_counts[purpose] = purpose_counts.get(purpose, 0) + 1
-                load_errors.append(f"Skipping {fp}: {guidance}")
+            for fp, guidance, purpose in skipped_files_with_guidance:
+                purpose_counts[purpose.value] = purpose_counts.get(purpose.value, 0) + 1
+                logger.debug(f"Skipping {fp}: {guidance}")
 
             if purpose_counts:
                 summary = ", ".join(f"{count} {purpose.replace('_', ' ')}"
                                    for purpose, count in sorted(purpose_counts.items()))
                 logger.info(f"JSON files skipped: {summary}")
+            skip_count += len(skipped_files_with_guidance)
     else:
         raise ValueError(
             f"Invalid input path: {input_path} (must be .json file or directory containing JSON files)"
         )
 
-    return json_files, load_errors
+    return json_files, load_errors, skip_count
 
 
 def generate_embeddings_for_entities(
     entities: list[dict[str, Any]],
 ) -> tuple[dict[str, list[float]], list[str]]:
+    """Generate embeddings for entities with graceful fallback.
+
+    Returns:
+        Tuple of (entity_id_to_embedding_dict, warnings_list)
+    """
     embeddings: dict[str, list[float]] = {}
-    errors: list[str] = []
+    warnings: list[str] = []
+
+    available, reason = are_json_embeddings_available()
+    if not available:
+        msg = f"Embeddings not generated: {reason}"
+        if settings.JSON_EMBEDDINGS_REQUIRED:
+            raise RuntimeError(msg)
+        warnings.append(msg)
+        return embeddings, warnings
 
     texts: list[str] = []
     entity_ids: list[str] = []
@@ -462,31 +645,36 @@ def generate_embeddings_for_entities(
         entity_ids.append(entity_id)
 
     if not texts:
-        return embeddings, errors
+        return embeddings, warnings
 
-    cached_embeddings = embedding_cache.get_many(texts)
-    uncached_texts: list[str] = []
-    uncached_ids: list[str] = []
+    try:
+        cache = _get_embedding_cache()
+        cached_embeddings = cache.get_many(texts)
+        uncached_texts: list[str] = []
+        uncached_ids: list[str] = []
 
-    for index, (text, entity_id) in enumerate(zip(texts, entity_ids)):
-        if index in cached_embeddings:
-            embeddings[entity_id] = cached_embeddings[index]
-        else:
-            uncached_texts.append(text)
-            uncached_ids.append(entity_id)
+        for index, (text, entity_id) in enumerate(zip(texts, entity_ids)):
+            if index in cached_embeddings:
+                embeddings[entity_id] = cached_embeddings[index]
+            else:
+                uncached_texts.append(text)
+                uncached_ids.append(entity_id)
 
-    if uncached_texts:
-        try:
-            generated_embeddings = embedding_provider.embed_batch(uncached_texts)
+        if uncached_texts:
+            provider = _get_embedding_provider()
+            generated_embeddings = provider.embed_batch(uncached_texts)
             for index, (entity_id, embedding) in enumerate(
                 zip(uncached_ids, generated_embeddings)
             ):
                 embeddings[entity_id] = embedding
-                embedding_cache.put(uncached_texts[index], embedding)
-        except Exception as exc:
-            errors.append(f"Embedding generation failed: {exc}")
+                cache.put(uncached_texts[index], embedding)
+    except Exception as exc:
+        msg = f"Embedding generation failed: {exc}"
+        if settings.JSON_EMBEDDINGS_REQUIRED:
+            raise RuntimeError(msg) from exc
+        warnings.append(msg)
 
-    return embeddings, errors
+    return embeddings, warnings
 
 
 def _prepare_json_file(
@@ -1101,6 +1289,17 @@ def recreate_json_vector_index(
     clear_existing_embeddings: bool = True,
     force_recreate: bool = False,
 ) -> None:
+    if not settings.JSON_EMBEDDINGS_ENABLED:
+        logger.info("JSON embeddings disabled, skipping vector index creation")
+        return
+
+    available, reason = are_json_embeddings_available()
+    if not available:
+        logger.info(
+            f"JSON embeddings not available ({reason}), skipping vector index creation"
+        )
+        return
+
     effective_dimension = dimension or settings.get_effective_vector_dim("json")
     index_name = settings.JSON_MEMGRAPH_VECTOR_INDEX_NAME
     capacity = settings.JSON_MEMGRAPH_VECTOR_CAPACITY
@@ -1203,10 +1402,12 @@ def _ingest_entity_file(
     summary = OperationSummary()
 
     if not dry_run:
-        entity_embeddings, embed_errors = generate_embeddings_for_entities(
+        entity_embeddings, embed_warnings = generate_embeddings_for_entities(
             prepared_file.entities
         )
-        summary.errors.extend(embed_errors)
+        for warning in embed_warnings:
+            logger.warning(warning)
+        summary.errors.extend(embed_warnings)
 
     if dry_run:
         ingest_summary = ingest_entities(
@@ -1412,21 +1613,28 @@ def ingest_json_data(
     parallel_workers: int = settings.JSON_PARALLEL_WORKERS,
     metadata_override: dict[str, Any] | None = None,
     exclude_patterns: list[str] | None = None,
+    filter_preset: str = "lenient",
 ) -> IngestionResult:
     del conflict_resolution
 
     result = IngestionResult(dataset_ids=[dataset_id] if dataset_id else [], dry_run=dry_run)
 
+    if not settings.JSON_ENABLED:
+        result.errors.append("JSON ingestion disabled via JSON_ENABLED=False")
+        logger.error("JSON ingestion is disabled")
+        return result
+
     try:
         load_errors: list[str] = []
+        skip_count = 0
         if pre_loaded_data is not None:
             json_files = pre_loaded_data
         else:
-            json_files, load_errors = _load_json_files_with_errors(
-                input_path, exclude_patterns
+            json_files, load_errors, skip_count = _load_json_files_with_errors(
+                input_path, exclude_patterns, filter_preset
             )
 
-        result.files_skipped += len(load_errors)
+        result.files_skipped += skip_count
         result.errors.extend(load_errors)
         logger.info(f"Loaded {len(json_files)} JSON file(s) for ingestion")
 
@@ -1460,7 +1668,9 @@ def ingest_json_data(
             return result
 
         if prepared_files and not dry_run:
-            _ensure_json_vector_index(batch_size)
+            embed_available, _ = are_json_embeddings_available()
+            if embed_available:
+                _ensure_json_vector_index(batch_size)
 
         dataset_references = _build_dataset_references(prepared_files)
 
@@ -1480,11 +1690,15 @@ def ingest_json_data(
                     for prepared_file in prepared_files
                 ]
                 for future in concurrent.futures.as_completed(entity_futures):
-                    _merge_summary_into_result(
-                        result,
-                        future.result(),
-                        is_entity_summary=True,
-                    )
+                    try:
+                        worker_result = future.result()
+                        _merge_summary_into_result(result, worker_result, is_entity_summary=True)
+                    except Exception as exc:
+                        logger.error(f"Worker failed: {exc}")
+                        failure = OperationSummary()
+                        failure.failed = 1
+                        failure.errors.append(f"Worker execution failed: {exc}")
+                        _merge_summary_into_result(result, failure, is_entity_summary=True)
 
                 relationship_futures = [
                     executor.submit(
@@ -1502,11 +1716,15 @@ def ingest_json_data(
                     for prepared_file in prepared_files
                 ]
                 for future in concurrent.futures.as_completed(relationship_futures):
-                    _merge_summary_into_result(
-                        result,
-                        future.result(),
-                        is_entity_summary=False,
-                    )
+                    try:
+                        worker_result = future.result()
+                        _merge_summary_into_result(result, worker_result, is_entity_summary=False)
+                    except Exception as exc:
+                        logger.error(f"Relationship worker failed: {exc}")
+                        failure = OperationSummary()
+                        failure.failed = 1
+                        failure.errors.append(f"Relationship worker execution failed: {exc}")
+                        _merge_summary_into_result(result, failure, is_entity_summary=False)
         else:
             for prepared_file in prepared_files:
                 _merge_summary_into_result(

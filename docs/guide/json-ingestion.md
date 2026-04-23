@@ -136,6 +136,10 @@ All ingested JSON files must conform to the official ingestion schema. Entities 
 - Reuses existing embedding cache to avoid duplicate work for identical content
 - Embeddings are stored directly on `JsonEntity` nodes in the JSON Memgraph instance
 
+**Optional Embeddings**: JSON embeddings are optional. If your embedding provider is unavailable (e.g., PyTorch is not installed for local embeddings), ingestion continues without embeddings and entities are stored without vector properties. You can control this behavior with:
+- `CGR_JSON_EMBEDDINGS_ENABLED=false` — disable JSON embeddings entirely
+- `CGR_JSON_EMBEDDINGS_REQUIRED=true` — fail ingestion when embeddings are unavailable
+
 ### 3. Knowledge Graph Ingestion
 - Entities are merged (upserted) using `dataset_id + entity.id` as the unique key
 - Relationships are created after entity ingestion, so cross-file references resolve correctly

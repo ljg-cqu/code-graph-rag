@@ -3,10 +3,10 @@ from __future__ import annotations
 import difflib
 from pathlib import Path
 
-import diff_match_patch
 from loguru import logger
-from pydantic_ai import Tool
 from tree_sitter import Node, Parser
+
+from codebase_rag.compat.pydantic_ai import Tool
 
 from .. import constants as cs
 from .. import logs as ls
@@ -19,6 +19,7 @@ from ..schemas import EditResult
 from ..types_defs import FunctionMatch
 from ..utils.path_utils import is_path_allowed
 from . import tool_descriptions as td
+from ._diff_patch import DIFF_PATCH_AVAILABLE, get_diff_match_patch
 
 
 class FileEditor:
@@ -29,7 +30,14 @@ class FileEditor:
         # If project_root is a file, use its parent directory
         if self.project_root.is_file():
             self.project_root = self.project_root.parent
-        self.dmp = diff_match_patch.diff_match_patch()
+        if DIFF_PATCH_AVAILABLE:
+            self.dmp = get_diff_match_patch()
+        else:
+            self.dmp = None
+            logger.warning(
+                "FileEditor: diff-match-patch not available, "
+                "some features will be disabled"
+            )
         self.parsers, _ = load_parsers()
         logger.info(ls.FILE_EDITOR_INIT.format(root=self.project_root))
 
@@ -168,6 +176,9 @@ class FileEditor:
         new_code: str,
         line_number: int | None = None,
     ) -> str | None:
+        if self.dmp is None:
+            logger.error("diff-match-patch required for diff generation")
+            return None
         original_code = self.get_function_source_code(
             file_path, function_name, line_number
         )
@@ -186,6 +197,9 @@ class FileEditor:
         return "".join(diff)
 
     def apply_patch_to_file(self, file_path: str, patch_text: str) -> bool:
+        if self.dmp is None:
+            logger.error("diff-match-patch required for patch application")
+            return False
         try:
             with open(file_path, encoding=cs.ENCODING_UTF8) as f:
                 original_content = f.read()
@@ -211,6 +225,9 @@ class FileEditor:
     def replace_code_block(
         self, file_path: str, target_block: str, replacement_block: str
     ) -> bool:
+        if self.dmp is None:
+            logger.error("diff-match-patch required for surgical editing")
+            return False
         logger.info(ls.TOOL_FILE_EDIT_SURGICAL.format(path=file_path))
         try:
             # Resolve path correctly, handle absolute paths

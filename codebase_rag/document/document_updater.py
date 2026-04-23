@@ -19,6 +19,15 @@ from .. import constants as cs
 from .. import logs as ls
 from ..config import load_cgrignore_patterns, settings
 from ..embeddings import get_embedding_provider
+from ..services import (
+    ErrorContext,
+    ErrorGuidance,
+    LLMErrorGuidance,
+    UserExpertiseLevel,
+    classify_memgraph_failure,
+    FailureType,
+    format_user_error,
+)
 from ..services.graph_service import MemgraphIngestor
 from ..types_defs import ResultRow
 from ..utils.path_utils import should_skip_path
@@ -34,6 +43,27 @@ from .error_handling import (
 from .extractors import ExtractedDocument, ExtractedSection, get_extractor_for_file
 from .utils.reference_extractor import extract_code_references
 from .versioning import ContentVersionTracker, VersionCache
+
+
+class DocumentGraphUnavailableError(Exception):
+    """Raised when the document graph is not available."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        suggested_action: str | None = None,
+        original_error: Exception | None = None,
+        failure_type: FailureType | None = None,
+        should_retry: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.message = message
+        self.suggested_action = suggested_action
+        self.original_error = original_error
+        self.failure_type = failure_type
+        self.should_retry = should_retry
+
 
 # Workspace must be a safe identifier (alphanumeric, underscore, hyphen)
 # Same validation pattern as document_query.py for consistency
@@ -52,24 +82,173 @@ def _find_vector_index(
 
 def _read_vector_index_dimension(
     index_info: ResultRow | None,
+    index_name: str = "unknown",
 ) -> int | None:
+    """Read dimension from vector index info with improved type handling.
+
+    Args:
+        index_info: Row from database query
+        index_name: Name of the index for logging context
+
+    Returns:
+        Validated dimension as int, or None if not found/invalid
+    """
     if index_info is None:
+        logger.debug(f"Index '{index_name}': no info available")
         return None
 
     raw_dimension = index_info.get("dimension")
     if raw_dimension is None:
+        logger.debug(f"Index '{index_name}': dimension field not found")
         return None
 
+    # Handle int directly
     if isinstance(raw_dimension, int):
-        return raw_dimension
+        return _validate_dimension(raw_dimension, index_name)
 
-    if not isinstance(raw_dimension, str):
+    # Handle float (e.g., 768.0 from some database configs)
+    if isinstance(raw_dimension, float):
+        if raw_dimension.is_integer():
+            dimension = int(raw_dimension)
+            logger.debug(
+                f"Index '{index_name}': converted float {raw_dimension} to int {dimension}"
+            )
+            return _validate_dimension(dimension, index_name)
+        logger.warning(
+            f"Index '{index_name}': non-integer float dimension {raw_dimension}"
+        )
         return None
 
+    # Handle string
+    if isinstance(raw_dimension, str):
+        try:
+            dimension = int(raw_dimension)
+            return _validate_dimension(dimension, index_name)
+        except ValueError:
+            logger.warning(
+                f"Index '{index_name}': invalid string dimension '{raw_dimension}'"
+            )
+            return None
+
+    # Unknown type
+    logger.warning(
+        f"Index '{index_name}': unexpected dimension type {type(raw_dimension).__name__}: {raw_dimension!r}"
+    )
+    return None
+
+
+def _validate_dimension(dimension: int, index_name: str) -> int | None:
+    """Validate dimension value range."""
+    if dimension <= 0:
+        logger.warning(
+            f"Index '{index_name}': invalid dimension {dimension} (must be positive)"
+        )
+        return None
+    if dimension > 10000:
+        logger.warning(
+            f"Index '{index_name}': dimension {dimension} exceeds max (10000)"
+        )
+        return None
+    return dimension
+
+
+def _check_graph_availability(
+    ingestor: MemgraphIngestor,
+    graph_type: str = "document",
+) -> None:
+    """Check if the graph database is available (sync version with static fallback).
+
+    Performs a simple health check query and raises DocumentGraphUnavailableError
+    with actionable guidance if the graph is not available.
+
+    Per LLM-First design:
+    - Classification is deterministic (via classify_memgraph_failure)
+    - User-facing guidance uses static fallback (for sync contexts)
+
+    For async version with LLM guidance, use _check_graph_availability_async.
+
+    Args:
+        ingestor: MemgraphIngestor instance to test
+        graph_type: "code" or "document" for error messages
+
+    Raises:
+        DocumentGraphUnavailableError: If the graph is not available
+    """
     try:
-        return int(raw_dimension)
-    except (TypeError, ValueError):
-        return None
+        ingestor.fetch_all("RETURN 1 as health")
+    except Exception as e:
+        # 1. Deterministic classification (fast, reliable)
+        classification = classify_memgraph_failure(e)
+
+        # 2. Use static fallback guidance (no LLM in sync context)
+        guidance_generator = LLMErrorGuidance(model_call=None)
+        context = ErrorContext(
+            operation_type="document_indexing" if graph_type == "document" else "code_ingestion",
+            error_category=classification.failure_type,
+            graph_type=graph_type,
+            embedding_provider=settings.EMBEDDING_PROVIDER,
+            user_expertise=UserExpertiseLevel.INTERMEDIATE,
+        )
+        # Note: Using _get_static_guidance directly to avoid async
+        guidance = guidance_generator._get_static_guidance(e, context, classification)
+
+        raise DocumentGraphUnavailableError(
+            message=guidance.explanation,
+            suggested_action=guidance.suggested_fix,
+            original_error=e,
+            failure_type=classification.failure_type,
+            should_retry=guidance.should_retry,
+        ) from e
+
+
+async def _check_graph_availability_async(
+    ingestor: MemgraphIngestor,
+    graph_type: str = "document",
+    llm_guidance: LLMErrorGuidance | None = None,
+) -> None:
+    """Check if the graph database is available (async version with LLM guidance).
+
+    Performs a simple health check query and raises DocumentGraphUnavailableError
+    with LLM-generated actionable guidance if the graph is not available.
+
+    Per LLM-First design:
+    - Classification is deterministic (via classify_memgraph_failure)
+    - User-facing guidance is LLM-generated (contextual, user-friendly)
+
+    Args:
+        ingestor: MemgraphIngestor instance to test
+        graph_type: "code" or "document" for error messages
+        llm_guidance: Optional LLM guidance generator. If None, uses static fallback.
+
+    Raises:
+        DocumentGraphUnavailableError: If the graph is not available
+    """
+    try:
+        ingestor.fetch_all("RETURN 1 as health")
+    except Exception as e:
+        # 1. Deterministic classification (fast, reliable)
+        classification = classify_memgraph_failure(e)
+
+        # 2. Build error context for LLM guidance
+        context = ErrorContext(
+            operation_type="document_indexing" if graph_type == "document" else "code_ingestion",
+            error_category=classification.failure_type,
+            graph_type=graph_type,
+            embedding_provider=settings.EMBEDDING_PROVIDER,
+            user_expertise=UserExpertiseLevel.INTERMEDIATE,
+        )
+
+        # 3. Generate LLM-based guidance (or fallback to static)
+        guidance_generator = llm_guidance or LLMErrorGuidance(model_call=None)
+        guidance = await guidance_generator.generate_guidance(e, context, classification)
+
+        raise DocumentGraphUnavailableError(
+            message=guidance.explanation,
+            suggested_action=guidance.suggested_fix,
+            original_error=e,
+            failure_type=classification.failure_type,
+            should_retry=guidance.should_retry,
+        ) from e
 
 
 def ensure_document_vector_index(
@@ -105,7 +284,7 @@ def ensure_document_vector_index(
     except Exception:
         existing_index = None
 
-    existing_dimension = _read_vector_index_dimension(existing_index)
+    existing_dimension = _read_vector_index_dimension(existing_index, index_name)
     needs_recreate = force_recreate
 
     if existing_index is not None and not force_recreate:
@@ -185,6 +364,10 @@ class DocumentGraphUpdater:
         exclude_paths: frozenset[str] | None = None,
         unignore_paths: frozenset[str] | None = None,
         concept_extractor: ConceptExtractor | None = None,
+        embeddings_enabled: bool | None = None,
+        embeddings_required: bool | None = None,
+        username: str | None = None,
+        password: str | None = None,
     ) -> None:
         self.host = host
         self.port = port
@@ -202,6 +385,16 @@ class DocumentGraphUpdater:
         )
         self._concept_indexes_ensured = False
 
+        # Embedding mode configuration (graceful degradation support)
+        self.embeddings_enabled = (
+            embeddings_enabled if embeddings_enabled is not None
+            else settings.DOC_EMBEDDINGS_ENABLED
+        )
+        self.embeddings_required = (
+            embeddings_required if embeddings_required is not None
+            else settings.DOC_EMBEDDINGS_REQUIRED
+        )
+
         # Determine base path for metadata files
         # If repo_path is a file, use its parent directory
         if self.repo_path.is_file():
@@ -217,6 +410,8 @@ class DocumentGraphUpdater:
             raise ValueError(f"repo_path {repo_path} is outside allowed boundaries")
 
         self.batch_size = batch_size
+        self.username = username if username is not None else settings.DOC_MEMGRAPH_USERNAME
+        self.password = password if password is not None else settings.DOC_MEMGRAPH_PASSWORD
 
         # Ensure metadata directory exists before initializing caches
         cgr_dir = self.base_path / ".cgr"
@@ -325,13 +520,24 @@ class DocumentGraphUpdater:
                 batch_size=self.batch_size,
                 connection_timeout=settings.DOC_MEMGRAPH_CONNECTION_TIMEOUT,
             ) as ingestor:
+                # Pre-flight health check with actionable error messages
+                _check_graph_availability(ingestor, graph_type="document")
+
                 ingestor.ensure_constraints()
                 self._ensure_vector_index(ingestor)
                 self._ensure_document_indexes(ingestor)
                 self._refresh_code_reference_index()
                 documents = self._collect_documents()
-                self._delete_stale_documents(documents, ingestor)
+                deleted_stale = self._delete_stale_documents(documents, ingestor)
+                deleted_excluded = self._delete_excluded_documents(documents, ingestor)
                 stats["total_documents"] = len(documents)
+                stats["cleanup_deleted_files"] = deleted_stale
+                stats["cleanup_excluded_files"] = deleted_excluded
+
+                if deleted_stale > 0 or deleted_excluded > 0:
+                    logger.info(
+                        f"Cleanup: {deleted_stale} deleted files, {deleted_excluded} excluded files removed"
+                    )
 
                 total_documents = len(documents)
                 logger.info(f"Found {total_documents} documents to index")
@@ -347,7 +553,7 @@ class DocumentGraphUpdater:
                         elif result == "skipped":
                             stats["skipped"] += 1
                     except ExtractionException as e:
-                        logger.error(
+                        logger.opt(exception=True).error(
                             f"Failed to process {doc_path}: {type(e).__name__}: {e}"
                         )
                         stats["failed"] += 1
@@ -359,7 +565,7 @@ class DocumentGraphUpdater:
                                 f"Could not enqueue error for {doc_path}: {dlq_error}"
                             )
                     except Exception as e:
-                        logger.error(
+                        logger.opt(exception=True).error(
                             f"Failed to process {doc_path}: {type(e).__name__}: {e}"
                         )
                         stats["failed"] += 1
@@ -380,7 +586,7 @@ class DocumentGraphUpdater:
                 try:
                     ingestor.flush_all()
                 except Exception as e:
-                    logger.error(
+                    logger.opt(exception=True).error(
                         f"Failed to flush batch to graph: {type(e).__name__}: {e}"
                     )
                     stats["failed"] += stats["indexed"]
@@ -435,6 +641,9 @@ class DocumentGraphUpdater:
             batch_size=self.batch_size,
             connection_timeout=settings.DOC_MEMGRAPH_CONNECTION_TIMEOUT,
         ) as ingestor:
+            # Pre-flight health check with LLM-generated actionable error messages
+            await _check_graph_availability_async(ingestor, graph_type="document")
+
             await asyncio.to_thread(ingestor.ensure_constraints)
             await asyncio.to_thread(self._ensure_vector_index, ingestor)
             await asyncio.to_thread(self._ensure_document_indexes, ingestor)
@@ -463,7 +672,7 @@ class DocumentGraphUpdater:
                         elif result == "skipped":
                             stats["skipped"] += 1
                     except ExtractionException as e:
-                        logger.error(
+                        logger.opt(exception=True).error(
                             f"Failed to process {doc_path}: {type(e).__name__}: {e}"
                         )
                         stats["failed"] += 1
@@ -475,7 +684,7 @@ class DocumentGraphUpdater:
                                 f"Could not enqueue error for {doc_path}: {dlq_error}"
                             )
                     except Exception as e:
-                        logger.error(
+                        logger.opt(exception=True).error(
                             f"Failed to process {doc_path}: {type(e).__name__}: {e}"
                         )
                         stats["failed"] += 1
@@ -496,7 +705,7 @@ class DocumentGraphUpdater:
                 try:
                     await asyncio.to_thread(ingestor.flush_all)
                 except Exception as e:
-                    logger.error(
+                    logger.opt(exception=True).error(
                         f"Failed to flush batch to graph: {type(e).__name__}: {e}"
                     )
                     stats["failed"] += stats["indexed"]
@@ -723,6 +932,71 @@ class DocumentGraphUpdater:
 
         return len(stale_paths)
 
+    def _delete_excluded_documents(
+        self,
+        current_documents: list[Path],
+        ingestor: MemgraphIngestor,
+    ) -> int:
+        """Remove documents that are now excluded by .cgrignore patterns.
+
+        This handles the case where:
+        - Files were previously indexed
+        - User added patterns to .cgrignore to exclude them
+        - Files still exist on disk
+
+        Args:
+            current_documents: List of documents that should be indexed (after filtering)
+            ingestor: MemgraphIngestor instance
+
+        Returns:
+            Number of excluded documents removed from the graph.
+        """
+        if not self.repo_path.is_dir():
+            return 0
+
+        # Get all stored documents for this workspace
+        stored_documents = ingestor.fetch_all(
+            "MATCH (d:Document {workspace: $workspace}) RETURN d.path AS path",
+            {"workspace": self.workspace},
+        )
+
+        current_paths = {str(doc_path) for doc_path in current_documents}
+        excluded_count = 0
+
+        for row in stored_documents:
+            stored_path = row.get("path")
+            if not isinstance(stored_path, str) or not stored_path:
+                continue
+
+            # Check if document is in scope
+            if not self._is_document_in_scope(stored_path):
+                continue
+
+            # If document is in current_paths, it will be processed/re-indexed
+            if stored_path in current_paths:
+                continue
+
+            # Document exists on disk but is not in current_paths
+            # This means it was excluded by .cgrignore or other filters
+            stored_path_obj = Path(stored_path)
+            if stored_path_obj.exists():
+                # File exists but is excluded - remove from graph
+                logger.info(
+                    f"Removing excluded document from graph: {stored_path} "
+                    f"(matched by .cgrignore pattern)"
+                )
+                self._delete_document_nodes(stored_path, ingestor)
+                self.version_cache.remove(stored_path)
+                excluded_count += 1
+
+        if excluded_count > 0:
+            logger.info(
+                f"Removed {excluded_count} excluded documents from graph "
+                f"for workspace {self.workspace}"
+            )
+
+        return excluded_count
+
     def _is_document_in_scope(self, doc_path: str) -> bool:
         stored_path = Path(doc_path)
         if not stored_path.is_absolute():
@@ -734,6 +1008,136 @@ class DocumentGraphUpdater:
             return False
 
         return True
+
+    def preview_excluded_documents(self) -> list[tuple[str, str | None]]:
+        """Preview documents that would be removed by cleanup.
+
+        Returns:
+            List of (path, pattern) tuples for documents that would be removed.
+            Pattern is None if no specific pattern matched.
+        """
+        from ..utils.path_utils import should_skip_path
+
+        excluded: list[tuple[str, str | None]] = []
+
+        with MemgraphIngestor(
+            host=self.host,
+            port=self.port,
+            batch_size=self.batch_size,
+            username=self.username,
+            password=self.password,
+            connection_timeout=settings.DOC_MEMGRAPH_CONNECTION_TIMEOUT,
+        ) as ingestor:
+            stored_documents = ingestor.fetch_all(
+                "MATCH (d:Document {workspace: $workspace}) RETURN d.path AS path",
+                {"workspace": self.workspace},
+            )
+
+            current_documents = self._collect_documents()
+            current_paths = {str(doc_path) for doc_path in current_documents}
+
+            for row in stored_documents:
+                stored_path = row.get("path")
+                if not isinstance(stored_path, str) or not stored_path:
+                    continue
+                if not self._is_document_in_scope(stored_path):
+                    continue
+                if stored_path in current_paths:
+                    continue
+
+                stored_path_obj = Path(stored_path)
+                if stored_path_obj.exists():
+                    excluded.append((stored_path, "matched .cgrignore pattern"))
+
+        return excluded
+
+    def cleanup_excluded_documents(self) -> int:
+        """Remove excluded documents from graph (standalone cleanup).
+
+        Returns:
+            Number of documents removed.
+        """
+        with MemgraphIngestor(
+            host=self.host,
+            port=self.port,
+            batch_size=self.batch_size,
+            username=self.username,
+            password=self.password,
+            connection_timeout=settings.DOC_MEMGRAPH_CONNECTION_TIMEOUT,
+        ) as ingestor:
+            documents = self._collect_documents()
+            return self._delete_excluded_documents(documents, ingestor)
+
+    def check_for_large_excluded_documents(
+        self,
+        chunk_threshold: int = 100,
+        max_display: int = 5,
+    ) -> list[tuple[str, int]]:
+        """Check if large documents that should be excluded are still in the graph.
+
+        LLM-First Design: This is deterministic infrastructure checking.
+        Uses existing .cgrignore patterns and graph queries - no semantic analysis.
+
+        Args:
+            chunk_threshold: Minimum chunks to consider a document "large"
+            max_display: Maximum number of documents to return
+
+        Returns:
+            List of (path, chunk_count) for documents that should be excluded.
+        """
+        from ..utils.path_utils import should_skip_path
+
+        excluded_large_docs: list[tuple[str, int]] = []
+
+        with MemgraphIngestor(
+            host=self.host,
+            port=self.port,
+            batch_size=self.batch_size,
+            username=self.username,
+            password=self.password,
+            connection_timeout=settings.DOC_MEMGRAPH_CONNECTION_TIMEOUT,
+        ) as ingestor:
+            # Find large documents in graph
+            large_docs = ingestor.fetch_all(
+                """
+                MATCH (d:Document {workspace: $workspace})
+                OPTIONAL MATCH (d)<-[:BELONGS_TO_DOCUMENT]-(c:Chunk)
+                WITH d, count(c) AS chunk_count
+                WHERE chunk_count >= $threshold
+                RETURN d.path AS path, chunk_count
+                ORDER BY chunk_count DESC
+                LIMIT $limit
+                """,
+                {
+                    "workspace": self.workspace,
+                    "threshold": chunk_threshold,
+                    "limit": max_display * 2,  # Get extra for filtering
+                },
+            )
+
+            for row in large_docs:
+                doc_path = row.get("path")
+                chunk_count = row.get("chunk_count", 0)
+
+                if not doc_path:
+                    continue
+
+                path_obj = Path(doc_path)
+                if not path_obj.exists():
+                    continue
+
+                # Check if this document should now be excluded
+                if should_skip_path(
+                    path_obj,
+                    self.base_path,
+                    exclude_paths=self.exclude_paths,
+                    unignore_paths=self.unignore_paths,
+                ):
+                    excluded_large_docs.append((doc_path, chunk_count))
+                    if len(excluded_large_docs) >= max_display:
+                        break
+
+        return excluded_large_docs
 
     def _refresh_code_reference_index(self) -> None:
         self._code_reference_qns = set()
@@ -851,8 +1255,9 @@ class DocumentGraphUpdater:
 
         # Generate embeddings BEFORE deleting existing nodes
         # This ensures rollback safety: if embedding fails, old data is preserved
+        # Uses graceful degradation: continues without embeddings if unavailable
         chunks = list(self.chunker.chunk_document(doc))
-        embeddings_data = self._prepare_embeddings(doc, chunks)
+        embeddings_data = self._prepare_embeddings_with_fallback(doc, chunks)
 
         # Only delete existing nodes after embeddings are validated
         self._delete_document_nodes(doc.path, ingestor)
@@ -871,18 +1276,16 @@ class DocumentGraphUpdater:
 
         # Extract and store concepts from chunks (sync wrapper)
         if self.concept_extractor and chunks:
-            import asyncio
-
             try:
+                asyncio.get_running_loop()
+                logger.debug(
+                    "Skipping concept extraction in running event loop (sync path)"
+                )
+            except RuntimeError:
                 asyncio.run(
                     self._extract_and_store_concepts(
                         chunks, ingestor, self.workspace
                     )
-                )
-            except RuntimeError:
-                # Event loop already running; fall back to legacy behavior
-                logger.debug(
-                    "Skipping concept extraction in running event loop (sync path)"
                 )
 
         # Update version cache
@@ -992,8 +1395,11 @@ class DocumentGraphUpdater:
         )
 
         # Generate embeddings BEFORE deleting existing nodes (rollback safety)
+        # Uses graceful degradation: continues without embeddings if unavailable
         chunks = list(self.chunker.chunk_document(doc))
-        embeddings_data = await asyncio.to_thread(self._prepare_embeddings, doc, chunks)
+        embeddings_data = await asyncio.to_thread(
+            self._prepare_embeddings_with_fallback, doc, chunks
+        )
 
         # Only delete existing nodes after embeddings are validated
         await asyncio.to_thread(self._delete_document_nodes, doc.path, ingestor)
@@ -1448,10 +1854,118 @@ class DocumentGraphUpdater:
         chunks_list = [c for i, c in non_empty_chunks]
         return (chunks_list, validated_embeddings)
 
+    def _filter_valid_chunks(self, chunks: list) -> list:
+        """Filter out chunks that are too small for meaningful indexing.
+
+        Args:
+            chunks: List of DocumentChunk objects.
+
+        Returns:
+            Filtered list of chunks with meaningful content.
+        """
+        MIN_CHUNK_TOKENS = 10
+        return [
+            c for c in chunks
+            if c.content.strip() and getattr(c, 'token_count', 0) >= MIN_CHUNK_TOKENS
+        ]
+
+    def _prepare_embeddings_with_fallback(
+        self,
+        doc: ExtractedDocument,
+        chunks: list,
+    ) -> tuple[list, list[list[float]] | None]:
+        """Generate embeddings with graceful degradation.
+
+        LLM-First: Fallback decision is deterministic (Python).
+        User messaging is handled by logging and error templates.
+
+        Args:
+            doc: Extracted document.
+            chunks: List of DocumentChunk objects.
+
+        Returns:
+            Tuple of (chunks, embeddings or None if unavailable).
+        """
+        if not self.embeddings_enabled:
+            logger.info(f"Embeddings disabled for {doc.path}, storing structure only")
+            return (self._filter_valid_chunks(chunks), None)
+
+        try:
+            return self._prepare_embeddings(doc, chunks)
+        except Exception as e:
+            if self.embeddings_required:
+                # User explicitly requires embeddings - fail
+                raise
+
+            # Try fallback to local if configured and not already using local
+            if settings.EMBEDDING_FALLBACK_TO_LOCAL:
+                provider_name = self._embedding_provider.__class__.__name__
+                if provider_name != "LocalEmbeddingProvider":
+                    try:
+                        logger.warning(
+                            f"Primary embedding provider failed for {doc.path}, "
+                            f"attempting local fallback: {type(e).__name__}: {e}"
+                        )
+                        from ..embeddings.local import get_local_embedding_provider
+                        fallback_provider = get_local_embedding_provider(
+                            model_id=settings.EMBEDDING_FALLBACK_MODEL
+                        )
+                        # Retry with fallback provider using same logic as _prepare_embeddings
+                        return self._embed_with_fallback_provider(
+                            doc, self._filter_valid_chunks(chunks), fallback_provider
+                        )
+                    except Exception as fallback_error:
+                        logger.warning(
+                            f"Local fallback also failed: {type(fallback_error).__name__}: {fallback_error}"
+                        )
+
+            # Graceful degradation: continue without embeddings
+            logger.warning(
+                f"Embedding generation failed for {doc.path}, "
+                f"continuing with structural-only indexing: {type(e).__name__}: {e}"
+            )
+            return (self._filter_valid_chunks(chunks), None)
+
+    def _embed_with_fallback_provider(
+        self,
+        doc: ExtractedDocument,
+        chunks: list,
+        provider,
+    ) -> tuple[list, list[list[float]]]:
+        """Embed chunks with a fallback provider.
+
+        Args:
+            doc: Extracted document.
+            chunks: Pre-filtered list of valid chunks.
+            provider: Fallback embedding provider.
+
+        Returns:
+            Tuple of (chunks, embeddings).
+        """
+        if not chunks:
+            return ([], [])
+
+        chunk_contents = [c.content for c in chunks]
+        batch_size = max(1, settings.VECTOR_EMBEDDING_BATCH_SIZE)
+        chunk_count = len(chunks)
+
+        embeddings: list[list[float]] = []
+        for start in range(0, chunk_count, batch_size):
+            batch_contents = chunk_contents[start : start + batch_size]
+            batch_embeddings = provider.embed_batch(
+                batch_contents, batch_size=len(batch_contents)
+            )
+            embeddings.extend(batch_embeddings)
+
+        logger.info(
+            f"Successfully embedded {len(chunks)} chunks for {doc.path} using fallback provider"
+        )
+        return (chunks, embeddings)
+
     def _store_chunks_with_embeddings(
         self,
         doc: ExtractedDocument,
-        embeddings_data: tuple[list, list[list[float]]],
+        embeddings_data: tuple[list, list[list[float]] | None],
         section_info: list[dict],
         ingestor: MemgraphIngestor,
         indexed_at: str,
@@ -1460,7 +1974,7 @@ class DocumentGraphUpdater:
 
         Args:
             doc: Extracted document
-            embeddings_data: Tuple of (non_empty_chunks, embeddings) from _prepare_embeddings
+            embeddings_data: Tuple of (non_empty_chunks, embeddings or None) from _prepare_embeddings_with_fallback
             section_info: List of section info dicts for chunk-to-section matching
             ingestor: MemgraphIngestor instance
             indexed_at: ISO timestamp for the indexing operation
@@ -1490,6 +2004,65 @@ class DocumentGraphUpdater:
         # (shouldn't happen with synthetic section creation, but safety fallback)
         fallback_section = section_info[0]
 
+        # Handle no-embeddings mode (graceful degradation)
+        if embeddings is None:
+            logger.info(
+                f"Storing {len(non_empty_chunks)} chunks without embeddings for {doc.path} "
+                f"(structural-only indexing)"
+            )
+            for chunk in non_empty_chunks:
+                chunk_reference_names = self._extract_chunk_reference_names(chunk.content)
+                resolved_chunk_references = self._resolve_code_reference_names(
+                    chunk_reference_names
+                )
+                # Store chunk without embedding property
+                ingestor.ensure_node_batch(
+                    cs.NodeLabel.CHUNK.value,
+                    {
+                        cs.UniqueKeyType.QUALIFIED_NAME.value: chunk.qualified_name,
+                        "workspace": self.workspace,
+                        "content": chunk.content,
+                        "token_count": chunk.token_count,
+                        "section_title": chunk.section_title,
+                        "start_line": chunk.start_line,
+                        "end_line": chunk.end_line,
+                        "code_references": chunk_reference_names,
+                        "resolved_code_references": resolved_chunk_references,
+                        "resolved_code_reference_count": len(resolved_chunk_references),
+                        # No embedding property - structural only
+                        "indexed_at": indexed_at,
+                    },
+                )
+                ingestor.ensure_relationship_batch(
+                    (cs.NodeLabel.DOCUMENT.value, cs.UniqueKeyType.PATH.value, doc.path),
+                    cs.RelationshipType.CONTAINS_CHUNK.value,
+                    (
+                        cs.NodeLabel.CHUNK.value,
+                        cs.UniqueKeyType.QUALIFIED_NAME.value,
+                        chunk.qualified_name,
+                    ),
+                )
+
+                # Find matching section for this chunk
+                matching_section = self._find_section_for_chunk(chunk, section_info)
+                target_section = matching_section or fallback_section
+                ingestor.ensure_relationship_batch(
+                    (
+                        cs.NodeLabel.CHUNK.value,
+                        cs.UniqueKeyType.QUALIFIED_NAME.value,
+                        chunk.qualified_name,
+                    ),
+                    cs.RelationshipType.BELONGS_TO_SECTION.value,
+                    (
+                        cs.NodeLabel.SECTION.value,
+                        cs.UniqueKeyType.QUALIFIED_NAME.value,
+                        target_section["qualified_name"],
+                    ),
+                )
+
+            return len(non_empty_chunks)
+
+        # Standard path: store chunks with embeddings
         for chunk, embedding in zip(non_empty_chunks, embeddings):
             chunk_reference_names = self._extract_chunk_reference_names(chunk.content)
             resolved_chunk_references = self._resolve_code_reference_names(
@@ -1754,27 +2327,36 @@ class DocumentGraphUpdater:
 
 
     def _ensure_concept_indexes(self, ingestor: MemgraphIngestor) -> None:
-        """Create indexes for Concept and Topic nodes if they do not exist."""
+        """Create indexes for Concept and Topic nodes if they do not exist.
+
+        Uses Memgraph-compatible syntax: CREATE INDEX ON :Label(property)
+        Handles existence check in Python since Memgraph doesn't support IF NOT EXISTS.
+        """
         if self._concept_indexes_ensured:
             return
-        cypher = """
-        CREATE INDEX concept_qualified_name_index IF NOT EXISTS
-        FOR (c:Concept) ON (c.qualified_name);
 
-        CREATE INDEX concept_workspace_index IF NOT EXISTS
-        FOR (c:Concept) ON (c.workspace);
+        # List of (label, property) tuples for indexes
+        indexes_to_create = [
+            ("Concept", "qualified_name"),
+            ("Concept", "workspace"),
+            ("Topic", "qualified_name"),
+            ("Topic", "workspace"),
+        ]
 
-        CREATE INDEX topic_qualified_name_index IF NOT EXISTS
-        FOR (t:Topic) ON (t.qualified_name);
+        for label, prop in indexes_to_create:
+            cypher = f"CREATE INDEX ON :{label}({prop});"
+            try:
+                ingestor.fetch_all(cypher)
+                logger.debug(f"Created index on :{label}({prop})")
+            except Exception as e:
+                msg = str(e).lower()
+                # Memgraph error messages for existing indexes
+                if any(x in msg for x in ["already exists", "duplicate", "existing", "already created"]):
+                    logger.debug(f"Index on :{label}({prop}) already exists")
+                else:
+                    logger.warning(f"Failed to create index on :{label}({prop}): {e}")
 
-        CREATE INDEX topic_workspace_index IF NOT EXISTS
-        FOR (t:Topic) ON (t.workspace);
-        """
-        try:
-            ingestor.fetch_all(cypher)
-            self._concept_indexes_ensured = True
-        except Exception as e:
-            logger.warning(f"Concept index creation failed (may already exist): {e}")
+        self._concept_indexes_ensured = True
 
     async def _extract_and_store_concepts(
         self,
@@ -1786,7 +2368,8 @@ class DocumentGraphUpdater:
 
         Uses LLM extraction (not regex) for semantic concept identification.
         Extraction runs concurrently with a configurable semaphore to limit
-        parallel LLM calls.
+        parallel LLM calls. Partial failures are tolerated: successful chunks
+        are stored and failed chunks are logged at debug level.
         """
         if not self.concept_extractor:
             return
@@ -1805,14 +2388,24 @@ class DocumentGraphUpdater:
                 )
 
         extraction_results = await asyncio.gather(
-            *[_extract_one(c) for c in chunks]
+            *[_extract_one(c) for c in chunks],
+            return_exceptions=True,
         )
 
         concept_nodes: list[dict[str, object]] = []
         mention_rels: list[dict[str, object]] = []
         concept_relationships: list[tuple[str, str, str, float]] = []
+        failed_count = 0
 
-        for chunk, result in zip(chunks, extraction_results):
+        for idx, result in enumerate(extraction_results):
+            chunk = chunks[idx]
+            if isinstance(result, Exception):
+                failed_count += 1
+                logger.debug(
+                    f"Concept extraction failed for {chunk.qualified_name}: {result}"
+                )
+                continue
+
             for concept in result.concepts:
                 concept_qn = f"{workspace}:{concept.name}"
                 concept_nodes.append({
@@ -1843,6 +2436,12 @@ class DocumentGraphUpdater:
                         rel.strength,
                     )
                 )
+
+        if failed_count:
+            logger.warning(
+                f"Concept extraction partial success: "
+                f"{len(chunks) - failed_count}/{len(chunks)} chunks succeeded"
+            )
 
         logger.info(
             doc_ls.DOC_CONCEPT_EXTRACT_DONE.format(concept_count=len(concept_nodes))
@@ -1946,11 +2545,13 @@ class DocumentGraphUpdater:
         MATCH (d:Document {path: $doc_path, workspace: $workspace})-[:CONTAINS_CHUNK]->(c:Chunk)
         OPTIONAL MATCH (c)-[m:MENTIONS]->(concept:Concept)
         DELETE m
-        WITH DISTINCT concept
+        WITH concept
         WHERE concept IS NOT NULL
-          AND NOT EXISTS {
-            MATCH (:Chunk)-[:MENTIONS]->(concept)
-          }
+        WITH collect(DISTINCT concept) as concepts
+        UNWIND concepts as concept
+        OPTIONAL MATCH (:Chunk)-[remaining:MENTIONS]->(concept)
+        WITH concept, remaining
+        WHERE remaining IS NULL
         DETACH DELETE concept
         RETURN count(concept) as removed_count
         """
@@ -2063,4 +2664,10 @@ def migrate_section_count_property(
     return stats
 
 
-__all__ = ["DocumentGraphUpdater", "migrate_section_count_property"]
+__all__ = [
+    "DocumentGraphUpdater",
+    "DocumentGraphUnavailableError",
+    "_check_graph_availability",
+    "_check_graph_availability_async",
+    "migrate_section_count_property",
+]

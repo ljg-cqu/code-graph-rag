@@ -7,7 +7,7 @@ and merged queries across code and document graphs.
 from __future__ import annotations
 
 from loguru import logger
-from pydantic_ai import Tool
+from codebase_rag.compat.pydantic_ai import Tool
 
 from .. import constants as cs
 from ..config import settings

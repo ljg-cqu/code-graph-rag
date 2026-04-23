@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from loguru import logger
-from pydantic_ai import Tool
+from codebase_rag.compat.pydantic_ai import Tool
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table

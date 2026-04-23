@@ -5,8 +5,8 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
-from pydantic_ai import ApprovalRequired, Tool
 
+from codebase_rag.compat.pydantic_ai import ApprovalRequired, Tool
 from codebase_rag.config import settings
 from codebase_rag.constants import SHELL_SYSTEM_DIRECTORIES
 from codebase_rag.tools.shell_command import (

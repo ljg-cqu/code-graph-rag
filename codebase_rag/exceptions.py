@@ -1,4 +1,11 @@
+from __future__ import annotations
+
 from enum import StrEnum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .services.error_guidance import ErrorGuidance
+    from .services.failure_classifier import FailureClassification
 
 # (H) Provider validation errors
 GOOGLE_GLA_NO_KEY = (
@@ -29,6 +36,18 @@ UNKNOWN_PROVIDER = "Unknown provider '{provider}'. Available providers: {availab
 
 # (H) Dependency errors
 SEMANTIC_EXTRA = "Semantic search requires 'semantic' extra: uv sync --extra semantic"
+SEMANTIC_EXTRA_HELP = (
+    "Install with: uv sync --extra semantic\n"
+    "Or for pip: pip install 'code-graph-rag[semantic]'\n"
+    "Alternative: EMBEDDING_PROVIDER=openai or ollama"
+)
+SEMANTIC_EXTRA_DETAIL = (
+    "Local embedding requires torch and transformers: {error}.\n"
+    + SEMANTIC_EXTRA_HELP
+)
+SEMANTIC_EXTRA_MODEL_LOAD = (
+    "Failed to load embedding model {model}: {error}.\n" + SEMANTIC_EXTRA_HELP
+)
 
 # (H) Configuration errors
 PROVIDER_EMPTY = "Provider name cannot be empty in 'provider:model' format."
@@ -104,6 +123,11 @@ class EmbeddingErrorCode(StrEnum):
 
     # Data errors (3xx)
     DIMENSION_MISMATCH = "E300"
+
+    # Availability errors (4xx) - for fallback scenarios
+    PROVIDER_UNAVAILABLE = "E400"
+    FALLBACK_TO_LOCAL = "E401"
+    NO_EMBEDDINGS_MODE = "E402"
 
 
 class EmbeddingError(Exception):
@@ -441,3 +465,48 @@ class QueryExecutionError(Exception):
             f"Query: {query_preview}\n"
             f"Params: {params}"
         )
+
+
+class GraphQueryError(Exception):
+    """Raised when a graph query fails with LLM-generated user guidance.
+
+    Per LLM-First design:
+    - Classification is deterministic (via FailureClassification)
+    - User-facing guidance is LLM-generated (via ErrorGuidance)
+    """
+
+    def __init__(
+        self,
+        original_error: Exception,
+        classification: FailureClassification,
+        user_guidance: ErrorGuidance,
+        query: str | None = None,
+    ):
+        self.original_error = original_error
+        self.classification = classification
+        self.user_guidance = user_guidance
+        self.query = query
+
+        # Format user-friendly message
+        message = self._format_message()
+        super().__init__(message)
+
+    def _format_message(self) -> str:
+        """Format error message with LLM-generated guidance."""
+        lines = [
+            self.user_guidance.summary,
+            "─" * 40,
+            "",
+            self.user_guidance.explanation,
+            "",
+            "To fix:",
+            f"  {self.user_guidance.suggested_fix}",
+        ]
+
+        if self.user_guidance.code_example:
+            lines.extend(["", f"  {self.user_guidance.code_example}"])
+
+        if self.user_guidance.doc_link:
+            lines.extend(["", f"Documentation: {self.user_guidance.doc_link}"])
+
+        return "\n".join(lines)

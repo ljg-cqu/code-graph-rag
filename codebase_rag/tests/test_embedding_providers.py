@@ -71,6 +71,7 @@ class TestLocalEmbeddingProvider:
             ("microsoft/unixcoder-base", 768),
             ("sentence-transformers/all-MiniLM-L6-v2", 384),
             ("BAAI/bge-small-en-v1.5", 384),
+            ("BAAI/bge-base-en-v1.5", 768),  # Default fallback, matches unixcoder
             ("BAAI/bge-large-en-v1.5", 1024),
         ]
         for model_id, expected_dim in test_cases:

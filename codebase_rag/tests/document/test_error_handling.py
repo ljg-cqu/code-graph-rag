@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
+from codebase_rag.document.concept_extraction import (
+    _parse_quota_reset_time,
+    classify_concept_extraction_error,
+    get_user_facing_message,
+)
 from codebase_rag.document.error_handling import (
     FATAL_ERRORS,
     RECOVERABLE_ERRORS,
@@ -187,3 +194,180 @@ class TestDeadLetterQueue:
         count = queue.clear()
         assert count == 3
         assert queue.size() == 0
+
+
+class MockModelHTTPError(Exception):
+    """Mock ModelHTTPError for testing."""
+
+    def __init__(self, status_code: int, body: dict):
+        self.status_code = status_code
+        self.body = body
+        super().__init__(f"status_code: {status_code}, body: {body}")
+
+
+class TestQuotaErrorClassification:
+    """Test classification of quota and rate limit errors."""
+
+    def test_account_quota_exceeded_detection(self):
+        """Properly detect AccountQuotaExceeded error."""
+        exc = MockModelHTTPError(
+            status_code=429,
+            body={
+                "code": "AccountQuotaExceeded",
+                "message": "You have exceeded the monthly usage quota. "
+                "It will reset at 2026-05-09 23:59:59 +0800 CST.",
+            },
+        )
+
+        error = classify_concept_extraction_error(exc, "test content", "test::chunk")
+
+        assert error.error_type == ErrorType.CONCEPT_QUOTA_EXCEEDED
+        assert error.recoverable is False
+        assert error.retry_after is not None
+
+    def test_rate_limit_transient_detection(self):
+        """Properly detect transient rate limit."""
+        exc = MockModelHTTPError(
+            status_code=429,
+            body={
+                "code": "RateLimitExceeded",
+                "message": "Rate limit exceeded. Please retry after 60 seconds.",
+            },
+        )
+
+        error = classify_concept_extraction_error(exc, "test content", "test::chunk")
+
+        assert error.error_type == ErrorType.CONCEPT_RATE_LIMITED
+        assert error.recoverable is True
+
+    def test_generic_429_defaults_to_rate_limited(self):
+        """Generic 429 should be treated as transient rate limit."""
+        exc = MockModelHTTPError(
+            status_code=429, body={"error": "Too many requests"}
+        )
+
+        error = classify_concept_extraction_error(exc, "test content", "test::chunk")
+
+        assert error.error_type == ErrorType.CONCEPT_RATE_LIMITED
+        assert error.recoverable is True
+
+    def test_quota_in_message_detection(self):
+        """Detect quota errors from message text."""
+        exc = Exception("API Error: You have exceeded your quota. Please upgrade.")
+
+        error = classify_concept_extraction_error(exc, "test content", "test::chunk")
+
+        assert error.error_type == ErrorType.CONCEPT_QUOTA_EXCEEDED
+        assert error.recoverable is False
+
+    def test_error_types_in_recoverable_set(self):
+        """CONCEPT_RATE_LIMITED should be in RECOVERABLE_ERRORS."""
+        assert ErrorType.CONCEPT_RATE_LIMITED in RECOVERABLE_ERRORS
+
+    def test_error_types_in_fatal_set(self):
+        """CONCEPT_QUOTA_EXCEEDED should be in FATAL_ERRORS."""
+        assert ErrorType.CONCEPT_QUOTA_EXCEEDED in FATAL_ERRORS
+
+
+class TestQuotaResetTimeParsing:
+    """Test parsing of quota reset time from error messages."""
+
+    def test_parse_reset_time_with_timezone(self):
+        """Parse reset time with timezone offset."""
+        message = "It will reset at 2026-05-09 23:59:59 +0800 CST"
+        result = _parse_quota_reset_time(message)
+
+        assert result is not None
+        assert result.year == 2026
+        assert result.month == 5
+        assert result.day == 9
+
+    def test_parse_reset_time_none_on_invalid(self):
+        """Return None for messages without reset time."""
+        message = "Some random error message"
+        result = _parse_quota_reset_time(message)
+
+        assert result is None
+
+    def test_parse_reset_time_various_formats(self):
+        """Parse various reset time formats."""
+        # Different timezone offsets
+        messages = [
+            "reset at 2026-12-31 23:59:59 +0000 UTC",
+            "reset at 2026-01-15 12:30:45 -0500 EST",
+            "Quota will reset at 2026-06-20 08:00:00 +0530 IST",
+        ]
+
+        for message in messages:
+            result = _parse_quota_reset_time(message)
+            assert result is not None, f"Failed to parse: {message}"
+            assert isinstance(result, datetime)
+
+
+class TestUserFacingMessages:
+    """Test user-facing error message generation."""
+
+    def test_quota_exceeded_message(self):
+        """Test quota exceeded user message."""
+        error = ExtractionError(
+            path="test::chunk",
+            error_type=ErrorType.CONCEPT_QUOTA_EXCEEDED,
+            message="Quota exceeded",
+            retry_after="2026-05-09T23:59:59+08:00",
+        )
+
+        message = get_user_facing_message(error)
+
+        assert "quota has been exceeded" in message.lower()
+        assert "resets at:" in message.lower()
+        assert "upgrade" in message.lower()
+
+    def test_rate_limited_message(self):
+        """Test rate limited user message."""
+        error = ExtractionError(
+            path="test::chunk",
+            error_type=ErrorType.CONCEPT_RATE_LIMITED,
+            message="Rate limit exceeded",
+        )
+
+        message = get_user_facing_message(error)
+
+        assert "too many requests" in message.lower()
+        assert "backoff" in message.lower()
+
+    def test_auth_error_message(self):
+        """Test auth error user message."""
+        error = ExtractionError(
+            path="test::chunk",
+            error_type=ErrorType.CONCEPT_AUTH_ERROR,
+            message="Invalid API key",
+        )
+
+        message = get_user_facing_message(error)
+
+        assert "authentication" in message.lower() or "api key" in message.lower()
+
+    def test_context_overflow_message(self):
+        """Test context overflow user message."""
+        error = ExtractionError(
+            path="test::chunk",
+            error_type=ErrorType.CONCEPT_CONTEXT_OVERFLOW,
+            message="Context too large",
+        )
+
+        message = get_user_facing_message(error)
+
+        assert "chunk" in message.lower() or "context" in message.lower()
+
+    def test_fallback_message(self):
+        """Test fallback message for unknown error types."""
+        error = ExtractionError(
+            path="test::chunk",
+            error_type=ErrorType.UNKNOWN,
+            message="Something went wrong",
+        )
+
+        message = get_user_facing_message(error)
+
+        assert "failed" in message.lower()
+        assert "something went wrong" in message.lower() or "unknown" in message.lower()

@@ -43,6 +43,11 @@ Labels are automatically synced from [`.github/labels.yml`](.github/labels.yml).
    make dev
    ```
 
+   For local embeddings (optional, needed for document semantic search):
+   ```bash
+   uv sync --extra semantic
+   ```
+
 2. **Install Pre-commit Hooks** (mandatory):
    Handled by Makefile in `make dev`, but if needed separately:
 
@@ -147,7 +152,7 @@ This process ensures that human reviewers focus on high-level design and logic r
 
 ### Agentic Framework
 
-- **PydanticAI Only**: This project uses PydanticAI as the official agentic framework. Do not introduce other frameworks like LangChain, CrewAI, or AutoGen.
+- **PydanticAI Only**: This project uses PydanticAI as the official agentic framework. Do not introduce other frameworks like LangChain, CrewAI, or AutoGen. Note: PydanticAI is optional - install with `uv sync --extra ai` or `pip install 'code-graph-rag[ai]'`.
 
 ### Code Standards
 

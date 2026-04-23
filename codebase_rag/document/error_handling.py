@@ -33,6 +33,17 @@ class ErrorType(StrEnum):
     CHUNKING_ERROR = "chunking_error"  # Document chunking failed
     GRAPH_ERROR = "graph_error"  # Database operation failed
     VERSION_ERROR = "version_error"  # Version cache operation failed
+    # Concept extraction error types
+    CONCEPT_TIMEOUT = "concept_timeout"
+    CONCEPT_PARSING_ERROR = "concept_parsing_error"
+    CONCEPT_RATE_LIMIT = "concept_rate_limit"
+    CONCEPT_AUTH_ERROR = "concept_auth_error"
+    CONCEPT_CONTEXT_OVERFLOW = "concept_context_overflow"
+    CONCEPT_NETWORK_ERROR = "concept_network_error"
+    CONCEPT_LLM_ERROR = "concept_llm_error"
+    # Quota/Rate Limit specific errors (distinguish from transient rate limits)
+    CONCEPT_QUOTA_EXCEEDED = "concept_quota_exceeded"  # Monthly/daily quota exhausted
+    CONCEPT_RATE_LIMITED = "concept_rate_limited"      # Transient rate limit (per-second/minute)
     UNKNOWN = "unknown"
 
 
@@ -49,6 +60,13 @@ RECOVERABLE_ERRORS = frozenset(
         ErrorType.GRAPH_ERROR,
         ErrorType.VERSION_ERROR,
         ErrorType.UNKNOWN,
+        # Concept extraction errors - recoverable
+        ErrorType.CONCEPT_TIMEOUT,
+        ErrorType.CONCEPT_RATE_LIMIT,
+        ErrorType.CONCEPT_NETWORK_ERROR,
+        ErrorType.CONCEPT_PARSING_ERROR,
+        ErrorType.CONCEPT_LLM_ERROR,
+        ErrorType.CONCEPT_RATE_LIMITED,      # Transient rate limit - retry with backoff
     }
 )
 
@@ -57,6 +75,10 @@ FATAL_ERRORS = frozenset(
         ErrorType.PERMISSION_DENIED,
         ErrorType.PATH_TRAVERSAL,
         ErrorType.MISSING_DEPENDENCY,
+        # Concept extraction errors - fatal
+        ErrorType.CONCEPT_AUTH_ERROR,
+        ErrorType.CONCEPT_CONTEXT_OVERFLOW,
+        ErrorType.CONCEPT_QUOTA_EXCEEDED,    # Cannot retry until quota resets
     }
 )
 
@@ -102,6 +124,13 @@ class ExtractionError:
     recoverable: bool = True
     retry_count: int = 0
     max_retries: int = 3
+    retry_after: str | None = None  # ISO timestamp for delayed retry
+    error_category: str | None = None  # FailureType name for guidance lookup
+    # Concept extraction specific fields
+    chunk_qn: str | None = None  # For concept extraction failures
+    chunk_length: int | None = None
+    chunk_preview: str | None = None  # First 200 chars of chunk content
+    exception_type: str | None = None
 
     def __post_init__(self) -> None:
         """Set recoverable based on error type."""
@@ -109,6 +138,36 @@ class ExtractionError:
             self.recoverable = False
         elif self.error_type in RECOVERABLE_ERRORS:
             self.recoverable = True
+        # Set recoverable for concept extraction errors
+        concept_recoverable = {
+            ErrorType.CONCEPT_TIMEOUT,
+            ErrorType.CONCEPT_RATE_LIMIT,
+            ErrorType.CONCEPT_NETWORK_ERROR,
+            ErrorType.CONCEPT_PARSING_ERROR,
+            ErrorType.CONCEPT_LLM_ERROR,
+            ErrorType.CONCEPT_RATE_LIMITED,      # Transient rate limit - recoverable
+        }
+        concept_fatal = {
+            ErrorType.CONCEPT_AUTH_ERROR,
+            ErrorType.CONCEPT_CONTEXT_OVERFLOW,
+            ErrorType.CONCEPT_QUOTA_EXCEEDED,    # Quota exhausted - fatal until reset
+        }
+        if self.error_type in concept_recoverable:
+            self.recoverable = True
+        elif self.error_type in concept_fatal:
+            self.recoverable = False
+
+    def to_log_message(self) -> str:
+        """Generate a detailed log message."""
+        base_msg = (
+            f"Extraction failed [{self.error_type.value}]\n"
+            f"  Path: {self.path}\n"
+            f"  Error: {self.exception_type or 'N/A'}: {self.message or '(no message)'}\n"
+            f"  Recoverable: {self.recoverable}"
+        )
+        if self.chunk_qn:
+            base_msg += f"\n  Chunk: {self.chunk_qn}\n  Length: {self.chunk_length} chars"
+        return base_msg
 
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization."""
@@ -120,6 +179,12 @@ class ExtractionError:
             "recoverable": self.recoverable,
             "retry_count": self.retry_count,
             "max_retries": self.max_retries,
+            "retry_after": self.retry_after,
+            "error_category": self.error_category,
+            "chunk_qn": self.chunk_qn,
+            "chunk_length": self.chunk_length,
+            "chunk_preview": self.chunk_preview,
+            "exception_type": self.exception_type,
         }
 
     @classmethod
@@ -133,7 +198,56 @@ class ExtractionError:
             recoverable=data.get("recoverable", True),
             retry_count=data.get("retry_count", 0),
             max_retries=data.get("max_retries", 3),
+            retry_after=data.get("retry_after"),
+            error_category=data.get("error_category"),
+            chunk_qn=data.get("chunk_qn"),
+            chunk_length=data.get("chunk_length"),
+            chunk_preview=data.get("chunk_preview"),
+            exception_type=data.get("exception_type"),
         )
+
+    def to_failure_classification(self) -> FailureClassification:
+        """Convert extraction error to failure classification.
+
+        Maps document error types to the unified failure classification system
+        for integration with the error handling pipeline.
+
+        Returns:
+            FailureClassification with mapped failure type
+        """
+        from ..services.failure_classifier import FailureClassification, FailureType
+
+        error_type_mapping = {
+            ErrorType.MALFORMED_FILE: FailureType.DATA_INTEGRITY,
+            ErrorType.MISSING_DEPENDENCY: FailureType.MISSING_PROCEDURE,
+            ErrorType.FILE_TOO_LARGE: FailureType.RESOURCE_EXHAUSTION,
+            ErrorType.PERMISSION_DENIED: FailureType.PERMISSION_DENIED,
+            ErrorType.ENCODING_ERROR: FailureType.DATA_INTEGRITY,
+            ErrorType.EMBEDDING_ERROR: FailureType.VECTOR_DIMENSION_MISMATCH,
+            ErrorType.GRAPH_ERROR: FailureType.TRANSIENT_NETWORK,
+            ErrorType.VERSION_ERROR: FailureType.DATA_INTEGRITY,
+            ErrorType.PATH_TRAVERSAL: FailureType.PERMISSION_DENIED,
+            ErrorType.FILE_NOT_FOUND: FailureType.DATA_INTEGRITY,
+            ErrorType.NOT_A_FILE: FailureType.DATA_INTEGRITY,
+            ErrorType.CHUNKING_ERROR: FailureType.DATA_INTEGRITY,
+            ErrorType.UNKNOWN: FailureType.UNKNOWN,
+        }
+
+        return FailureClassification(
+            failure_type=error_type_mapping.get(self.error_type, FailureType.UNKNOWN),
+            message=self.message,
+            should_retry=self.recoverable,
+            max_retries=self.max_retries,
+            metadata={"path": self.path, "error_type": self.error_type.value},
+        )
+
+
+# Default retry delays for transient failures
+DEFAULT_RETRY_DELAYS = [
+    30,    # 30 seconds
+    300,   # 5 minutes
+    1800,  # 30 minutes
+]
 
 
 class DeadLetterQueue:
@@ -142,11 +256,21 @@ class DeadLetterQueue:
 
     Failed documents are logged and can be retried later.
     Uses file locking for thread safety.
+
+    Features:
+    - Retry scheduling with configurable delays
+    - Priority-based retry (connection errors get faster retries)
+    - Expiration of stale errors after max retries
     """
 
-    def __init__(self, queue_path: Path) -> None:
+    def __init__(
+        self,
+        queue_path: Path,
+        retry_delays: list[int] | None = None,
+    ) -> None:
         self.queue_path = queue_path
         self.queue_path.mkdir(parents=True, exist_ok=True)
+        self.retry_delays = retry_delays or DEFAULT_RETRY_DELAYS
 
     def _safe_error_filename(self, path: str) -> str:
         """Generate unique, safe filename for error file."""
@@ -158,11 +282,20 @@ class DeadLetterQueue:
         """
         Add failed document to dead letter queue.
 
+        Sets retry_after timestamp based on retry_count and configured delays.
+
         Returns:
             Path to the error file
         """
         filename = self._safe_error_filename(error.path)
         error_file = self.queue_path / filename
+
+        # Calculate retry_after if not set and retries remaining
+        if error.retry_after is None and error.retry_count < error.max_retries:
+            delay_index = min(error.retry_count, len(self.retry_delays) - 1)
+            delay_seconds = self.retry_delays[delay_index]
+            retry_after = datetime.now(UTC).timestamp() + delay_seconds
+            error.retry_after = datetime.fromtimestamp(retry_after, UTC).isoformat()
 
         # Use file locking for thread safety
         with open(error_file, "w") as f:
@@ -174,17 +307,38 @@ class DeadLetterQueue:
 
         return error_file
 
-    def get_pending(self) -> list[ExtractionError]:
-        """Get all pending errors for retry."""
+    def get_pending(self, include_scheduled: bool = True) -> list[ExtractionError]:
+        """Get all pending errors for retry.
+
+        Args:
+            include_scheduled: If False, only return errors ready for retry
+
+        Returns:
+            List of ExtractionError objects
+        """
         errors = []
+        now = datetime.now(UTC).timestamp()
+
         for error_file in self.queue_path.glob("*.error.json"):
             try:
                 data = json.loads(error_file.read_text())
-                errors.append(ExtractionError.from_dict(data))
+                error = ExtractionError.from_dict(data)
+
+                # Skip if not ready for retry
+                if not include_scheduled and error.retry_after:
+                    retry_after_ts = datetime.fromisoformat(error.retry_after).timestamp()
+                    if retry_after_ts > now:
+                        continue
+
+                errors.append(error)
             except (json.JSONDecodeError, KeyError):
                 # Skip corrupted error files
                 continue
         return errors
+
+    def get_ready_for_retry(self) -> list[ExtractionError]:
+        """Get errors that are ready for retry (retry_after has passed)."""
+        return self.get_pending(include_scheduled=False)
 
     def remove(self, error: ExtractionError) -> bool:
         """Remove error from queue after successful retry."""
@@ -194,6 +348,23 @@ class DeadLetterQueue:
             error_file.unlink()
             return True
         return False
+
+    def mark_retry_attempt(self, error: ExtractionError) -> ExtractionError:
+        """
+        Increment retry count and schedule next retry.
+
+        Returns:
+            Updated ExtractionError with new retry_after timestamp
+        """
+        error.retry_count += 1
+
+        if error.retry_count < error.max_retries:
+            delay_index = min(error.retry_count, len(self.retry_delays) - 1)
+            delay_seconds = self.retry_delays[delay_index]
+            retry_after = datetime.now(UTC).timestamp() + delay_seconds
+            error.retry_after = datetime.fromtimestamp(retry_after, UTC).isoformat()
+
+        return error
 
     async def retry_with_backoff(
         self, extractor, max_concurrent: int = 5
@@ -211,7 +382,7 @@ class DeadLetterQueue:
         import asyncio
 
         results: dict[str, bool] = {}
-        pending = self.get_pending()
+        pending = self.get_ready_for_retry()
 
         # Filter out exhausted retries
         to_retry = [e for e in pending if e.retry_count < e.max_retries]
@@ -221,17 +392,14 @@ class DeadLetterQueue:
 
         async def retry_one(error: ExtractionError) -> tuple[str, bool]:
             async with semaphore:
-                # Exponential backoff
-                delay = 2**error.retry_count
-                await asyncio.sleep(delay)
-
                 try:
                     await extractor.extract_async(Path(error.path))
                     self.remove(error)
                     return error.path, True
                 except Exception:
-                    error.retry_count += 1
-                    self.enqueue(error)
+                    # Increment retry count and reschedule
+                    updated = self.mark_retry_attempt(error)
+                    self.enqueue(updated)
                     return error.path, False
 
         # Run retries concurrently
@@ -254,6 +422,34 @@ class DeadLetterQueue:
         """Get number of pending errors."""
         return len(list(self.queue_path.glob("*.error.json")))
 
+    def stats(self) -> dict:
+        """Get queue statistics."""
+        pending = self.get_pending()
+        now = datetime.now(UTC).timestamp()
+
+        ready_count = 0
+        scheduled_count = 0
+        exhausted_count = 0
+
+        for error in pending:
+            if error.retry_count >= error.max_retries:
+                exhausted_count += 1
+            elif error.retry_after:
+                retry_after_ts = datetime.fromisoformat(error.retry_after).timestamp()
+                if retry_after_ts <= now:
+                    ready_count += 1
+                else:
+                    scheduled_count += 1
+            else:
+                ready_count += 1
+
+        return {
+            "total": len(pending),
+            "ready_for_retry": ready_count,
+            "scheduled": scheduled_count,
+            "exhausted": exhausted_count,
+        }
+
 
 __all__ = [
     "ErrorType",
@@ -262,4 +458,5 @@ __all__ = [
     "DeadLetterQueue",
     "RECOVERABLE_ERRORS",
     "FATAL_ERRORS",
+    "DEFAULT_RETRY_DELAYS",
 ]

@@ -23,8 +23,8 @@ import time
 from pathlib import Path
 
 from loguru import logger
-from pydantic_ai import ApprovalRequired, RunContext, Tool
 
+from ..compat.pydantic_ai import ApprovalRequired, RunContext, Tool
 from .. import constants as cs
 from .. import logs as ls
 from .. import tool_errors as te

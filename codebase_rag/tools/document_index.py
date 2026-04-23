@@ -8,7 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from loguru import logger
-from pydantic_ai import Tool
+from codebase_rag.compat.pydantic_ai import Tool
 
 from ..config import settings
 from . import tool_descriptions as td
