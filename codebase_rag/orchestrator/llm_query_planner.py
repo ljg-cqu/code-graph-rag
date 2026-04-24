@@ -150,9 +150,9 @@ Rules:
                     model_id=getattr(settings, "ACTIVE_ORCHESTRATOR_MODEL", "gpt-4o-mini"),
                 )
 
-        from codebase_rag.services.llm import _create_provider_model
+        from codebase_rag.services.llm import _create_chat_model
 
-        llm = _create_provider_model(config)
+        llm = _create_chat_model(config)
         self._model_id = config.model_id
 
         from codebase_rag.compat.pydantic_ai import Agent

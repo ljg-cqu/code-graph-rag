@@ -51,7 +51,16 @@ def get_embedding_provider(
     config: "EmbeddingConfig | None" = None,
     **kwargs: str | int | None,
 ) -> EmbeddingProvider:
-    """Factory function to create an embedding provider.
+    """Factory function to create an embedding provider for vector generation.
+
+    Use for:
+    - Document chunk embeddings
+    - Code embeddings
+    - Semantic similarity search
+    - Vector index operations
+
+    DO NOT use for text generation, concept extraction, or any task requiring
+    instruction following — use _create_chat_model() with a ModelConfig instead.
 
     Args:
         provider: Provider name (local, openai, google, ollama).

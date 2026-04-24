@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum, auto
@@ -35,18 +36,13 @@ class HealthChecker:
 
     @staticmethod
     def _safe_get_column(row: tuple | None, index: int = 0) -> object | None:
-        """Safely extract a column value from a row.
-
-        Handles mgclient.Column objects that may have an exception set.
-        Direct indexing like row[0] can fail with confusing errors.
-        """
         if row is None:
             return None
         try:
             return row[index]
+        except SystemError:
+            return None
         except Exception:
-            # mgclient.Column may have an exception set
-            # Try to extract value using alternative method
             if hasattr(row, '__iter__'):
                 try:
                     values = list(row)
@@ -175,7 +171,7 @@ class HealthChecker:
                 ),
             )
 
-        except mgclient.MemgraphError as e:
+        except mgclient.Error as e:
             return HealthCheckResult(
                 name=cs.HEALTH_CHECK_MEMGRAPH_FAILED,
                 passed=False,
@@ -1164,24 +1160,70 @@ class HealthChecker:
         ]
 
         for check_fn in checks:
+            results = self._run_check_with_retry(check_fn)
+            all_results.extend(results)
+
+        return all_results
+
+    @staticmethod
+    def _get_check_name(check_fn: Callable) -> str:
+        if hasattr(check_fn, "func"):
+            return check_fn.func.__name__
+        return getattr(check_fn, "__name__", "unknown_check")
+
+    def _run_check_with_retry(
+        self,
+        check_fn: Callable[[], list[HealthCheckResult]],
+        max_attempts: int = 3,
+        base_delay: float = 0.5,
+        max_delay: float = 4.0,
+    ) -> list[HealthCheckResult]:
+        check_name = self._get_check_name(check_fn)
+        for attempt in range(1, max_attempts + 1):
             try:
-                results = check_fn()  # Each creates its own connection
-                all_results.extend(results)
+                return check_fn()
+            except (mgclient.Error, ConnectionError, OSError) as e:
+                if attempt >= max_attempts:
+                    classification = classify_memgraph_failure(e)
+                    logger.warning(
+                        cs.HEALTH_CHECK_RETRY_EXHAUSTED.format(
+                            name=check_name,
+                            max_attempts=max_attempts,
+                        )
+                    )
+                    return [
+                        HealthCheckResult(
+                            name=f"{check_name}_unavailable",
+                            passed=False,
+                            message=cs.HEALTH_CHECK_PARTIAL_FAILURE_MSG,
+                            error=str(e),
+                        )
+                    ]
+                delay = min(base_delay * (2 ** (attempt - 1)), max_delay)
+                logger.debug(
+                    cs.HEALTH_CHECK_RETRY_ATTEMPT.format(
+                        name=check_name,
+                        attempt=attempt,
+                        max_attempts=max_attempts,
+                        delay=delay,
+                        error=str(e),
+                    )
+                )
+                time.sleep(delay)
             except Exception as e:
                 classification = classify_memgraph_failure(e)
                 logger.warning(
-                    f"Check {check_fn.func.__name__} failed: {classification.failure_type.name}"
+                    f"Check {check_name} failed: {classification.failure_type.name}"
                 )
-                all_results.append(
+                return [
                     HealthCheckResult(
-                        name=f"{check_fn.func.__name__}_unavailable",
+                        name=f"{check_name}_unavailable",
                         passed=False,
                         message=cs.HEALTH_CHECK_PARTIAL_FAILURE_MSG,
                         error=str(e),
                     )
-                )
-
-        return all_results
+                ]
+        return []
 
     def get_missing_embeddings(
         self,

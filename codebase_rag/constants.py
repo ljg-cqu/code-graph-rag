@@ -4079,6 +4079,15 @@ HEALTH_CHECK_INGESTION_VALIDATION_ERROR_MSG = (
     "Validation could not complete due to an error"
 )
 HEALTH_CHECK_PARTIAL_FAILURE_MSG = "Check partially failed but other checks may still succeed"
+HEALTH_CHECK_RETRY_ATTEMPT = "Health check '{name}' failed (attempt {attempt}/{max_attempts}), retrying in {delay}s: {error}"
+HEALTH_CHECK_RETRY_EXHAUSTED = "Health check '{name}' exhausted all {max_attempts} attempts"
+
+JSON_INGEST_SKIP_NOT_JSON = "Skipping non-JSON file: {path}"
+JSON_INGEST_SKIP_EXCLUDED = "Skipping excluded JSON file: {path} (reason: {reason})"
+JSON_INGEST_SKIP_PARSE_ERROR = "Skipping JSON file with parse error: {path}: {error}"
+JSON_INGEST_SKIP_SCHEMA_MISMATCH = "Skipping JSON file with schema mismatch: {path}: {error}"
+JSON_INGEST_SKIP_IO_ERROR = "Skipping JSON file due to IO error: {path}: {error}"
+JSON_INGEST_SKIP_REASON_SUMMARY = "JSON skip reasons: {reasons}"
 
 QUERY_GEN_SHOW_VERSION = "SHOW VERSION;"
 QUERY_GEN_SHOW_LICENSE = "SHOW LICENSE INFO;"

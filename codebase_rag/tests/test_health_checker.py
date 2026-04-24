@@ -17,6 +17,70 @@ def test_consume_all_results_handles_exceptions() -> None:
     assert cursor.fetchone.called
 
 
+def test_safe_get_column_with_system_error() -> None:
+    """Test _safe_get_column returns None on SystemError without leaking exception."""
+    row = MagicMock()
+    row.__getitem__.side_effect = SystemError("<class 'mgclient.Column'> returned a result with an exception set")
+    row.__iter__.side_effect = SystemError("corrupted")
+
+    result = HealthChecker._safe_get_column(row, 0)
+
+    assert result is None
+
+
+def test_run_check_with_retry_succeeds_on_second_attempt() -> None:
+    """Test retry wrapper succeeds when second attempt works."""
+    checker = HealthChecker()
+    call_count = 0
+
+    def flaky_check():
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise ConnectionError("Temporary failure")
+        return [MagicMock(passed=True)]
+
+    with patch("time.sleep"):
+        results = checker._run_check_with_retry(flaky_check, max_attempts=3, base_delay=0.1)
+
+    assert call_count == 2
+    assert len(results) == 1
+    assert results[0].passed is True
+
+
+def test_run_check_with_retry_exhausts_all_attempts() -> None:
+    """Test retry wrapper returns unavailable result after all attempts fail."""
+    checker = HealthChecker()
+
+    def always_fail():
+        raise ConnectionError("Persistent failure")
+
+    with patch("time.sleep"):
+        results = checker._run_check_with_retry(always_fail, max_attempts=3, base_delay=0.1)
+
+    assert len(results) == 1
+    assert results[0].passed is False
+    assert "unavailable" in results[0].name
+
+
+def test_run_check_with_retry_no_retry_for_non_retryable() -> None:
+    """Test retry wrapper does not retry non-retryable exceptions."""
+    checker = HealthChecker()
+    call_count = 0
+
+    def non_retryable_fail():
+        nonlocal call_count
+        call_count += 1
+        raise ValueError("Logic error")
+
+    with patch("time.sleep"):
+        results = checker._run_check_with_retry(non_retryable_fail, max_attempts=3, base_delay=0.1)
+
+    assert call_count == 1
+    assert len(results) == 1
+    assert results[0].passed is False
+
+
 def test_validate_ingestion_quality_cleanup_on_exception() -> None:
     """Test that cleanup succeeds when exception occurs mid-query."""
     checker = HealthChecker()
@@ -78,15 +142,12 @@ def test_parse_label_expression_splits_pipe_labels() -> None:
 
 def test_validate_ingestion_quality_uses_label_filter_not_pipe_syntax() -> None:
     checker = HealthChecker()
-    cursor = MagicMock()
-    # Each check creates its own connection, so we need fresh mocks per connection
-    call_count = [0]
+    created_cursors: list[MagicMock] = []
 
     def create_cursor(*args, **kwargs):
-        call_count[0] += 1
         fresh_cursor = MagicMock()
-        # Each isolated check needs its own fetchone sequence
         fresh_cursor.fetchone.side_effect = [(4,), None]
+        created_cursors.append(fresh_cursor)
         return fresh_cursor
 
     conn = MagicMock()
@@ -100,7 +161,9 @@ def test_validate_ingestion_quality_uses_label_filter_not_pipe_syntax() -> None:
             embedded_node_label="Function|Method|Class",
         )
 
-    executed_queries = [call.args[0] for call in conn.cursor().execute.call_args_list]
+    executed_queries = []
+    for cursor in created_cursors:
+        executed_queries.extend([call.args[0] for call in cursor.execute.call_args_list])
 
     assert any(
         "ANY(label IN labels(n) WHERE label IN $embedded_labels)" in query

@@ -22,12 +22,10 @@ from ..config import load_cgrignore_patterns, settings
 from ..embeddings import get_embedding_provider
 from ..services import (
     ErrorContext,
-    ErrorGuidance,
+    FailureType,
     LLMErrorGuidance,
     UserExpertiseLevel,
     classify_memgraph_failure,
-    FailureType,
-    format_user_error,
 )
 from ..services.graph_service import MemgraphIngestor
 from ..types_defs import ResultRow
@@ -517,25 +515,58 @@ class DocumentGraphUpdater:
             "failed": 0,
             "sections_created": 0,
             "chunks_created": 0,
+            "graph_available": True,
         }
 
         try:
-            with MemgraphIngestor(
-                host=self.host,
-                port=self.port,
-                batch_size=self.batch_size,
-                connection_timeout=settings.DOC_MEMGRAPH_CONNECTION_TIMEOUT,
-            ) as ingestor:
-                # Pre-flight health check with actionable error messages
-                _check_graph_availability(ingestor, graph_type="document")
+            try:
+                ingestor = MemgraphIngestor(
+                    host=self.host,
+                    port=self.port,
+                    batch_size=self.batch_size,
+                    connection_timeout=settings.DOC_MEMGRAPH_CONNECTION_TIMEOUT,
+                ).__enter__()
+            except (ConnectionError, TimeoutError, OSError) as e:
+                logger.error(doc_ls.DOC_GRAPH_CONNECT_FAILED.format(error=e))
+                stats["graph_available"] = False
+                stats["graph_error"] = str(e)
+                return stats
 
-                ingestor.ensure_constraints()
-                self._ensure_vector_index(ingestor)
-                self._ensure_document_indexes(ingestor)
-                self._refresh_code_reference_index()
+            try:
+                try:
+                    _check_graph_availability(ingestor, graph_type="document")
+                except DocumentGraphUnavailableError as e:
+                    logger.error(doc_ls.DOC_GRAPH_UNAVAILABLE.format(error=e.message))
+                    stats["graph_available"] = False
+                    stats["graph_error"] = e.message
+                    return stats
+
+                setup_ops = [
+                    ("ensure_constraints", lambda: ingestor.ensure_constraints()),
+                    ("ensure_vector_index", lambda: self._ensure_vector_index(ingestor)),
+                    ("ensure_document_indexes", lambda: self._ensure_document_indexes(ingestor)),
+                    ("refresh_code_references", lambda: self._refresh_code_reference_index()),
+                ]
+                for op_name, op_fn in setup_ops:
+                    try:
+                        op_fn()
+                    except Exception as e:
+                        logger.error(doc_ls.DOC_SETUP_OP_FAILED.format(op=op_name, error=e))
+
                 documents = self._collect_documents()
-                deleted_stale = self._delete_stale_documents(documents, ingestor)
-                deleted_excluded = self._delete_excluded_documents(documents, ingestor)
+
+                try:
+                    deleted_stale = self._delete_stale_documents(documents, ingestor)
+                except Exception as e:
+                    logger.warning(doc_ls.DOC_STALE_CLEANUP_FAILED.format(error=e))
+                    deleted_stale = 0
+
+                try:
+                    deleted_excluded = self._delete_excluded_documents(documents, ingestor)
+                except Exception as e:
+                    logger.warning(doc_ls.DOC_EXCLUDED_CLEANUP_FAILED.format(error=e))
+                    deleted_excluded = 0
+
                 stats["total_documents"] = len(documents)
                 stats["cleanup_deleted_files"] = deleted_stale
                 stats["cleanup_excluded_files"] = deleted_excluded
@@ -589,16 +620,45 @@ class DocumentGraphUpdater:
                                 f"Could not enqueue error for {doc_path}: {dlq_error}"
                             )
 
+                    if (
+                        settings.DOC_INCREMENTAL_FLUSH_INTERVAL > 0
+                        and index % settings.DOC_INCREMENTAL_FLUSH_INTERVAL == 0
+                    ):
+                        try:
+                            flush_stats = ingestor.flush_all_with_stats()
+                            if flush_stats["nodes_failed"] > 0 or flush_stats["relationships_failed"] > 0:
+                                logger.warning(
+                                    doc_ls.DOC_INCREMENTAL_FLUSH_PARTIAL.format(
+                                        index=index, stats=flush_stats
+                                    )
+                                )
+                            else:
+                                logger.debug(
+                                    doc_ls.DOC_INCREMENTAL_FLUSH_OK.format(
+                                        index=index, stats=flush_stats
+                                    )
+                                )
+                            self.version_cache.save()
+                        except Exception as e:
+                            logger.error(
+                                doc_ls.DOC_INCREMENTAL_FLUSH_FAILED.format(
+                                    index=index, error=e
+                                )
+                            )
+
                 try:
-                    ingestor.flush_all()
+                    flush_stats = ingestor.flush_all_with_stats()
+                    if flush_stats["nodes_failed"] > 0 or flush_stats["relationships_failed"] > 0:
+                        logger.warning(
+                            doc_ls.DOC_FINAL_FLUSH_PARTIAL.format(stats=flush_stats)
+                        )
+                    else:
+                        logger.info(doc_ls.DOC_FINAL_FLUSH_OK.format(stats=flush_stats))
                 except Exception as e:
                     logger.opt(exception=True).error(
-                        f"Failed to flush batch to graph: {type(e).__name__}: {e}"
+                        doc_ls.DOC_FINAL_FLUSH_FAILED.format(error=e)
                     )
-                    stats["failed"] += stats["indexed"]
-                    stats["indexed"] = 0
-                    self.version_cache.clear()
-                    raise
+                    stats["flush_error"] = str(e)
 
                 try:
                     section_result = ingestor.fetch_all(
@@ -622,13 +682,15 @@ class DocumentGraphUpdater:
                 except Exception as e:
                     logger.warning(f"Could not save version cache: {e}")
 
-            logger.info(f"Document indexing complete: {stats}")
-            return stats
+                logger.info(f"Document indexing complete: {stats}")
+                return stats
+            finally:
+                ingestor.__exit__(None, None, None)
         finally:
             try:
                 self._embedding_provider.close()
             except Exception as e:
-                logger.warning(f"Could not close embedding provider cleanly: {e}")
+                logger.warning(doc_ls.EMBEDDING_PROVIDER_CLOSE_FAILED.format(error=e))
 
     async def run_async(self, force: bool = False) -> dict:
         """Async version of run() for concurrent processing."""
@@ -639,28 +701,71 @@ class DocumentGraphUpdater:
             "failed": 0,
             "sections_created": 0,
             "chunks_created": 0,
+            "graph_available": True,
         }
 
-        async with MemgraphIngestor(
-            host=self.host,
-            port=self.port,
-            batch_size=self.batch_size,
-            connection_timeout=settings.DOC_MEMGRAPH_CONNECTION_TIMEOUT,
-        ) as ingestor:
-            # Pre-flight health check with LLM-generated actionable error messages
-            await _check_graph_availability_async(ingestor, graph_type="document")
-
-            await asyncio.to_thread(ingestor.ensure_constraints)
-            await asyncio.to_thread(self._ensure_vector_index, ingestor)
-            await asyncio.to_thread(self._ensure_document_indexes, ingestor)
-            await asyncio.to_thread(self._refresh_code_reference_index)
+        try:
+            try:
+                ingestor = await asyncio.to_thread(
+                    MemgraphIngestor(
+                        host=self.host,
+                        port=self.port,
+                        batch_size=self.batch_size,
+                        connection_timeout=settings.DOC_MEMGRAPH_CONNECTION_TIMEOUT,
+                    ).__enter__
+                )
+            except (ConnectionError, TimeoutError, OSError) as e:
+                logger.error(doc_ls.DOC_GRAPH_CONNECT_FAILED.format(error=e))
+                stats["graph_available"] = False
+                stats["graph_error"] = str(e)
+                return stats
 
             try:
-                documents = await asyncio.to_thread(self._collect_documents)
-                await asyncio.to_thread(
-                    self._delete_stale_documents, documents, ingestor
-                )
+                try:
+                    await _check_graph_availability_async(ingestor, graph_type="document")
+                except DocumentGraphUnavailableError as e:
+                    logger.error(doc_ls.DOC_GRAPH_UNAVAILABLE.format(error=e.message))
+                    stats["graph_available"] = False
+                    stats["graph_error"] = e.message
+                    return stats
+
+                setup_ops = [
+                    ("ensure_constraints", lambda: ingestor.ensure_constraints()),
+                    ("ensure_vector_index", lambda: self._ensure_vector_index(ingestor)),
+                    ("ensure_document_indexes", lambda: self._ensure_document_indexes(ingestor)),
+                    ("refresh_code_references", lambda: self._refresh_code_reference_index()),
+                ]
+                for op_name, op_fn in setup_ops:
+                    try:
+                        await asyncio.to_thread(op_fn)
+                    except Exception as e:
+                        logger.error(doc_ls.DOC_SETUP_OP_FAILED.format(op=op_name, error=e))
+
+                try:
+                    documents = await asyncio.to_thread(self._collect_documents)
+                except Exception as e:
+                    logger.error(f"Failed to collect documents: {e}")
+                    documents = []
+
+                try:
+                    deleted_stale = await asyncio.to_thread(
+                        self._delete_stale_documents, documents, ingestor
+                    )
+                except Exception as e:
+                    logger.warning(doc_ls.DOC_STALE_CLEANUP_FAILED.format(error=e))
+                    deleted_stale = 0
+
+                try:
+                    deleted_excluded = await asyncio.to_thread(
+                        self._delete_excluded_documents, documents, ingestor
+                    )
+                except Exception as e:
+                    logger.warning(doc_ls.DOC_EXCLUDED_CLEANUP_FAILED.format(error=e))
+                    deleted_excluded = 0
+
                 stats["total_documents"] = len(documents)
+                stats["cleanup_deleted_files"] = deleted_stale
+                stats["cleanup_excluded_files"] = deleted_excluded
 
                 total_documents = len(documents)
                 logger.info(f"Found {total_documents} documents to index")
@@ -708,16 +813,47 @@ class DocumentGraphUpdater:
                                 f"Could not enqueue error for {doc_path}: {dlq_error}"
                             )
 
+                    if (
+                        settings.DOC_INCREMENTAL_FLUSH_INTERVAL > 0
+                        and index % settings.DOC_INCREMENTAL_FLUSH_INTERVAL == 0
+                    ):
+                        try:
+                            flush_stats = await asyncio.to_thread(
+                                ingestor.flush_all_with_stats
+                            )
+                            if flush_stats["nodes_failed"] > 0 or flush_stats["relationships_failed"] > 0:
+                                logger.warning(
+                                    doc_ls.DOC_INCREMENTAL_FLUSH_PARTIAL.format(
+                                        index=index, stats=flush_stats
+                                    )
+                                )
+                            else:
+                                logger.debug(
+                                    doc_ls.DOC_INCREMENTAL_FLUSH_OK.format(
+                                        index=index, stats=flush_stats
+                                    )
+                                )
+                            await asyncio.to_thread(self.version_cache.save)
+                        except Exception as e:
+                            logger.error(
+                                doc_ls.DOC_INCREMENTAL_FLUSH_FAILED.format(
+                                    index=index, error=e
+                                )
+                            )
+
                 try:
-                    await asyncio.to_thread(ingestor.flush_all)
+                    flush_stats = await asyncio.to_thread(ingestor.flush_all_with_stats)
+                    if flush_stats["nodes_failed"] > 0 or flush_stats["relationships_failed"] > 0:
+                        logger.warning(
+                            doc_ls.DOC_FINAL_FLUSH_PARTIAL.format(stats=flush_stats)
+                        )
+                    else:
+                        logger.info(doc_ls.DOC_FINAL_FLUSH_OK.format(stats=flush_stats))
                 except Exception as e:
                     logger.opt(exception=True).error(
-                        f"Failed to flush batch to graph: {type(e).__name__}: {e}"
+                        doc_ls.DOC_FINAL_FLUSH_FAILED.format(error=e)
                     )
-                    stats["failed"] += stats["indexed"]
-                    stats["indexed"] = 0
-                    self.version_cache.clear()
-                    raise
+                    stats["flush_error"] = str(e)
 
                 try:
                     section_result = await asyncio.to_thread(
@@ -748,10 +884,12 @@ class DocumentGraphUpdater:
                 logger.info(f"Document indexing complete: {stats}")
                 return stats
             finally:
-                try:
-                    self._embedding_provider.close()
-                except Exception as e:
-                    logger.warning(f"Could not close embedding provider cleanly: {e}")
+                await asyncio.to_thread(ingestor.__exit__, None, None, None)
+        finally:
+            try:
+                self._embedding_provider.close()
+            except Exception as e:
+                logger.warning(doc_ls.EMBEDDING_PROVIDER_CLOSE_FAILED.format(error=e))
 
     def _ensure_vector_index(self, ingestor: MemgraphIngestor) -> None:
         """Ensure vector index for Chunk embeddings exists.
@@ -1022,7 +1160,6 @@ class DocumentGraphUpdater:
             List of (path, pattern) tuples for documents that would be removed.
             Pattern is None if no specific pattern matched.
         """
-        from ..utils.path_utils import should_skip_path
 
         excluded: list[tuple[str, str | None]] = []
 

@@ -1,4 +1,5 @@
 import json
+import os
 import time
 from pathlib import Path
 from typing import TypedDict
@@ -78,7 +79,13 @@ def load_persistent_cache() -> None:
                 _STDLIB_CACHE.update(data.get(cs.IMPORT_CACHE_KEY, {}))
                 _CACHE_TIMESTAMPS.update(data.get(cs.IMPORT_TIMESTAMPS_KEY, {}))
             logger.debug(ls.IMP_CACHE_LOADED, path=cache_file)
-    except (json.JSONDecodeError, OSError) as e:
+    except json.JSONDecodeError as e:
+        logger.debug(ls.IMP_CACHE_RECOVERED, error=e)
+        try:
+            cache_file.unlink()
+        except OSError:
+            pass
+    except OSError as e:
         logger.debug(ls.IMP_CACHE_LOAD_ERROR, error=e)
 
 
@@ -87,8 +94,9 @@ def save_persistent_cache() -> None:
         cache_dir = Path.home() / cs.IMPORT_CACHE_DIR
         cache_dir.mkdir(parents=True, exist_ok=True)
         cache_file = cache_dir / cs.IMPORT_CACHE_FILE
+        tmp_file = cache_file.with_suffix(f".tmp.{os.getpid()}")
 
-        with cache_file.open("w", encoding="utf-8") as f:
+        with tmp_file.open("w", encoding="utf-8") as f:
             json.dump(
                 {
                     cs.IMPORT_CACHE_KEY: _STDLIB_CACHE,
@@ -97,6 +105,7 @@ def save_persistent_cache() -> None:
                 f,
                 indent=2,
             )
+        os.replace(str(tmp_file), str(cache_file))
         logger.debug(ls.IMP_CACHE_SAVED, path=cache_file)
     except OSError as e:
         logger.debug(ls.IMP_CACHE_SAVE_ERROR, error=e)

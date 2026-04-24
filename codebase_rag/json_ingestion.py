@@ -16,6 +16,7 @@ from typing import Any
 import jsonschema
 from loguru import logger
 
+from . import constants as cs
 from .config import settings
 from .embedder import EmbeddingCache, get_embedding_provider_instance
 from .embeddings.base import EmbeddingProvider
@@ -527,32 +528,26 @@ def _load_json_files_with_errors(
     def looks_like_ingestion_payload(data: Any) -> bool:
         return isinstance(data, dict) and "entities" in data
 
-    def should_exclude(file_path: Path) -> bool:
-        # Strict mode: only allow .cgr.json files
+    def should_exclude(file_path: Path) -> str | None:
         if filter_preset == "strict":
             if not file_path.name.endswith(".cgr.json"):
-                return True
+                return "strict_mode"
 
         if file_path.name.startswith(".tmp_cache_") and file_path.suffix == ".json":
-            return True
+            return "tmp_cache"
 
-        # Exclude CGR internal cache files (e.g., .cgr-hash-cache.json)
-        # Note: This only excludes files STARTING with .cgr- (like .cgr-hash-cache.json)
-        # NOT files inside the .cgr directory
         if file_path.name.startswith(".cgr-") and file_path.suffix == ".json":
-            return True
+            return "cgr_internal"
 
-        # Exclude .embedding_cache and .egg-info directories
         if any(
             part == ".embedding_cache" or part.endswith(".egg-info")
             for part in file_path.parts
         ):
-            return True
+            return "embedding_cache_or_egg_info"
 
-        # Exclude hidden directories (except .cgr which is allowed for CGR data)
-        for part in file_path.parts[:-1]:  # Don't check the filename itself
+        for part in file_path.parts[:-1]:
             if part.startswith(".") and part != ".cgr":
-                return True
+                return "hidden_directory"
 
         try:
             relative_path = str(file_path.relative_to(base_path))
@@ -561,11 +556,15 @@ def _load_json_files_with_errors(
 
         for pattern in all_exclude_patterns:
             if fnmatch(relative_path, pattern):
-                return True
-        return False
+                return f"pattern:{pattern}"
+        return None
 
     if path.is_file() and path.suffix == ".json":
-        if should_exclude(path):
+        exclude_reason = should_exclude(path)
+        if exclude_reason:
+            logger.debug(
+                cs.JSON_INGEST_SKIP_EXCLUDED.format(path=path, reason=exclude_reason)
+            )
             return [], [], 1
         try:
             with open(path, encoding="utf-8") as json_file:
@@ -576,12 +575,21 @@ def _load_json_files_with_errors(
                 elif guidance:
                     skip_count += 1
                     logger.debug(f"Skipping {path}: {guidance}")
-        except Exception as exc:
+        except json.JSONDecodeError as exc:
+            skip_count += 1
+            logger.debug(cs.JSON_INGEST_SKIP_PARSE_ERROR.format(path=path, error=exc))
             load_errors.append(f"Skipping invalid JSON file {path}: {exc}")
+        except OSError as exc:
+            skip_count += 1
+            logger.debug(cs.JSON_INGEST_SKIP_IO_ERROR.format(path=path, error=exc))
+            load_errors.append(f"Skipping unreadable JSON file {path}: {exc}")
     elif path.is_dir():
         skipped_files_with_guidance: list[tuple[Path, str, JSONFilePurpose]] = []
+        exclude_reason_counts: dict[str, int] = {}
         for file_path in path.rglob("*.json"):
-            if should_exclude(file_path):
+            exclude_reason = should_exclude(file_path)
+            if exclude_reason:
+                exclude_reason_counts[exclude_reason] = exclude_reason_counts.get(exclude_reason, 0) + 1
                 continue
             try:
                 with open(file_path, encoding="utf-8") as json_file:
@@ -591,10 +599,22 @@ def _load_json_files_with_errors(
                         json_files.append((file_path, data))
                     elif guidance:
                         skipped_files_with_guidance.append((file_path, guidance, purpose))
-            except Exception as exc:
+            except json.JSONDecodeError as exc:
+                skip_count += 1
+                logger.debug(cs.JSON_INGEST_SKIP_PARSE_ERROR.format(path=file_path, error=exc))
                 load_errors.append(f"Skipping invalid JSON file {file_path}: {exc}")
+            except OSError as exc:
+                skip_count += 1
+                logger.debug(cs.JSON_INGEST_SKIP_IO_ERROR.format(path=file_path, error=exc))
+                load_errors.append(f"Skipping unreadable JSON file {file_path}: {exc}")
 
-        # Log summary of skipped files with guidance
+        if exclude_reason_counts:
+            summary = ", ".join(
+                f"{count} {reason}" for reason, count in sorted(exclude_reason_counts.items())
+            )
+            logger.info(cs.JSON_INGEST_SKIP_REASON_SUMMARY.format(reasons=summary))
+            skip_count += sum(exclude_reason_counts.values())
+
         if skipped_files_with_guidance:
             purpose_counts: dict[str, int] = {}
             for fp, guidance, purpose in skipped_files_with_guidance:

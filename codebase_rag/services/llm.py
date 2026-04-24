@@ -30,7 +30,21 @@ if HAS_PYDANTIC_AI:
     from pydantic_ai import DeferredToolRequests
 
 
-def _create_provider_model(config: ModelConfig) -> Model:
+def _create_chat_model(config: ModelConfig) -> Model:
+    """Create a chat/completion model for reasoning tasks.
+
+    Use for:
+    - Concept extraction
+    - Cypher query generation
+    - Orchestrator decision making
+    - Any task requiring instruction following or structured output
+
+    Args:
+        config: ModelConfig for a chat/completion LLM.
+
+    Returns:
+        A pydantic-ai Model instance ready for Agent use.
+    """
     provider = get_provider_from_config(config)
     return provider.create_model(config.model_id)
 
@@ -210,7 +224,7 @@ A query is SAFE if it only:
 Respond with a JSON object: {"safe": true/false, "reasoning": "brief explanation"}"""
 
         config = settings.active_cypher_config
-        llm = _create_provider_model(config)
+        llm = _create_chat_model(config)
         _CYPHER_SAFETY_AGENT = Agent(
             model=llm,
             system_prompt=system_prompt,
@@ -291,7 +305,7 @@ class CypherGenerator:
     def __init__(self) -> None:
         try:
             config = settings.active_cypher_config
-            llm = _create_provider_model(config)
+            llm = _create_chat_model(config)
 
             system_prompt = (
                 LOCAL_CYPHER_SYSTEM_PROMPT
@@ -393,7 +407,7 @@ class CypherGenerator:
         async def try_generate(provider: str, model: str) -> str:
             # Create a temporary agent with fallback provider
             config = settings._get_model_config_for_provider(provider, model)
-            fallback_llm = _create_provider_model(config)
+            fallback_llm = _create_chat_model(config)
 
             temp_agent = Agent(
                 model=fallback_llm,
@@ -500,7 +514,7 @@ def create_rag_orchestrator_with_config(
     mode: str | None = None,
 ) -> Agent:
     try:
-        llm = _create_provider_model(config)
+        llm = _create_chat_model(config)
 
         return Agent(
             model=llm,
@@ -527,7 +541,7 @@ def create_compression_agent() -> Agent:
 
     role = settings.SEMANTIC_COMPRESSION_MODEL_ROLE
     config = getattr(settings, f"active_{role}_config", settings.active_orchestrator_config)
-    llm = _create_provider_model(config)
+    llm = _create_chat_model(config)
 
     return Agent(
         model=llm,

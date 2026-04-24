@@ -221,10 +221,10 @@ Rules:
             from codebase_rag.compat.pydantic_ai import Agent
 
             from codebase_rag.config import settings
-            from codebase_rag.services.llm import _create_provider_model
+            from codebase_rag.services.llm import _create_chat_model
 
             config = settings.active_orchestrator_config
-            llm = _create_provider_model(config)
+            llm = _create_chat_model(config)
 
             self.agent = Agent(
                 model=llm,
@@ -276,8 +276,6 @@ Rules:
                 self._circuit_breaker.record_success()
             return result.output
         except asyncio.TimeoutError:
-            if self._circuit_breaker is not None:
-                self._circuit_breaker.record_failure()
             raise
         except Exception:
             if self._circuit_breaker is not None:
@@ -298,13 +296,17 @@ Rules:
         max_retries = settings.DOC_CONCEPT_EXTRACTION_MAX_RETRIES
         base_delay = settings.DOC_CONCEPT_EXTRACTION_RETRY_DELAY
 
+        current_timeout = calculate_adaptive_timeout(
+            chunk_content,
+            base_timeout=self.timeout,
+            max_timeout=self.max_timeout,
+        )
+
         last_error = None
 
         for attempt in range(max_retries + 1):
             try:
-                result = await self.extract(chunk_content, chunk_qn)
-                if result.concepts or result.relationships:
-                    return result
+                result = await self.extract(chunk_content, chunk_qn, timeout=current_timeout)
                 return result
             except Exception as e:
                 error = classify_concept_extraction_error(e, chunk_content, chunk_qn)
@@ -324,6 +326,17 @@ Rules:
 
                 if attempt < max_retries:
                     delay = base_delay * (2 ** attempt)
+
+                    if error.error_type == ErrorType.CONCEPT_TIMEOUT:
+                        delay = max(
+                            base_delay * settings.DOC_CONCEPT_TIMEOUT_RETRY_DELAY_MULTIPLIER,
+                            delay,
+                        )
+                        current_timeout = min(
+                            current_timeout * settings.DOC_CONCEPT_TIMEOUT_RETRY_MULTIPLIER,
+                            self.max_timeout,
+                        )
+
                     jitter = delay * random.uniform(0.0, 0.25)
                     delay = delay + jitter
 
@@ -340,6 +353,7 @@ Rules:
                             chunk_qn=chunk_qn,
                             delay=delay,
                             error_type=error.error_type.value,
+                            timeout=current_timeout,
                         )
                     )
                     await asyncio.sleep(delay)

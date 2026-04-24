@@ -445,24 +445,36 @@ def _handle_indexing(
                 unignore_paths=unignore_paths,
             )
             # DocumentGraphUpdater.run() returns dict with keys:
-            # documents_indexed, sections_created, chunks_created, errors
+            # total_documents, indexed, skipped, failed, sections_created,
+            # chunks_created, graph_available, cleanup_deleted_files, etc.
             stats = updater.run(force=clean)
 
-            # Display indexing stats
-            table = Table(
-                title=style("Document Indexing Results", cs.Color.GREEN),
-                show_header=True,
-                header_style=f"{cs.StyleModifier.BOLD} {cs.Color.MAGENTA}",
-            )
-            table.add_column("Metric", style=cs.Color.CYAN)
-            table.add_column("Count", style=cs.Color.YELLOW, justify="right")
+            if not stats.get("graph_available", True):
+                _info(
+                    style(
+                        f"Document graph unavailable ({settings.DOC_MEMGRAPH_HOST}:{settings.DOC_MEMGRAPH_PORT}). "
+                        "Continuing with code graph only. Run `docker-compose up -d` to start the document graph.",
+                        cs.Color.YELLOW,
+                    )
+                )
+                docs_indexed = False
+                effective_with_docs = False
+            else:
+                # Display indexing stats
+                table = Table(
+                    title=style("Document Indexing Results", cs.Color.GREEN),
+                    show_header=True,
+                    header_style=f"{cs.StyleModifier.BOLD} {cs.Color.MAGENTA}",
+                )
+                table.add_column("Metric", style=cs.Color.CYAN)
+                table.add_column("Count", style=cs.Color.YELLOW, justify="right")
 
-            for key, value in stats.items():
-                table.add_row(key.replace("_", " ").title(), str(value))
+                for key, value in stats.items():
+                    table.add_row(key.replace("_", " ").title(), str(value))
 
-            app_context.console.print(table)
+                app_context.console.print(table)
 
-            docs_indexed = True
+                docs_indexed = True
 
         except Exception as e:
             _info(style(f"Document indexing failed: {e}", cs.Color.RED))

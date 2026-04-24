@@ -123,6 +123,31 @@ class TestCachePersistence:
             cache_file = tmp_path / ".cache" / "codebase_rag" / "stdlib_cache.json"
             assert cache_file.exists()
 
+    def test_save_persistent_cache_atomic(self, tmp_path: Path) -> None:
+        with patch.object(Path, "home", return_value=tmp_path):
+            se._cache_stdlib_result("python", "atomic.test", "atomic")
+            cache_file = tmp_path / ".cache" / "codebase_rag" / "stdlib_cache.json"
+
+            se.save_persistent_cache()
+
+            assert cache_file.exists()
+            assert not any(
+                f.name.endswith(".tmp")
+                for f in (tmp_path / ".cache" / "codebase_rag").iterdir()
+            )
+
+    def test_load_persistent_cache_corruption_recovery(self, tmp_path: Path) -> None:
+        with patch.object(Path, "home", return_value=tmp_path):
+            cache_dir = tmp_path / ".cache" / "codebase_rag"
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            cache_file = cache_dir / "stdlib_cache.json"
+            cache_file.write_text(encoding="utf-8", data='{"valid": true}{"extra": 1}')
+
+            se.load_persistent_cache()
+
+            assert len(se._STDLIB_CACHE) == 0
+            assert not cache_file.exists()
+
 
 class TestGetStdlibCacheStats:
     def test_returns_correct_stats(self) -> None:

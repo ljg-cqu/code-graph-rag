@@ -139,6 +139,20 @@ class TestJsonFileFiltering:
         json_files, _, _ = _load_json_files_with_errors(str(tmp_path))
         assert len(json_files) == 0
 
+    def test_skip_count_includes_excluded_files(self, tmp_path: Path):
+        """Test that skip_count includes pattern-excluded files."""
+        venv_dir = tmp_path / ".venv" / "lib"
+        venv_dir.mkdir(parents=True)
+        venv_file = venv_dir / "test.json"
+        venv_file.write_text('{"entities": []}')
+
+        cgr_file = tmp_path / "entities.json"
+        cgr_file.write_text('{"entities": [{"id": "1", "name": "test"}]}')
+
+        json_files, _, skip_count = _load_json_files_with_errors(str(tmp_path))
+        assert len(json_files) == 1
+        assert skip_count == 1
+
     def test_custom_exclude_patterns(self, tmp_path: Path):
         """Test that custom exclude patterns work."""
         test_dir = tmp_path / "test_data"

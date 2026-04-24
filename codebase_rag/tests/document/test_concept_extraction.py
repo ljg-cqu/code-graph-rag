@@ -293,11 +293,11 @@ class TestLLMConceptExtractorExtract:
         assert cb.state == CircuitState.CLOSED
 
     @pytest.mark.asyncio
-    async def test_extract_records_failure_on_timeout(self):
+    async def test_extract_records_failure_on_non_timeout_error(self):
         cb = CircuitBreaker(name="test")
         extractor = LLMConceptExtractor(circuit_breaker=cb)
-        extractor.agent = Mock(run=Mock(side_effect=asyncio.TimeoutError))
-        with pytest.raises(asyncio.TimeoutError):
+        extractor.agent = Mock(run=Mock(side_effect=RuntimeError("service down")))
+        with pytest.raises(RuntimeError, match="service down"):
             await extractor.extract("content", "qn")
         assert cb.failure_count == 1
 
@@ -389,7 +389,7 @@ class TestLLMConceptExtractorRetry:
         async def mock_run(content):
             nonlocal call_count
             call_count += 1
-            raise asyncio.TimeoutError()
+            raise RuntimeError("service down")
 
         extractor.agent = Mock(run=mock_run)
 
@@ -400,3 +400,47 @@ class TestLLMConceptExtractorRetry:
         result = await extractor.extract_with_retry("content", "qn2")
         assert result == ExtractionResult()
         assert call_count == 2  # No additional calls after circuit opens
+
+    @pytest.mark.asyncio
+    async def test_retry_increases_timeout_on_timeout_error(self):
+        from unittest.mock import patch
+
+        extractor = LLMConceptExtractor(timeout=10.0, max_timeout=100.0)
+        extractor.agent = Mock(run=Mock(return_value=_MockAgentOutput(ExtractionResult())))
+
+        timeouts_passed: list[float] = []
+
+        async def mock_wait_for(awaitable, timeout):
+            timeouts_passed.append(timeout)
+            raise asyncio.TimeoutError()
+
+        with patch("asyncio.wait_for", mock_wait_for):
+            result = await extractor.extract_with_retry("content", "qn")
+        assert result == ExtractionResult()
+        assert len(timeouts_passed) == 4
+        # "content" is 7 chars, so size_factor adds ~0.07
+        assert timeouts_passed[0] == pytest.approx(10.07, abs=0.01)
+        assert timeouts_passed[1] == pytest.approx(15.105, abs=0.01)
+        assert timeouts_passed[2] == pytest.approx(22.6575, abs=0.01)
+        assert timeouts_passed[3] == pytest.approx(33.98625, abs=0.01)
+
+    @pytest.mark.asyncio
+    async def test_retry_timeout_capped_at_max_timeout(self):
+        from unittest.mock import patch
+
+        extractor = LLMConceptExtractor(timeout=80.0, max_timeout=100.0)
+        extractor.agent = Mock(run=Mock(return_value=_MockAgentOutput(ExtractionResult())))
+
+        timeouts_passed: list[float] = []
+
+        async def mock_wait_for(awaitable, timeout):
+            timeouts_passed.append(timeout)
+            raise asyncio.TimeoutError()
+
+        with patch("asyncio.wait_for", mock_wait_for):
+            await extractor.extract_with_retry("content", "qn")
+        assert len(timeouts_passed) == 4
+        assert timeouts_passed[0] == pytest.approx(80.07, abs=0.01)
+        assert timeouts_passed[1] == 100.0
+        assert timeouts_passed[2] == 100.0
+        assert timeouts_passed[3] == 100.0

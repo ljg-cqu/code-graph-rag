@@ -7,7 +7,7 @@ DOC_CONCEPT_STORE_BATCH = "Storing {count} concept nodes via batch MERGE"
 DOC_MENTIONS_STORE_BATCH = "Creating {count} MENTIONS relationships"
 DOC_REL_STORE_BATCH = "Creating {count} concept-to-concept relationships"
 DOC_CONCEPT_CIRCUIT_BREAKER_OPEN = "Circuit breaker OPEN for concept extraction, skipping {chunk_qn}"
-DOC_CONCEPT_RETRY_ATTEMPT = "Concept extraction retry {attempt}/{max_retries} for {chunk_qn} after {delay:.1f}s ({error_type})"
+DOC_CONCEPT_RETRY_ATTEMPT = "Concept extraction retry {attempt}/{max_retries} for {chunk_qn} after {delay:.1f}s ({error_type}, timeout={timeout:.1f}s)"
 DOC_CONCEPT_RETRY_EXHAUSTED = "Concept extraction exhausted retries for {chunk_qn}, queued to DLQ"
 
 # Graph algorithms
@@ -21,3 +21,19 @@ DOC_GRAPH_ALGO_ERROR = "Document graph algorithm failed: {error}"
 # Real-time updates
 DOC_CONCEPT_CLEANUP_START = "Cleaning up orphaned concepts for document: {doc_path}"
 DOC_CONCEPT_CLEANUP_DONE = "Removed {count} orphaned concepts"
+
+# Document updater resilience
+DOC_GRAPH_CONNECT_FAILED = "Document graph connection failed: {error}"
+DOC_GRAPH_UNAVAILABLE = "Document graph unavailable: {error}"
+DOC_SETUP_OP_FAILED = "Setup operation '{op}' failed: {error}"
+DOC_STALE_CLEANUP_FAILED = "Stale document cleanup failed: {error}"
+DOC_EXCLUDED_CLEANUP_FAILED = "Excluded document cleanup failed: {error}"
+EMBEDDING_PROVIDER_CLOSE_FAILED = "Could not close embedding provider cleanly: {error}"
+DOC_INCREMENTAL_FLUSH_PARTIAL = (
+    "Incremental flush partial failure at doc {index}: {stats}"
+)
+DOC_INCREMENTAL_FLUSH_OK = "Incremental flush success at doc {index}: {stats}"
+DOC_INCREMENTAL_FLUSH_FAILED = "Incremental flush failed at doc {index}: {error}"
+DOC_FINAL_FLUSH_PARTIAL = "Final flush had partial failures: {stats}"
+DOC_FINAL_FLUSH_OK = "Final flush complete: {stats}"
+DOC_FINAL_FLUSH_FAILED = "Final flush failed: {error}"

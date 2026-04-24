@@ -61,10 +61,10 @@ Rules:
         """Lazy initialization."""
         if self.agent is None:
             from codebase_rag.compat.pydantic_ai import Agent
-            from codebase_rag.services.llm import _create_provider_model
+            from codebase_rag.services.llm import _create_chat_model
 
             config = settings.active_orchestrator_config
-            llm = _create_provider_model(config)
+            llm = _create_chat_model(config)
 
             self.agent = Agent(
                 model=llm,

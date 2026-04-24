@@ -445,6 +445,13 @@ class FlushTimeoutError(CodebaseRAGError):
         super().__init__(message)
 
 
+class FlushError(CodebaseRAGError):
+    """Raised when a flush operation fails partially or completely."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+
+
 class QueryExecutionError(Exception):
     """Raised when a Memgraph query fails with context."""
 

@@ -266,6 +266,22 @@ MG_FLUSH_TIMEOUT = (
 MG_FLUSH_NO_PROGRESS = (
     "No flush progress for {interval}s, {pending} groups pending"
 )
+MG_CONNECTION_RETRY_ATTEMPT = (
+    "Memgraph connection attempt {attempt}/{max_attempts} failed: {error}. "
+    "Retrying in {delay}s..."
+)
+MG_CONNECTION_RETRY_EXHAUSTED = (
+    "Cannot connect to Memgraph at {host}:{port} after "
+    "{max_attempts} attempts: {error}"
+)
+MG_FLUSH_NODES_FAILED = "Node flush failed: {error}"
+MG_FLUSH_RELS_FAILED = "Relationship flush failed: {error}"
+MG_FLUSH_PARTIAL_FAILURE = (
+    "Flush partial failure: attempted={attempted}, flushed={flushed}, failed={failed}"
+)
+MG_FLUSH_ON_EXCEPTION = "Exception occurred; attempting best-effort flush"
+MG_FLUSH_ON_EXCEPTION_FAILED = "Best-effort flush on exception failed: {error}"
+MG_NO_RELS_TO_FLUSH = "No relationships to flush, skipping"
 MG_TRANSACTION_CONFLICT_RETRY = (
     "Transaction conflict on '{pattern}', retrying in {backoff}s "
     "(attempt {attempt}/{max_retries})"
@@ -505,6 +521,7 @@ DEP_PARSE_ERROR_CSPROJ = "Error parsing .csproj {path}: {error}"
 IMP_TOOL_NOT_AVAILABLE = "External tool '{tool}' not available for stdlib introspection"
 IMP_CACHE_LOADED = "Loaded stdlib cache from {path}"
 IMP_CACHE_LOAD_ERROR = "Could not load stdlib cache: {error}"
+IMP_CACHE_RECOVERED = "Recovered from corrupt stdlib cache, starting fresh: {error}"
 IMP_CACHE_SAVED = "Saved stdlib cache to {path}"
 IMP_CACHE_SAVE_ERROR = "Could not save stdlib cache: {error}"
 IMP_CACHE_CLEARED = "Cleared stdlib cache from disk"

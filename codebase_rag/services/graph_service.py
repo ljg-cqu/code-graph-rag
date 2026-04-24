@@ -9,6 +9,7 @@ from collections import defaultdict
 from collections.abc import Callable, Generator, Sequence
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextlib import contextmanager, nullcontext
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from loguru import logger
@@ -19,14 +20,6 @@ from codebase_rag.types_defs import CursorProtocol, ResultValue
 
 from .. import exceptions as ex
 from .. import logs as ls
-from .error_guidance import (
-    ErrorContext,
-    ErrorGuidance,
-    LLMErrorGuidance,
-    UserExpertiseLevel,
-    format_user_error,
-)
-from .failure_classifier import FailureType, classify_memgraph_failure, is_stdlib_module, _KNOWN_THIRD_PARTY
 from ..constants import (
     ERR_SUBSTR_ALREADY_EXISTS,
     ERR_SUBSTR_CONSTRAINT,
@@ -68,6 +61,30 @@ from ..types_defs import (
     ResultRow,
 )
 from ..utils.shutdown_manager import shutdown_manager
+from .error_guidance import (
+    ErrorContext,
+    LLMErrorGuidance,
+    UserExpertiseLevel,
+)
+from .failure_classifier import (
+    _KNOWN_THIRD_PARTY,
+    FailureType,
+    classify_memgraph_failure,
+    is_stdlib_module,
+)
+
+
+@dataclass
+class ConnectionRetryPolicy:
+    max_attempts: int = 3
+    base_delay_seconds: float = 1.0
+    max_delay_seconds: float = 10.0
+    exponential_base: float = 2.0
+    retryable_exceptions: tuple[type[Exception], ...] = (
+        ConnectionError,
+        TimeoutError,
+        OSError,
+    )
 
 
 class MemgraphIngestor:
@@ -232,22 +249,24 @@ class MemgraphIngestor:
         exc_val: BaseException | None,
         exc_tb: types.TracebackType | None,
     ) -> None:
+        connection_healthy = self.conn is not None
+        if connection_healthy:
+            try:
+                self.conn.cursor().execute("RETURN 1")
+            except Exception:
+                connection_healthy = False
+
         try:
-            if exc_type:
-                logger.exception(ls.MG_EXCEPTION.format(error=exc_val))
-                # (H) Best-effort flush: attempt to persist buffered nodes/relationships
-                # (H) even when an exception occurred. Catching broad Exception so a
-                # (H) secondary flush failure never masks the original exception.
+            if exc_type and connection_healthy:
+                logger.exception(ls.MG_FLUSH_ON_EXCEPTION)
                 try:
                     self.flush_all()
                 except Exception as flush_err:
-                    logger.error(ls.MG_FLUSH_ERROR.format(error=flush_err))
-            else:
+                    logger.error(ls.MG_FLUSH_ON_EXCEPTION_FAILED.format(error=flush_err))
+            elif connection_healthy:
                 self.flush_all()
         finally:
             if self._executor:
-                # Shutdown without waiting to allow forced exit.
-                # cancel_futures=True (Python ≥3.9) prevents waiting for stuck workers.
                 self._executor.shutdown(wait=False, cancel_futures=True)
                 self._executor = None
             if self.conn:
@@ -390,7 +409,7 @@ class MemgraphIngestor:
         attempt: int,
         max_attempts: int,
     ) -> bool:
-        from .failure_classifier import FailureType, classify_memgraph_failure
+        from .failure_classifier import classify_memgraph_failure
 
         classification = classify_memgraph_failure(error)
         if not classification.should_retry:
@@ -411,7 +430,7 @@ class MemgraphIngestor:
         query: str,
         params: dict[str, PropertyValue] | None = None,
     ) -> list[ResultRow]:
-        from .failure_classifier import FailureType, classify_memgraph_failure
+        from .failure_classifier import classify_memgraph_failure
 
         params = params or {}
         max_attempts = settings.MEMGRAPH_QUERY_MAX_RETRIES + 1
@@ -676,7 +695,7 @@ class MemgraphIngestor:
                     timeout=min(timeout, 30.0),
                 ):
                     pass
-            except socket.timeout as e:
+            except TimeoutError as e:
                 raise TimeoutError(
                     f"Connection to Memgraph at {self._host}:{self._port} "
                     f"timed out after {timeout}s. Check if Memgraph is running "
@@ -726,6 +745,42 @@ class MemgraphIngestor:
             raise ConnectionError("Failed to create Memgraph connection")
 
         return result[0]
+
+    def _create_connection_with_retry(
+        self,
+        policy: ConnectionRetryPolicy | None = None,
+    ) -> mgclient.Connection:
+        """Create connection with exponential backoff on transient failures."""
+        policy = policy or ConnectionRetryPolicy()
+        delay = policy.base_delay_seconds
+        last_exception: Exception | None = None
+
+        for attempt in range(1, policy.max_attempts + 1):
+            try:
+                return self._create_connection_with_timeout()
+            except policy.retryable_exceptions as e:
+                last_exception = e
+                if attempt == policy.max_attempts:
+                    break
+                logger.warning(
+                    ls.MG_CONNECTION_RETRY_ATTEMPT.format(
+                        attempt=attempt,
+                        max_attempts=policy.max_attempts,
+                        error=e,
+                        delay=delay,
+                    )
+                )
+                time.sleep(delay)
+                delay = min(delay * policy.exponential_base, policy.max_delay_seconds)
+
+        raise ConnectionError(
+            ls.MG_CONNECTION_RETRY_EXHAUSTED.format(
+                host=self._host,
+                port=self._port,
+                max_attempts=policy.max_attempts,
+                error=last_exception,
+            )
+        ) from last_exception
 
     @contextmanager
     def _socket_timeout_context(
@@ -1117,7 +1172,7 @@ class MemgraphIngestor:
         label: str,
         props_list: list[dict[str, PropertyValue]],
     ) -> tuple[int, int]:
-        conn = self._create_connection_with_timeout()  # <-- CHANGED
+        conn = self._create_connection_with_retry()
         try:
             return self._flush_node_label_group(label, props_list, conn=conn)
         finally:
@@ -1133,7 +1188,6 @@ class MemgraphIngestor:
         max_retries: int = 3,
     ) -> tuple[int, int]:
         """Execute flush operation with retry for transaction conflicts."""
-        from .failure_classifier import FailureType
 
         for attempt in range(max_retries + 1):
             try:
@@ -1174,9 +1228,9 @@ class MemgraphIngestor:
             except Exception:
                 pass  # Best-effort close — connection may be degraded after timeout
 
-    def flush_nodes(self) -> None:
+    def flush_nodes_with_stats(self) -> dict[str, int]:
         if not self.node_buffer:
-            return
+            return {"attempted": 0, "flushed": 0, "failed": 0}
 
         buffer_size = len(self.node_buffer)
         nodes_by_label: defaultdict[str, list[dict[str, PropertyValue]]] = defaultdict(
@@ -1187,7 +1241,7 @@ class MemgraphIngestor:
 
         flushed_total = 0
         skipped_total = 0
-
+        total_failed = 0
         first_error: Exception | None = None
 
         if self._executor and len(nodes_by_label) > 1:
@@ -1244,11 +1298,13 @@ class MemgraphIngestor:
                         flushed_total += flushed
                         skipped_total += skipped
                     except Exception as e:
+                        group_size = len(nodes_by_label[label])
+                        total_failed += group_size
+                        if first_error is None:
+                            first_error = e
                         logger.error(
                             ls.MG_LABEL_FLUSH_ERROR.format(label=label, error=e)
                         )
-                        if first_error is None:
-                            first_error = e
         else:
             for label, props_list in nodes_by_label.items():
                 try:
@@ -1256,9 +1312,11 @@ class MemgraphIngestor:
                     flushed_total += flushed
                     skipped_total += skipped
                 except Exception as e:
-                    logger.error(ls.MG_LABEL_FLUSH_ERROR.format(label=label, error=e))
+                    group_size = len(props_list)
+                    total_failed += group_size
                     if first_error is None:
                         first_error = e
+                    logger.error(ls.MG_LABEL_FLUSH_ERROR.format(label=label, error=e))
 
         logger.info(
             ls.MG_NODES_FLUSHED.format(flushed=flushed_total, total=buffer_size)
@@ -1267,8 +1325,26 @@ class MemgraphIngestor:
             logger.info(ls.MG_NODES_SKIPPED.format(count=skipped_total))
         self.node_buffer.clear()
 
-        if first_error is not None:
+        if first_error is not None and flushed_total == 0:
             raise first_error
+
+        return {
+            "attempted": buffer_size,
+            "flushed": flushed_total,
+            "failed": total_failed,
+        }
+
+    def flush_nodes(self) -> None:
+        """Backward-compatible wrapper that raises on any failure."""
+        stats = self.flush_nodes_with_stats()
+        if stats["failed"] > 0:
+            raise ex.FlushError(
+                ls.MG_FLUSH_PARTIAL_FAILURE.format(
+                    attempted=stats["attempted"],
+                    flushed=stats["flushed"],
+                    failed=stats["failed"],
+                )
+            )
 
     def _classify_import_failure(self, to_val: str) -> str:
         """Classify import failure type.
@@ -1426,16 +1502,16 @@ class MemgraphIngestor:
             max_retries=settings.MEMGRAPH_CONFLICT_RETRY_MAX_ATTEMPTS,
         )
 
-    def flush_relationships(self) -> None:
+    def flush_relationships_with_stats(self) -> dict[str, int]:
         if not self._rel_count:
-            logger.debug("No relationships to flush, skipping")
-            return
+            logger.debug(ls.MG_NO_RELS_TO_FLUSH)
+            return {"attempted": 0, "flushed": 0, "failed": 0}
 
         total_attempted = 0
         total_successful = 0
+        total_failed = 0
         first_error: Exception | None = None
 
-        # Always log relationship flush start (previously conditional on executor + >1 groups)
         logger.info(
             ls.MG_PARALLEL_FLUSH_RELS.format(
                 count=len(self._rel_groups),
@@ -1490,11 +1566,13 @@ class MemgraphIngestor:
                         total_attempted += attempted
                         total_successful += successful
                     except Exception as e:
+                        group_size = len(self._rel_groups[pattern])
+                        total_failed += group_size
+                        if first_error is None:
+                            first_error = e
                         logger.error(
                             ls.MG_REL_FLUSH_ERROR.format(pattern=pattern, error=e)
                         )
-                        if first_error is None:
-                            first_error = e
         else:
             for pattern, params_list in self._rel_groups.items():
                 try:
@@ -1504,9 +1582,11 @@ class MemgraphIngestor:
                     total_attempted += attempted
                     total_successful += successful
                 except Exception as e:
-                    logger.error(ls.MG_REL_FLUSH_ERROR.format(pattern=pattern, error=e))
+                    group_size = len(params_list)
+                    total_failed += group_size
                     if first_error is None:
                         first_error = e
+                    logger.error(ls.MG_REL_FLUSH_ERROR.format(pattern=pattern, error=e))
 
         logger.info(
             ls.MG_RELS_FLUSHED.format(
@@ -1518,8 +1598,57 @@ class MemgraphIngestor:
         self._rel_count = 0
         self._rel_groups.clear()
 
-        if first_error is not None:
+        if first_error is not None and total_successful == 0:
             raise first_error
+
+        return {
+            "attempted": total_attempted,
+            "flushed": total_successful,
+            "failed": total_failed,
+        }
+
+    def flush_relationships(self) -> None:
+        """Backward-compatible wrapper that raises on any failure."""
+        stats = self.flush_relationships_with_stats()
+        if stats["failed"] > 0:
+            raise ex.FlushError(
+                ls.MG_FLUSH_PARTIAL_FAILURE.format(
+                    attempted=stats["attempted"],
+                    flushed=stats["flushed"],
+                    failed=stats["failed"],
+                )
+            )
+
+    def flush_all_with_stats(self) -> dict[str, int]:
+        """Flush all pending writes, returning partial-success statistics."""
+        stats: dict[str, int] = {
+            "nodes_attempted": 0,
+            "nodes_flushed": 0,
+            "nodes_failed": 0,
+            "relationships_attempted": 0,
+            "relationships_flushed": 0,
+            "relationships_failed": 0,
+        }
+
+        try:
+            node_stats = self.flush_nodes_with_stats()
+            stats["nodes_attempted"] = node_stats["attempted"]
+            stats["nodes_flushed"] = node_stats["flushed"]
+            stats["nodes_failed"] = node_stats["failed"]
+        except Exception as e:
+            logger.error(ls.MG_FLUSH_NODES_FAILED.format(error=e))
+            stats["nodes_failed"] = stats["nodes_attempted"]
+
+        try:
+            rel_stats = self.flush_relationships_with_stats()
+            stats["relationships_attempted"] = rel_stats["attempted"]
+            stats["relationships_flushed"] = rel_stats["flushed"]
+            stats["relationships_failed"] = rel_stats["failed"]
+        except Exception as e:
+            logger.error(ls.MG_FLUSH_RELS_FAILED.format(error=e))
+            stats["relationships_failed"] = stats["relationships_attempted"]
+
+        return stats
 
     def flush_all(self) -> None:
         logger.info(ls.MG_FLUSH_START)

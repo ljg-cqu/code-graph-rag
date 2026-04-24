@@ -586,6 +586,9 @@ class AppConfig(BaseSettings):
     DOC_MEMGRAPH_USE_DYNAMIC_ALGORITHMS: bool | None = None
     DOC_MEMGRAPH_MEMORY_LIMIT: str = "4GB"  # Memory limit for document graph container
     DOC_MEMGRAPH_CONNECTION_TIMEOUT: int = Field(default=600, gt=0)
+    DOC_MEMGRAPH_CONNECTION_RETRY_ATTEMPTS: int = Field(default=3, ge=0)
+    DOC_MEMGRAPH_CONNECTION_RETRY_BASE_DELAY: float = Field(default=1.0, gt=0)
+    DOC_INCREMENTAL_FLUSH_INTERVAL: int = Field(default=10, ge=0)
     DOC_MAX_CHUNKS_PER_DOCUMENT: int = (
         5000  # Maximum chunks per document to prevent memory exhaustion
     )
@@ -624,6 +627,18 @@ class AppConfig(BaseSettings):
     DOC_CONCEPT_EXTRACTION_CONCURRENCY: int = Field(default=10, ge=1, le=50)
     DOC_CONCEPT_EXTRACTION_MAX_RETRIES: int = Field(default=3, ge=0, le=10)
     DOC_CONCEPT_EXTRACTION_RETRY_DELAY: float = Field(default=1.0, ge=0.1, le=60.0)
+    DOC_CONCEPT_TIMEOUT_RETRY_MULTIPLIER: float = Field(
+        default=1.5,
+        ge=1.0,
+        le=5.0,
+        description="Multiplier for timeout on each retry after a timeout error",
+    )
+    DOC_CONCEPT_TIMEOUT_RETRY_DELAY_MULTIPLIER: float = Field(
+        default=3.0,
+        ge=1.0,
+        le=10.0,
+        description="Multiplier for retry delay after a timeout error",
+    )
 
     # Adaptive timeout for concept extraction
     DOC_CONCEPT_BASE_TIMEOUT: float = Field(
