@@ -228,6 +228,7 @@ class TestLLMConceptExtractorExtract:
             definition="def",
             confidence=0.9,
             source_chunk_qn="",
+            entity_category="CONCRETE_ENTITY",
         )
         result = ExtractionResult(concepts=[concept])
 
@@ -285,6 +286,7 @@ class TestLLMConceptExtractorExtract:
             definition="def",
             confidence=0.9,
             source_chunk_qn="",
+            entity_category="CONCRETE_ENTITY",
         )
         result = ExtractionResult(concepts=[concept])
 
@@ -324,6 +326,7 @@ class TestLLMConceptExtractorRetry:
                 definition="def",
                 confidence=0.9,
                 source_chunk_qn="",
+                entity_category="CONCRETE_ENTITY",
             )
             return _MockAgentOutput(ExtractionResult(concepts=[concept]))
 
@@ -542,6 +545,68 @@ class TestAdaptiveTimeoutTuning:
         assert timeouts_passed[3] == pytest.approx(5.0, abs=0.1)
 
     @pytest.mark.asyncio
+    async def test_consecutive_timeouts_reset_on_success(self):
+        """Counter resets to 0 after a successful extraction, preventing
+        stale timeout counts from carrying over across chunks."""
+        extractor = LLMConceptExtractor(timeout=10.0, max_timeout=100.0)
+
+        timeouts_passed: list[float] = []
+        call_index = 0
+
+        async def mock_wait_for(awaitable, timeout):
+            nonlocal call_index
+            timeouts_passed.append(timeout)
+            call_index += 1
+            if call_index <= 2:
+                raise TimeoutError()
+            # 3rd call succeeds — counter should reset to 0
+            return _MockAgentOutput(ExtractionResult())
+
+        with patch("asyncio.wait_for", mock_wait_for):
+            with patch(
+                "codebase_rag.document.concept_extraction.LLMConceptExtractor._probe_provider_health",
+                return_value=True,
+            ):
+                await extractor.extract_with_retry("content", "qn")
+        # After 2 timeouts + 1 success, counter must be 0
+        assert extractor._consecutive_timeouts == 0
+        # First 2 attempts used normal adaptive timeout, 3rd (success) also normal
+        assert timeouts_passed[0] == pytest.approx(10.07, abs=0.1)
+        assert timeouts_passed[1] == pytest.approx(11.077, abs=0.1)
+
+    @pytest.mark.asyncio
+    async def test_interleaved_timeout_success_no_fast_fail(self):
+        """Interleaved timeout/success across chunks should NOT trigger
+        fast-fail mode, since the counter resets after each success."""
+        extractor = LLMConceptExtractor(timeout=10.0, max_timeout=100.0)
+
+        timeouts_passed: list[float] = []
+
+        async def mock_wait_for(awaitable, timeout):
+            timeouts_passed.append(timeout)
+            # Fail on first attempt of each chunk, succeed on retry
+            # This gives pattern: timeout, success, timeout, success...
+            if len(timeouts_passed) % 2 == 1:
+                raise TimeoutError()
+            return _MockAgentOutput(ExtractionResult())
+
+        with patch("asyncio.wait_for", mock_wait_for):
+            with patch(
+                "codebase_rag.document.concept_extraction.LLMConceptExtractor._probe_provider_health",
+                return_value=True,
+            ):
+                # Process 5 chunks — each times out once then succeeds
+                for _ in range(5):
+                    await extractor.extract_with_retry("content", "qn")
+
+        # Fast-fail never engaged because success resets counter each time
+        # All first-attempt timeouts should use the normal adaptive timeout (~10.07s),
+        # NOT the fast-fail 5s
+        first_attempts = [t for i, t in enumerate(timeouts_passed) if i % 2 == 0]
+        for t in first_attempts:
+            assert t == pytest.approx(10.07, abs=0.1)
+
+    @pytest.mark.asyncio
     async def test_probe_timeout_does_not_affect_breaker(self):
         cb = CircuitBreaker(name="test")
         extractor = LLMConceptExtractor(circuit_breaker=cb)
@@ -582,6 +647,7 @@ class TestCircuitBreakerStormMitigation:
             definition="def",
             confidence=0.9,
             source_chunk_qn="",
+            entity_category="CONCRETE_ENTITY",
         )
         result = ExtractionResult(concepts=[concept])
 

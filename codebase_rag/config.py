@@ -802,6 +802,32 @@ class AppConfig(BaseSettings):
     # JSON ingestion parallel worker count (round-robin connection pool)
     JSON_PARALLEL_WORKERS: int = 10
 
+    # ─────────────────────────────────────────────────────────
+    # CONCEPT GRAPH (NEW — 4th Memgraph instance)
+    # ─────────────────────────────────────────────────────────
+    CONCEPT_MEMGRAPH_ENABLED: bool = True
+    CONCEPT_MEMGRAPH_HOST: str = "localhost"
+    CONCEPT_MEMGRAPH_PORT: int = 7690
+    CONCEPT_MEMGRAPH_USERNAME: str | None = None
+    CONCEPT_MEMGRAPH_PASSWORD: str | None = None
+    CONCEPT_MEMGRAPH_BATCH_SIZE: int = 1000
+    CONCEPT_MEMGRAPH_MEMORY_LIMIT: str = "4GB"
+    CONCEPT_MEMGRAPH_CONNECTION_TIMEOUT: int = Field(default=600, gt=0)
+    CONCEPT_MEMGRAPH_CONNECTION_RETRY_ATTEMPTS: int = Field(default=3, ge=0)
+    CONCEPT_MEMGRAPH_CONNECTION_RETRY_BASE_DELAY: float = Field(default=1.0, gt=0)
+    CONCEPT_LAB_PORT: int = 3003
+
+    @property
+    def concept_memgraph(self) -> dict:
+        """Concept Memgraph configuration as a dict for easy access."""
+        return {
+            "host": self.CONCEPT_MEMGRAPH_HOST,
+            "port": self.CONCEPT_MEMGRAPH_PORT,
+            "username": self.CONCEPT_MEMGRAPH_USERNAME,
+            "password": self.CONCEPT_MEMGRAPH_PASSWORD,
+            "batch_size": self.CONCEPT_MEMGRAPH_BATCH_SIZE,
+        }
+
     # Real-time updater (extended)
     REALTIME_DEBOUNCE_SECONDS: float = Field(
         default=5.0, gt=0,
@@ -1400,6 +1426,11 @@ class AppConfig(BaseSettings):
         """Effective embedding dimension for JSON graph (follows standard precedence logic)."""
         return self.get_effective_vector_dim("json")
 
+    @property
+    def CONCEPT_EMBEDDING_DIMENSION(self) -> int:
+        """Effective embedding dimension for concept graph."""
+        return self.get_effective_vector_dim("concept")
+
     def get_effective_vector_dim(self, graph_type: str = "code") -> int:
         """Return effective dimension with proper precedence for specified graph type.
 
@@ -1418,6 +1449,7 @@ class AppConfig(BaseSettings):
             "code": "MEMGRAPH_VECTOR_DIM",
             "document": "DOC_MEMGRAPH_VECTOR_DIM",
             "json": "JSON_MEMGRAPH_VECTOR_DIM",
+            "concept": "CONCEPT_MEMGRAPH_VECTOR_DIM",
         }
         if graph_type not in env_var_map:
             raise ValueError(

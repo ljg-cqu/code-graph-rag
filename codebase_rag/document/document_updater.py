@@ -367,6 +367,10 @@ class DocumentGraphUpdater:
         embeddings_required: bool | None = None,
         username: str | None = None,
         password: str | None = None,
+        concept_host: str | None = None,
+        concept_port: int | None = None,
+        concept_username: str | None = None,
+        concept_password: str | None = None,
     ) -> None:
         self.host = host
         self.port = port
@@ -416,6 +420,10 @@ class DocumentGraphUpdater:
         self.batch_size = batch_size
         self.username = username if username is not None else settings.DOC_MEMGRAPH_USERNAME
         self.password = password if password is not None else settings.DOC_MEMGRAPH_PASSWORD
+        self.concept_host = concept_host if concept_host is not None else settings.CONCEPT_MEMGRAPH_HOST
+        self.concept_port = concept_port if concept_port is not None else settings.CONCEPT_MEMGRAPH_PORT
+        self.concept_username = concept_username if concept_username is not None else settings.CONCEPT_MEMGRAPH_USERNAME
+        self.concept_password = concept_password if concept_password is not None else settings.CONCEPT_MEMGRAPH_PASSWORD
 
         # Ensure metadata directory exists before initializing caches
         cgr_dir = self.base_path / ".cgr"
@@ -579,6 +587,25 @@ class DocumentGraphUpdater:
                 stats["graph_error"] = str(e)
                 return stats
 
+            # Create concept ingestor if concept extraction is enabled
+            concept_ingestor = None
+            if self.concept_extractor and settings.CONCEPT_MEMGRAPH_ENABLED:
+                try:
+                    concept_ingestor = MemgraphIngestor(
+                        host=self.concept_host,
+                        port=self.concept_port,
+                        batch_size=settings.CONCEPT_MEMGRAPH_BATCH_SIZE,
+                        connection_timeout=settings.CONCEPT_MEMGRAPH_CONNECTION_TIMEOUT,
+                        username=self.concept_username,
+                        password=self.concept_password,
+                    ).__enter__()
+                except (ConnectionError, TimeoutError, OSError) as e:
+                    logger.warning(
+                        f"Concept extraction enabled but concept graph instance unavailable "
+                        f"({self.concept_host}:{self.concept_port}): {e} — "
+                        "concepts will not be stored"
+                    )
+
             try:
                 try:
                     _check_graph_availability(ingestor, graph_type="document")
@@ -619,13 +646,13 @@ class DocumentGraphUpdater:
                     )
 
                 try:
-                    deleted_stale = self._delete_stale_documents(documents, ingestor)
+                    deleted_stale = self._delete_stale_documents(documents, ingestor, concept_ingestor=concept_ingestor)
                 except Exception as e:
                     logger.warning(doc_ls.DOC_STALE_CLEANUP_FAILED.format(error=e))
                     deleted_stale = 0
 
                 try:
-                    deleted_excluded = self._delete_excluded_documents(documents, ingestor)
+                    deleted_excluded = self._delete_excluded_documents(documents, ingestor, concept_ingestor=concept_ingestor)
                 except Exception as e:
                     logger.warning(doc_ls.DOC_EXCLUDED_CLEANUP_FAILED.format(error=e))
                     deleted_excluded = 0
@@ -647,7 +674,7 @@ class DocumentGraphUpdater:
                         f"Indexing document {index}/{total_documents}: {doc_path}"
                     )
                     try:
-                        result = self._process_document(doc_path, ingestor, force=force, stats=stats)
+                        result = self._process_document(doc_path, ingestor, concept_ingestor=concept_ingestor, force=force, stats=stats)
                         if result == "indexed":
                             stats["indexed"] += 1
                         elif result == "skipped":
@@ -724,6 +751,11 @@ class DocumentGraphUpdater:
                 logger.info(f"Document indexing complete: {stats}")
                 return stats
             finally:
+                if concept_ingestor is not None:
+                    try:
+                        concept_ingestor.__exit__(None, None, None)
+                    except Exception as e:
+                        logger.warning(f"Error closing concept ingestor: {e}")
                 ingestor.__exit__(None, None, None)
         finally:
             try:
@@ -758,6 +790,27 @@ class DocumentGraphUpdater:
                 stats["graph_available"] = False
                 stats["graph_error"] = str(e)
                 return stats
+
+            # Create concept ingestor if concept extraction is enabled
+            concept_ingestor = None
+            if self.concept_extractor and settings.CONCEPT_MEMGRAPH_ENABLED:
+                try:
+                    concept_ingestor = await asyncio.to_thread(
+                        MemgraphIngestor(
+                            host=self.concept_host,
+                            port=self.concept_port,
+                            batch_size=settings.CONCEPT_MEMGRAPH_BATCH_SIZE,
+                            connection_timeout=settings.CONCEPT_MEMGRAPH_CONNECTION_TIMEOUT,
+                            username=self.concept_username,
+                            password=self.concept_password,
+                        ).__enter__
+                    )
+                except (ConnectionError, TimeoutError, OSError) as e:
+                    logger.warning(
+                        f"Concept extraction enabled but concept graph instance unavailable "
+                        f"({self.concept_host}:{self.concept_port}): {e} — "
+                        "concepts will not be stored"
+                    )
 
             try:
                 try:
@@ -804,7 +857,7 @@ class DocumentGraphUpdater:
 
                 try:
                     deleted_stale = await asyncio.to_thread(
-                        self._delete_stale_documents, documents, ingestor
+                        self._delete_stale_documents, documents, ingestor, concept_ingestor
                     )
                 except Exception as e:
                     logger.warning(doc_ls.DOC_STALE_CLEANUP_FAILED.format(error=e))
@@ -812,7 +865,7 @@ class DocumentGraphUpdater:
 
                 try:
                     deleted_excluded = await asyncio.to_thread(
-                        self._delete_excluded_documents, documents, ingestor
+                        self._delete_excluded_documents, documents, ingestor, concept_ingestor
                     )
                 except Exception as e:
                     logger.warning(doc_ls.DOC_EXCLUDED_CLEANUP_FAILED.format(error=e))
@@ -831,7 +884,7 @@ class DocumentGraphUpdater:
                     )
                     try:
                         result = await self._process_document_async(
-                            doc_path, ingestor, force=force, stats=stats
+                            doc_path, ingestor, concept_ingestor=concept_ingestor, force=force, stats=stats
                         )
                         if result == "indexed":
                             stats["indexed"] += 1
@@ -915,6 +968,11 @@ class DocumentGraphUpdater:
                 logger.info(f"Document indexing complete: {stats}")
                 return stats
             finally:
+                if concept_ingestor is not None:
+                    try:
+                        await asyncio.to_thread(concept_ingestor.__exit__, None, None, None)
+                    except Exception as e:
+                        logger.warning(f"Error closing concept ingestor: {e}")
                 await asyncio.to_thread(ingestor.__exit__, None, None, None)
         finally:
             try:
@@ -1074,7 +1132,8 @@ class DocumentGraphUpdater:
         return documents
 
     def _delete_stale_documents(
-        self, documents: list[Path], ingestor: MemgraphIngestor
+        self, documents: list[Path], ingestor: MemgraphIngestor,
+        concept_ingestor: MemgraphIngestor | None = None,
     ) -> int:
         if not self.repo_path.is_dir():
             return 0
@@ -1097,7 +1156,7 @@ class DocumentGraphUpdater:
             stale_paths.append(stored_path)
 
         for stale_path in stale_paths:
-            self._delete_document_nodes(stale_path, ingestor)
+            self._delete_document_nodes(stale_path, ingestor, concept_ingestor=concept_ingestor)
             self.version_cache.remove(stale_path)
 
         if stale_paths:
@@ -1111,6 +1170,7 @@ class DocumentGraphUpdater:
         self,
         current_documents: list[Path],
         ingestor: MemgraphIngestor,
+        concept_ingestor: MemgraphIngestor | None = None,
     ) -> int:
         """Remove documents that are now excluded by .cgrignore patterns.
 
@@ -1160,7 +1220,7 @@ class DocumentGraphUpdater:
                     f"Removing excluded document from graph: {stored_path} "
                     f"(matched by .cgrignore pattern)"
                 )
-                self._delete_document_nodes(stored_path, ingestor)
+                self._delete_document_nodes(stored_path, ingestor, concept_ingestor=concept_ingestor)
                 self.version_cache.remove(stored_path)
                 excluded_count += 1
 
@@ -1399,6 +1459,7 @@ class DocumentGraphUpdater:
         ingestor: MemgraphIngestor,
         force: bool = False,
         stats: dict[str, object] | None = None,
+        concept_ingestor: MemgraphIngestor | None = None,
     ) -> str:
         """
         Process single document.
@@ -1440,7 +1501,7 @@ class DocumentGraphUpdater:
         embeddings_data = self._prepare_embeddings_with_fallback(doc, chunks)
 
         # Only delete existing nodes after embeddings are validated
-        self._delete_document_nodes(doc.path, ingestor)
+        self._delete_document_nodes(doc.path, ingestor, concept_ingestor=concept_ingestor)
 
         # Store document and sections in graph, get section info for chunk matching
         store_stats, section_info, indexed_at = self._store_document(
@@ -1464,7 +1525,7 @@ class DocumentGraphUpdater:
             except RuntimeError:
                 asyncio.run(
                     self._extract_and_store_concepts(
-                        chunks, ingestor, self.workspace, stats
+                        chunks, ingestor, self.workspace, stats, concept_ingestor=concept_ingestor
                     )
                 )
 
@@ -1477,7 +1538,7 @@ class DocumentGraphUpdater:
         )
         return "indexed"
 
-    def _delete_document_nodes(self, doc_path: str, ingestor: MemgraphIngestor) -> None:
+    def _delete_document_nodes(self, doc_path: str, ingestor: MemgraphIngestor, concept_ingestor: MemgraphIngestor | None = None) -> None:
         """
         Delete existing Section and Chunk nodes for a document.
 
@@ -1501,7 +1562,7 @@ class DocumentGraphUpdater:
         try:
             # Clean up orphaned concepts before deleting chunks
             if self.concept_extractor:
-                self._cleanup_concepts_for_document(doc_path, ingestor)
+                self._cleanup_concepts_for_document(doc_path, ingestor, concept_ingestor=concept_ingestor)
 
             ingestor.execute_write(
                 """
@@ -1553,6 +1614,7 @@ class DocumentGraphUpdater:
         ingestor: MemgraphIngestor,
         force: bool = False,
         stats: dict[str, object] | None = None,
+        concept_ingestor: MemgraphIngestor | None = None,
     ) -> str:
         """Async version of _process_document."""
         if not file_path.exists():
@@ -1588,7 +1650,7 @@ class DocumentGraphUpdater:
         )
 
         # Only delete existing nodes after embeddings are validated
-        await asyncio.to_thread(self._delete_document_nodes, doc.path, ingestor)
+        await asyncio.to_thread(self._delete_document_nodes, doc.path, ingestor, concept_ingestor=concept_ingestor)
 
         # Store document and sections (run in thread to avoid blocking)
         store_stats, section_info, indexed_at = await asyncio.to_thread(
@@ -1608,7 +1670,7 @@ class DocumentGraphUpdater:
 
         # Extract and store concepts from chunks
         if self.concept_extractor and chunks:
-            await self._extract_and_store_concepts(chunks, ingestor, self.workspace, stats)
+            await self._extract_and_store_concepts(chunks, ingestor, self.workspace, stats, concept_ingestor=concept_ingestor)
 
         # Update version
         version = self.version_tracker.create_version(doc)
@@ -2415,19 +2477,40 @@ class DocumentGraphUpdater:
             )
             return "failed"
 
+        concept_ingestor = None
+        ingestor = None
         try:
-            with MemgraphIngestor(
+            ingestor = MemgraphIngestor(
                 host=self.host,
                 port=self.port,
                 batch_size=self.batch_size,
                 connection_timeout=settings.DOC_MEMGRAPH_CONNECTION_TIMEOUT,
-            ) as ingestor:
-                ingestor.ensure_constraints()
-                result = self._process_document(file_path, ingestor, force=True)
-                ingestor.flush_all()
-                logger.debug("Saving version cache to disk")
-                self.version_cache.save()
-                return result
+            ).__enter__()
+
+            # Create concept ingestor if concept extraction is enabled
+            if self.concept_extractor and settings.CONCEPT_MEMGRAPH_ENABLED:
+                try:
+                    concept_ingestor = MemgraphIngestor(
+                        host=self.concept_host,
+                        port=self.concept_port,
+                        batch_size=settings.CONCEPT_MEMGRAPH_BATCH_SIZE,
+                        connection_timeout=settings.CONCEPT_MEMGRAPH_CONNECTION_TIMEOUT,
+                        username=self.concept_username,
+                        password=self.concept_password,
+                    ).__enter__()
+                except (ConnectionError, TimeoutError, OSError) as e:
+                    logger.warning(
+                        f"Concept extraction enabled but concept graph instance unavailable "
+                        f"({self.concept_host}:{self.concept_port}): {e} — "
+                        "concepts will not be stored"
+                    )
+
+            ingestor.ensure_constraints()
+            result = self._process_document(file_path, ingestor, force=True, concept_ingestor=concept_ingestor)
+            ingestor.flush_all()
+            logger.debug("Saving version cache to disk")
+            self.version_cache.save()
+            return result
         except ExtractionException as e:
             logger.error(f"Failed to update file {file_path}: {type(e).__name__}: {e}")
             self.dead_letter_queue.enqueue(e.to_extraction_error())
@@ -2444,6 +2527,17 @@ class DocumentGraphUpdater:
             )
             self.version_cache.remove(str(file_path))  # Rollback stale version
             return "failed"
+        finally:
+            if concept_ingestor is not None:
+                try:
+                    concept_ingestor.__exit__(None, None, None)
+                except Exception as e:
+                    logger.warning(f"Error closing concept ingestor: {e}")
+            if ingestor is not None:
+                try:
+                    ingestor.__exit__(None, None, None)
+                except Exception as e:
+                    logger.warning(f"Error closing ingestor: {e}")
 
     def delete_file(self, file_path: Path) -> str:
         """
@@ -2476,27 +2570,47 @@ class DocumentGraphUpdater:
 
         doc_path = str(file_path.relative_to(self.repo_path))
 
+        concept_ingestor = None
         try:
-            with MemgraphIngestor(
+            ingestor = MemgraphIngestor(
                 host=self.host,
                 port=self.port,
                 batch_size=self.batch_size,
                 connection_timeout=settings.DOC_MEMGRAPH_CONNECTION_TIMEOUT,
-            ) as ingestor:
-                ingestor.ensure_constraints()
-                self._delete_document_nodes(doc_path, ingestor)
-                ingestor.execute_write(
-                    """
-                    MATCH (d:Document {path: $path, workspace: $workspace})
-                    DETACH DELETE d
-                    """,
-                    {"path": doc_path, "workspace": self.workspace},
-                )
-                ingestor.flush_all()
-                logger.debug("Saving version cache to disk")
-                self.version_cache.remove(doc_path)
-                self.version_cache.save()
-                return "deleted"
+            ).__enter__()
+
+            # Create concept ingestor for cross-instance cleanup
+            if settings.CONCEPT_MEMGRAPH_ENABLED:
+                try:
+                    concept_ingestor = MemgraphIngestor(
+                        host=self.concept_host,
+                        port=self.concept_port,
+                        batch_size=settings.CONCEPT_MEMGRAPH_BATCH_SIZE,
+                        connection_timeout=settings.CONCEPT_MEMGRAPH_CONNECTION_TIMEOUT,
+                        username=self.concept_username,
+                        password=self.concept_password,
+                    ).__enter__()
+                except (ConnectionError, TimeoutError, OSError) as e:
+                    logger.warning(
+                        f"Concept graph instance unavailable during file deletion "
+                        f"({self.concept_host}:{self.concept_port}): {e} — "
+                        "concept cleanup will be skipped"
+                    )
+
+            ingestor.ensure_constraints()
+            self._delete_document_nodes(doc_path, ingestor, concept_ingestor=concept_ingestor)
+            ingestor.execute_write(
+                """
+                MATCH (d:Document {path: $path, workspace: $workspace})
+                DETACH DELETE d
+                """,
+                {"path": doc_path, "workspace": self.workspace},
+            )
+            ingestor.flush_all()
+            logger.debug("Saving version cache to disk")
+            self.version_cache.remove(doc_path)
+            self.version_cache.save()
+            return "deleted"
         except ExtractionException as e:
             logger.error(f"Failed to delete file {file_path}: {type(e).__name__}: {e}")
             self.dead_letter_queue.enqueue(e.to_extraction_error())
@@ -2511,6 +2625,16 @@ class DocumentGraphUpdater:
                 )
             )
             return "failed"
+        finally:
+            if concept_ingestor is not None:
+                try:
+                    concept_ingestor.__exit__(None, None, None)
+                except Exception as e:
+                    logger.warning(f"Error closing concept ingestor: {e}")
+            try:
+                ingestor.__exit__(None, None, None)
+            except Exception as e:
+                logger.warning(f"Error closing ingestor: {e}")
 
 
     def _ensure_concept_indexes(self, ingestor: MemgraphIngestor) -> None:
@@ -2526,11 +2650,41 @@ class DocumentGraphUpdater:
         indexes_to_create = [
             ("Concept", "qualified_name"),
             ("Concept", "workspace"),
+            ("Concept", "entity_category"),
+            ("Concept", "entity_subtype"),
+            ("ChunkRef", "qualified_name"),
+            ("ChunkRef", "workspace"),
             ("Topic", "qualified_name"),
             ("Topic", "workspace"),
         ]
 
+        # Edge label indexes for concept relationship categories
+        edge_indexes_to_create = [
+            ("HIERARCHICAL", "verb"),
+            ("COMPOSITIONAL", "verb"),
+            ("CONTEXTUAL", "verb"),
+            ("ATTRIBUTIVE", "verb"),
+            ("COMPARATIVE", "verb"),
+            ("SEQUENTIAL", "verb"),
+            ("CAUSAL", "verb"),
+            ("ANALOGICAL", "verb"),
+            ("RELATED_TO", "verb"),
+        ]
+
         for label, prop in indexes_to_create:
+            cypher = f"CREATE INDEX ON :{label}({prop});"
+            try:
+                ingestor.fetch_all(cypher)
+                logger.debug(f"Created index on :{label}({prop})")
+            except Exception as e:
+                msg = str(e).lower()
+                # Memgraph error messages for existing indexes
+                if any(x in msg for x in ["already exists", "duplicate", "existing", "already created"]):
+                    logger.debug(f"Index on :{label}({prop}) already exists")
+                else:
+                    logger.warning(f"Failed to create index on :{label}({prop}): {e}")
+
+        for label, prop in edge_indexes_to_create:
             cypher = f"CREATE INDEX ON :{label}({prop});"
             try:
                 ingestor.fetch_all(cypher)
@@ -2551,6 +2705,7 @@ class DocumentGraphUpdater:
         ingestor: MemgraphIngestor,
         workspace: str,
         stats: dict[str, object] | None = None,
+        concept_ingestor: MemgraphIngestor | None = None,
     ) -> None:
         """Extract concepts from chunks and store in graph via batch MERGE.
 
@@ -2560,6 +2715,11 @@ class DocumentGraphUpdater:
         are stored and failed chunks are logged at debug level.
         """
         if not self.concept_extractor:
+            return
+
+        # Graceful degradation: skip if concept instance unavailable
+        if concept_ingestor is None:
+            logger.warning("Skipping concept storage: concept graph instance unavailable")
             return
 
         extractor = cast(LLMConceptExtractor, self.concept_extractor)
@@ -2581,7 +2741,7 @@ class DocumentGraphUpdater:
                 stats["concepts_skipped_circuit_breaker"] = stats.get("concepts_skipped_circuit_breaker", 0) + len(chunks)
             return
 
-        self._ensure_concept_indexes(ingestor)
+        self._ensure_concept_indexes(concept_ingestor)
         logger.info(doc_ls.DOC_CONCEPT_EXTRACT_START.format(chunk_count=len(chunks)))
 
         semaphore = asyncio.Semaphore(
@@ -2604,7 +2764,7 @@ class DocumentGraphUpdater:
 
         concept_nodes: list[dict[str, object]] = []
         mention_rels: list[dict[str, object]] = []
-        concept_relationships: list[tuple[str, str, str, float]] = []
+        concept_relationships: list[tuple[str, str, str, str, str, float]] = []
         failed_count = 0
 
         for idx, result in enumerate(extraction_results):
@@ -2627,6 +2787,9 @@ class DocumentGraphUpdater:
                     "definition": concept.definition,
                     "confidence": concept.confidence,
                     "source_chunk_qn": concept.source_chunk_qn,
+                    "entity_category": concept.entity_category,
+                    "entity_subtype": concept.entity_subtype,
+                    "entity_emoji": concept.entity_emoji,
                 })
                 frequency = chunk.content.lower().count(concept.name.lower())
                 if not frequency:
@@ -2643,7 +2806,9 @@ class DocumentGraphUpdater:
                     (
                         f"{workspace}:{rel.from_concept}",
                         f"{workspace}:{rel.to_concept}",
-                        rel.relationship_type,
+                        rel.verb,
+                        rel.emoji,
+                        rel.category,
                         rel.strength,
                     )
                 )
@@ -2659,11 +2824,11 @@ class DocumentGraphUpdater:
         )
 
         if concept_nodes:
-            self._merge_concept_nodes_batch(ingestor, concept_nodes)
+            self._merge_concept_nodes_batch(concept_ingestor, concept_nodes)
         if mention_rels:
-            self._create_mentions_batch(ingestor, mention_rels, workspace)
+            self._create_mentions_batch(concept_ingestor, mention_rels, workspace)
         if concept_relationships:
-            self._store_concept_relationships_batch(ingestor, concept_relationships, workspace)
+            self._store_concept_relationships_batch(concept_ingestor, concept_relationships, workspace)
 
     def _merge_concept_nodes_batch(
         self,
@@ -2671,7 +2836,7 @@ class DocumentGraphUpdater:
         concept_nodes: list[dict[str, object]],
     ) -> None:
         """Batch merge Concept nodes using UNWIND for efficiency."""
-        batch_size = settings.DOC_MEMGRAPH_BATCH_SIZE
+        batch_size = settings.CONCEPT_MEMGRAPH_BATCH_SIZE
         for batch in batched(concept_nodes, batch_size):
             cypher = """
             UNWIND $nodes as node
@@ -2682,7 +2847,10 @@ class DocumentGraphUpdater:
                 c.type = node.type,
                 c.definition = node.definition,
                 c.confidence = node.confidence,
-                c.source_chunk_qn = node.source_chunk_qn
+                c.source_chunk_qn = node.source_chunk_qn,
+                c.entity_category = node.entity_category,
+                c.entity_subtype = node.entity_subtype,
+                c.entity_emoji = node.entity_emoji
             """
             ingestor.fetch_all(cypher, {"nodes": list(batch)})
 
@@ -2692,13 +2860,13 @@ class DocumentGraphUpdater:
         mention_rels: list[dict[str, object]],
         workspace: str,
     ) -> None:
-        """Batch create MENTIONS relationships from chunks to concepts."""
-        batch_size = settings.DOC_MEMGRAPH_BATCH_SIZE
+        """Batch create MENTIONS relationships from ChunkRef proxies to concepts."""
+        batch_size = settings.CONCEPT_MEMGRAPH_BATCH_SIZE
         for batch in batched(mention_rels, batch_size):
             cypher = """
             UNWIND $rels as rel
-            MATCH (c:Chunk {qualified_name: rel.chunk_qn, workspace: $workspace})
-            MATCH (concept:Concept {qualified_name: rel.concept_qn, workspace: $workspace})
+            MERGE (c:ChunkRef {qualified_name: rel.chunk_qn, workspace: $workspace})
+            MERGE (concept:Concept {qualified_name: rel.concept_qn, workspace: $workspace})
             MERGE (c)-[m:MENTIONS]->(concept)
             SET m.frequency = rel.frequency, m.context = rel.context
             """
@@ -2707,69 +2875,128 @@ class DocumentGraphUpdater:
     def _store_concept_relationships_batch(
         self,
         ingestor: MemgraphIngestor,
-        relationships: list[tuple[str, str, str, float]],
+        relationships: list[tuple[str, str, str, str, str, float]],
         workspace: str,
     ) -> None:
         """Batch create relationships between concepts.
 
         Memgraph does not support parameterized relationship types, so we use
-        explicit FOREACH branches per type.
+        explicit FOREACH branches per category (8 canonical + RELATED_TO fallback).
         """
         rel_maps: list[dict[str, object]] = [
             {
                 "from_qn": from_qn,
                 "to_qn": to_qn,
-                "rel_type": rel_type,
+                "verb": verb,
+                "emoji": emoji,
+                "category": category,
                 "strength": strength,
             }
-            for from_qn, to_qn, rel_type, strength in relationships
+            for from_qn, to_qn, verb, emoji, category, strength in relationships
         ]
-        batch_size = settings.DOC_MEMGRAPH_BATCH_SIZE
+        batch_size = settings.CONCEPT_MEMGRAPH_BATCH_SIZE
         for batch in batched(rel_maps, batch_size):
             cypher = """
             UNWIND $rels as rel
             MATCH (a:Concept {qualified_name: rel.from_qn, workspace: $workspace})
             MATCH (b:Concept {qualified_name: rel.to_qn, workspace: $workspace})
-            FOREACH (_ IN CASE WHEN rel.rel_type = 'RELATED_TO' THEN [1] ELSE [] END |
-                MERGE (a)-[r:RELATED_TO]->(b) SET r.strength = rel.strength
+            FOREACH (_ IN CASE WHEN rel.category = 'HIERARCHICAL' THEN [1] ELSE [] END |
+                MERGE (a)-[r:HIERARCHICAL]->(b)
+                SET r.verb = rel.verb, r.emoji = rel.emoji, r.strength = rel.strength
             )
-            FOREACH (_ IN CASE WHEN rel.rel_type = 'IS_A' THEN [1] ELSE [] END |
-                MERGE (a)-[r:IS_A]->(b) SET r.strength = rel.strength
+            FOREACH (_ IN CASE WHEN rel.category = 'COMPOSITIONAL' THEN [1] ELSE [] END |
+                MERGE (a)-[r:COMPOSITIONAL]->(b)
+                SET r.verb = rel.verb, r.emoji = rel.emoji, r.strength = rel.strength
             )
-            FOREACH (_ IN CASE WHEN rel.rel_type = 'PART_OF' THEN [1] ELSE [] END |
-                MERGE (a)-[r:PART_OF]->(b) SET r.strength = rel.strength
+            FOREACH (_ IN CASE WHEN rel.category = 'CONTEXTUAL' THEN [1] ELSE [] END |
+                MERGE (a)-[r:CONTEXTUAL]->(b)
+                SET r.verb = rel.verb, r.emoji = rel.emoji, r.strength = rel.strength
             )
-            FOREACH (_ IN CASE WHEN rel.rel_type = 'CAUSES' THEN [1] ELSE [] END |
-                MERGE (a)-[r:CAUSES]->(b) SET r.strength = rel.strength
+            FOREACH (_ IN CASE WHEN rel.category = 'ATTRIBUTIVE' THEN [1] ELSE [] END |
+                MERGE (a)-[r:ATTRIBUTIVE]->(b)
+                SET r.verb = rel.verb, r.emoji = rel.emoji, r.strength = rel.strength
+            )
+            FOREACH (_ IN CASE WHEN rel.category = 'COMPARATIVE' THEN [1] ELSE [] END |
+                MERGE (a)-[r:COMPARATIVE]->(b)
+                SET r.verb = rel.verb, r.emoji = rel.emoji, r.strength = rel.strength
+            )
+            FOREACH (_ IN CASE WHEN rel.category = 'SEQUENTIAL' THEN [1] ELSE [] END |
+                MERGE (a)-[r:SEQUENTIAL]->(b)
+                SET r.verb = rel.verb, r.emoji = rel.emoji, r.strength = rel.strength
+            )
+            FOREACH (_ IN CASE WHEN rel.category = 'CAUSAL' THEN [1] ELSE [] END |
+                MERGE (a)-[r:CAUSAL]->(b)
+                SET r.verb = rel.verb, r.emoji = rel.emoji, r.strength = rel.strength
+            )
+            FOREACH (_ IN CASE WHEN rel.category = 'ANALOGICAL' THEN [1] ELSE [] END |
+                MERGE (a)-[r:ANALOGICAL]->(b)
+                SET r.verb = rel.verb, r.emoji = rel.emoji, r.strength = rel.strength
+            )
+            FOREACH (_ IN CASE WHEN rel.category = 'RELATED_TO' THEN [1] ELSE [] END |
+                MERGE (a)-[r:RELATED_TO]->(b)
+                SET r.verb = rel.verb, r.emoji = rel.emoji, r.strength = rel.strength
             )
             """
             ingestor.fetch_all(cypher, {"rels": list(batch), "workspace": workspace})
 
+    def _get_chunk_qns_for_document(
+        self,
+        document_path: str,
+        doc_ingestor: MemgraphIngestor,
+    ) -> list[str]:
+        """Get chunk qualified names for a document from the doc instance."""
+        cypher = """
+        MATCH (d:Document {path: $doc_path, workspace: $workspace})
+              -[:CONTAINS_CHUNK]->(c:Chunk)
+        RETURN c.qualified_name AS chunk_qn
+        """
+        result = doc_ingestor.fetch_all(cypher, {
+            "doc_path": document_path,
+            "workspace": self.workspace,
+        })
+        return [r["chunk_qn"] for r in result]
+
     def _cleanup_concepts_for_document(
         self,
         document_path: str,
-        ingestor: MemgraphIngestor,
+        doc_ingestor: MemgraphIngestor,
+        concept_ingestor: MemgraphIngestor | None = None,
     ) -> None:
-        """Remove orphaned concepts after document chunks are deleted."""
+        """Remove orphaned concepts after document chunks are deleted.
+
+        Step 1: Queries doc instance for chunk QNs belonging to the document.
+        Step 2: Deletes ChunkRefs and orphaned Concepts from concept instance.
+        """
+        if concept_ingestor is None or not settings.CONCEPT_MEMGRAPH_ENABLED:
+            return
+
         logger.info(doc_ls.DOC_CONCEPT_CLEANUP_START.format(doc_path=document_path))
 
+        # Step 1: Get chunk QNs from doc instance
+        chunk_qns = self._get_chunk_qns_for_document(document_path, doc_ingestor)
+        if not chunk_qns:
+            logger.debug(f"No chunks found for document: {document_path}")
+            return
+
+        # Step 2: Clean up concept instance
         cypher = """
-        MATCH (d:Document {path: $doc_path, workspace: $workspace})-[:CONTAINS_CHUNK]->(c:Chunk)
-        OPTIONAL MATCH (c)-[m:MENTIONS]->(concept:Concept)
-        DELETE m
-        WITH concept
+        UNWIND $chunk_qns as chunk_qn
+        MATCH (cr:ChunkRef {qualified_name: chunk_qn, workspace: $workspace})
+        OPTIONAL MATCH (cr)-[m:MENTIONS]->(concept:Concept {workspace: $workspace})
+        DELETE m, cr
+        WITH DISTINCT concept
         WHERE concept IS NOT NULL
         WITH collect(DISTINCT concept) as concepts
         UNWIND concepts as concept
-        OPTIONAL MATCH (:Chunk)-[remaining:MENTIONS]->(concept)
+        OPTIONAL MATCH (:ChunkRef)-[remaining:MENTIONS]->(concept)
         WITH concept, remaining
         WHERE remaining IS NULL
         DETACH DELETE concept
         RETURN count(concept) as removed_count
         """
-        result = ingestor.fetch_all(
+        result = concept_ingestor.fetch_all(
             cypher,
-            {"doc_path": document_path, "workspace": self.workspace},
+            {"chunk_qns": chunk_qns, "workspace": self.workspace},
         )
 
         removed_count = result[0].get("removed_count", 0) if result else 0

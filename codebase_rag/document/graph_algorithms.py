@@ -83,7 +83,7 @@ class DocumentGraphAlgorithms:
             # variable-length patterns. max_depth is validated and clamped above.
             query = f"""
             MATCH path = shortestPath(
-                (source:Concept)-[:RELATED_TO|IS_A|PART_OF|CAUSES*1..{max_depth}]-(target:Concept)
+                (source:Concept)-[:RELATED_TO|IS_A|PART_OF|CAUSES|HIERARCHICAL|COMPOSITIONAL|CONTEXTUAL|ATTRIBUTIVE|COMPARATIVE|SEQUENTIAL|CAUSAL|ANALOGICAL*1..{max_depth}]-(target:Concept)
             )
             WHERE source.qualified_name = $source_qn
               AND target.qualified_name = $target_qn
@@ -157,7 +157,7 @@ class DocumentGraphAlgorithms:
 
         try:
             query = """
-            MATCH (c:Concept)-[r:RELATED_TO|IS_A|PART_OF|CAUSES]-(related:Concept)
+            MATCH (c:Concept)-[r:RELATED_TO|IS_A|PART_OF|CAUSES|HIERARCHICAL|COMPOSITIONAL|CONTEXTUAL|ATTRIBUTIVE|COMPARATIVE|SEQUENTIAL|CAUSAL|ANALOGICAL]-(related:Concept)
             WHERE c.qualified_name = $concept_qn
               AND c.workspace = $workspace
               AND related.workspace = $workspace
@@ -215,7 +215,7 @@ class DocumentGraphAlgorithms:
         try:
             # NOTE: Depth is validated and clamped. See note in find_shortest_path.
             query = f"""
-            MATCH (c:Concept)-[:RELATED_TO|IS_A|PART_OF|CAUSES*1..{validated_depth}]-(neighbor:Concept)
+            MATCH (c:Concept)-[:RELATED_TO|IS_A|PART_OF|CAUSES|HIERARCHICAL|COMPOSITIONAL|CONTEXTUAL|ATTRIBUTIVE|COMPARATIVE|SEQUENTIAL|CAUSAL|ANALOGICAL*1..{validated_depth}]-(neighbor:Concept)
             WHERE c.qualified_name = $concept_qn
               AND c.workspace = $workspace
               AND neighbor.workspace = $workspace
@@ -229,6 +229,48 @@ class DocumentGraphAlgorithms:
         except Exception as e:
             logger.error(doc_ls.DOC_GRAPH_ALGO_ERROR.format(error=e))
             return {"neighbors": []}
+
+    async def get_concepts_by_category(
+        self,
+        category: str,
+        limit: int = 50,
+    ) -> list[dict[str, object]]:
+        """Get concepts filtered by entity_category.
+
+        Args:
+            category: One of the 7 canonical entity categories
+                      (e.g. "AGENT_ROLE", "SYSTEM_STRUCTURE").
+            limit: Maximum number of concepts to return.
+
+        Returns:
+            List of dicts with name, entity_category, entity_subtype, definition.
+        """
+        if self.graph is None:
+            logger.warning("Document graph not available for category query")
+            return []
+
+        logger.info(f"Querying concepts by entity category: {category}")
+
+        try:
+            query = """
+            MATCH (c:Concept)
+            WHERE c.workspace = $workspace
+              AND coalesce(c.entity_category, "UNKNOWN") = $category
+            RETURN c.name AS name,
+                   c.entity_category AS entity_category,
+                   c.entity_subtype AS entity_subtype,
+                   c.definition AS definition
+            ORDER BY c.name
+            LIMIT $limit
+            """
+            results = await self.graph.fetch_all_async(
+                query,
+                {"category": category, "limit": limit, "workspace": self.workspace},
+            )
+            return [dict(r) for r in results]
+        except Exception as e:
+            logger.error(doc_ls.DOC_GRAPH_ALGO_ERROR.format(error=e))
+            return []
 
     @staticmethod
     def _generate_path_description(row: dict[str, object]) -> str:

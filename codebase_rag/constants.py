@@ -575,6 +575,69 @@ class RelationshipType(StrEnum):
 # Alias for shorter usage
 RelType = RelationshipType
 
+
+class DocConceptRelCategory(StrEnum):
+    """Canonical categories for document concept relationships.
+
+    Derived from David Hyerle's Thinking Maps taxonomy (8 categories + fallback).
+    Used as edge labels in the document graph for Cypher traversal.
+    """
+
+    HIERARCHICAL = "HIERARCHICAL"
+    COMPOSITIONAL = "COMPOSITIONAL"
+    CONTEXTUAL = "CONTEXTUAL"
+    ATTRIBUTIVE = "ATTRIBUTIVE"
+    COMPARATIVE = "COMPARATIVE"
+    SEQUENTIAL = "SEQUENTIAL"
+    CAUSAL = "CAUSAL"
+    ANALOGICAL = "ANALOGICAL"
+    RELATED_TO = "RELATED_TO"  # explicit fallback, not a default
+
+
+DOC_CONCEPT_CATEGORIES: frozenset[str] = frozenset(DocConceptRelCategory)
+
+CATEGORY_EMOJI_MAP: dict[str, str] = {
+    "HIERARCHICAL": "🌳",
+    "COMPOSITIONAL": "🧩",
+    "CONTEXTUAL": "🎯",
+    "ATTRIBUTIVE": "💭",
+    "COMPARATIVE": "⚖️",
+    "SEQUENTIAL": "⏩",
+    "CAUSAL": "⚡",
+    "ANALOGICAL": "🌉",
+    "RELATED_TO": "🔗",
+}
+
+
+class DocConceptEntityCategory(StrEnum):
+    """Canonical entity categories for document concepts.
+
+    MECE taxonomy classifying *what* a concept is (not how it connects).
+    7 categories on a concrete→abstract ontological gradient.
+    ABSTRACT_CONCEPT is the explicit last resort — mirrors RELATED_TO.
+    """
+
+    CONCRETE_ENTITY = "CONCRETE_ENTITY"
+    EVENT_PROCESS = "EVENT_PROCESS"
+    INFORMATION_EXPRESSION = "INFORMATION_EXPRESSION"
+    PROPERTY_ATTRIBUTE = "PROPERTY_ATTRIBUTE"
+    SYSTEM_STRUCTURE = "SYSTEM_STRUCTURE"
+    AGENT_ROLE = "AGENT_ROLE"
+    ABSTRACT_CONCEPT = "ABSTRACT_CONCEPT"
+
+
+DOC_ENTITY_CATEGORIES: frozenset[str] = frozenset(DocConceptEntityCategory)
+
+ENTITY_CATEGORY_EMOJI_MAP: dict[str, str] = {
+    "CONCRETE_ENTITY": "🧱",
+    "EVENT_PROCESS": "⏱️",
+    "INFORMATION_EXPRESSION": "📨",
+    "PROPERTY_ATTRIBUTE": "📏",
+    "SYSTEM_STRUCTURE": "🏗️",
+    "AGENT_ROLE": "🎭",
+    "ABSTRACT_CONCEPT": "💡",
+}
+
 # Relationship types that reference cross-file nodes and should be deferred
 # until all nodes are flushed to avoid creation failures
 DEFERRED_RELATIONSHIP_TYPES = frozenset({

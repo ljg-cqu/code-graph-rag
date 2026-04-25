@@ -16,7 +16,13 @@ if TYPE_CHECKING:
 
 
 class ExtractedConcept(BaseModel):
-    """A concept extracted from document content."""
+    """A concept extracted from document content.
+
+    Entity classification uses a 7-category MECE taxonomy (entity_category)
+    with optional domain-specific sub-types (entity_subtype) and server-resolved
+    emoji (entity_emoji). The old `type` field is deprecated and set equal to
+    entity_category for backward compatibility.
+    """
 
     name: str = Field(..., description="Concept name")
     aliases: list[str] = Field(
@@ -25,7 +31,7 @@ class ExtractedConcept(BaseModel):
     )
     type: str | None = Field(
         default=None,
-        description="Concept type: skill, framework, model, process, risk, principle, concept",
+        description="DEPRECATED — use entity_category. Set equal to entity_category for backward compat.",
     )
     definition: str = Field(..., description="Brief definition")
     confidence: float = Field(
@@ -36,16 +42,42 @@ class ExtractedConcept(BaseModel):
     )
     source_chunk_qn: str = Field(..., description="Source chunk qualified name")
     context: str = Field(default="", description="Surrounding context")
+    entity_category: str | None = Field(
+        default=None,
+        description="One of 7 canonical entity categories (CONCRETE_ENTITY, EVENT_PROCESS, etc.)",
+    )
+    entity_subtype: str | None = Field(
+        default=None,
+        description="Optional domain-specific sub-type (e.g. 'Container Image', 'Deployment')",
+    )
+    entity_emoji: str = Field(
+        default="",
+        description="Server-resolved emoji for the entity category",
+    )
 
 
 class ConceptRelationship(BaseModel):
-    """A relationship between two concepts."""
+    """A relationship between two concepts.
+
+    The `verb` is the specific semantic predicate (e.g. "mitigates", "deployed-in").
+    `category` is the canonical category (edge label in the graph).
+    `emoji` is always server-resolved from category via CATEGORY_EMOJI_MAP.
+    """
 
     from_concept: str = Field(..., description="Source concept name")
     to_concept: str = Field(..., description="Target concept name")
-    relationship_type: str = Field(
+    verb: str = Field(
         ...,
-        description="Type: RELATED_TO, IS_A, PART_OF, CAUSES",
+        description="Specific verb describing how concepts relate",
+    )
+    category: str = Field(
+        ...,
+        description="Canonical category: HIERARCHICAL, COMPOSITIONAL, CONTEXTUAL, "
+        "ATTRIBUTIVE, COMPARATIVE, SEQUENTIAL, CAUSAL, ANALOGICAL, or RELATED_TO",
+    )
+    emoji: str = Field(
+        default="",
+        description="Visual marker (server-resolved from category, not LLM-provided)",
     )
     strength: float = Field(
         default=0.5,
@@ -161,17 +193,75 @@ class LLMConceptExtractor:
     SYSTEM_PROMPT = """You are a concept extractor for technical documentation.
 Given a document chunk, identify:
 1. Key concepts mentioned (with definitions if available)
-2. The type/category of each concept
-3. Relationships between concepts (RELATED_TO, IS_A, PART_OF, CAUSES)
+2. The entity category of each concept (7-category MECE taxonomy)
+3. Relationships between concepts
 
-Concept types:
-- skill: A learnable capability or competency
-- framework: A structured approach, methodology, or system
-- model: A conceptual representation or theoretical construct
-- process: A systematic sequence of actions or operations
-- risk: A potential negative outcome, pitfall, or concern
-- principle: A fundamental truth, rule, or guideline
-- concept: A general idea, notion, or abstract thought
+Entity categories (7 MECE categories — every concept fits exactly one):
+
+🧱 CONCRETE_ENTITY — Does it occupy physical space?
+  Natural Object, Artifact, Substance, Organism, Body Part, Food/Consumable,
+  Geographic Feature, Celestial Body
+  Software-specific: Virtual Machine, Container Image, Data Center, Mobile Device, Peripheral
+
+⏱️ EVENT_PROCESS — Does it unfold over time?
+  Natural Event, Human Action, Process, Incident, Activity, State Change,
+  Project/Initiative, Ritual/Routine
+  Software-specific: Deployment, Build, Test Run, Incident, Migration
+
+📨 INFORMATION_EXPRESSION — Is it a representation?
+  Data, Signal, Symbol, Narrative, Code/Formula, Record/Document, Media
+  Software-specific: API, Protocol, Config File, Log Stream, Source File
+
+📏 PROPERTY_ATTRIBUTE — Is it a characteristic of something else?
+  Physical Quality, Quantitative Measure, Mental State, Capability/Skill,
+  Disposition, Relational Property, Evaluative Property
+  Software-specific: SLI, Quality Attribute, Capacity Metric
+
+🏗️ SYSTEM_STRUCTURE — Is it an organized collection?
+  Natural System, Social System, Technological System, Network, Hierarchy,
+  Framework, Market/Platform
+  Software-specific: Distributed System, CI/CD Pipeline, Monorepo, Service Mesh
+
+🎭 AGENT_ROLE — Does it exercise intention or fulfill a role?
+  Individual, Collective, Institutional Agent, Non-Human Agent, Role/Position, Persona
+  Software-specific: CI Bot, Service Account, End User, On-Call Engineer
+
+💡 ABSTRACT_CONCEPT — Is it a pure idea with no physical form?
+  Domain/Discipline, Theory/Model, Principle/Rule, Value/Ideal, Category/Class, Relation/Connection
+  Software-specific: Design Pattern, Algorithm, Protocol Spec, Paradigm, SLA
+
+💡 ABSTRACT_CONCEPT is the LAST RESORT — confirm the entity doesn't fit any of the
+first 6 categories before using it. This mirrors RELATED_TO in the relationship taxonomy.
+
+Relationships use an 8-category canonical taxonomy. Choose the most specific verb
+that accurately describes how two concepts relate. The verb must belong to exactly
+one of these categories:
+
+🌳 HIERARCHICAL — What type/category?
+  is-a, subtype-of, classifies-as, inherits-from, specializes, instance-of
+
+🧩 COMPOSITIONAL — What parts make up this?
+  part-of, comprises, contains, includes, consists-of, component-of
+
+🎯 CONTEXTUAL — What context surrounds?
+  located-in, situated-in, operates-within, deployed-in, occurs-within, is-bound-by
+
+💭 ATTRIBUTIVE — What attributes describe?
+  has-property, characterized-by, exhibits, possesses, features, requires
+
+⚖️ COMPARATIVE — How do these compare?
+  compares-to, contrasts-with, similar-to, different-from, supersedes, equivalent-to
+
+⏩ SEQUENTIAL — What happens in order?
+  precedes, follows, transitions-to, evolves-into, progresses-to
+
+⚡ CAUSAL — What causes what?
+  causes, produces, triggers, enables, prevents, depends-on, influences, mitigates, generates
+
+🌉 ANALOGICAL — What is this similar to?
+  analogous-to, corresponds-to, maps-to, parallels, resembles, mirrors
+
+🔗 RELATED_TO — Use ONLY as a last resort when no other category fits.
 
 Respond with JSON matching this structure:
 {
@@ -179,7 +269,10 @@ Respond with JSON matching this structure:
     {
       "name": "concept name",
       "aliases": ["alternative name"],
-      "type": "skill|framework|model|process|risk|principle|concept",
+      "type": "CONCRETE_ENTITY",
+      "entity_category": "CONCRETE_ENTITY",
+      "entity_subtype": "Container Image",
+      "entity_emoji": "🧱",
       "definition": "brief definition",
       "confidence": 0.9
     }
@@ -188,7 +281,9 @@ Respond with JSON matching this structure:
     {
       "from_concept": "source",
       "to_concept": "target",
-      "relationship_type": "RELATED_TO",
+      "verb": "mitigates",
+      "category": "CAUSAL",
+      "emoji": "⚡",
       "strength": 0.8
     }
   ]
@@ -196,10 +291,17 @@ Respond with JSON matching this structure:
 
 Rules:
 - Only extract concepts that are clearly defined or important in the text
-- Assign the most specific type that fits; use "concept" as fallback
-- Confidence should reflect how clearly the concept is presented
-- Relationship types must be one of: RELATED_TO, IS_A, PART_OF, CAUSES
-- Strength reflects how explicitly the relationship is stated"""
+- Every concept must have an entity_category from the 7 canonical categories
+- entity_subtype is optional but recommended for software-domain concepts
+- entity_emoji must match the category: 🧱⏱️📨📏🏗️🎭💡
+- ABSTRACT_CONCEPT is a last resort, not a default
+- The old type field should equal entity_category for backward compatibility
+- Use the most precise relationship verb possible, even beyond the examples listed
+- Every verb must fit into exactly one of the 8 categories above
+- category must be one of: HIERARCHICAL, COMPOSITIONAL, CONTEXTUAL, ATTRIBUTIVE, COMPARATIVE, SEQUENTIAL, CAUSAL, ANALOGICAL, RELATED_TO
+- emoji must match the category: 🌳🧩🎯💭⚖️⏩⚡🌉🔗
+- RELATED_TO is a last resort, not a default
+- Confidence/strength should reflect how clearly the concept/relationship is presented"""
 
     def __init__(
         self,
@@ -311,6 +413,19 @@ Rules:
             )
             for concept in result.output.concepts:
                 concept.source_chunk_qn = chunk_qn
+                (
+                    concept.entity_category,
+                    concept.entity_subtype,
+                    concept.entity_emoji,
+                ) = resolve_entity_category(
+                    concept.entity_category,
+                    concept.entity_subtype,
+                    concept.definition,
+                )
+                # Backward compat: old `type` field = entity_category
+                concept.type = concept.entity_category
+            for rel in result.output.relationships:
+                rel.category, rel.emoji = resolve_category(rel.verb, rel.category)
             if self._circuit_breaker is not None:
                 self._circuit_breaker.record_success()
             return result.output
@@ -351,6 +466,8 @@ Rules:
         for attempt in range(max_retries + 1):
             try:
                 result = await self.extract(chunk_content, chunk_qn, timeout=current_timeout)
+                async with self._consecutive_timeouts_lock:
+                    self._consecutive_timeouts = 0
                 return result
             except Exception as e:
                 error = classify_concept_extraction_error(e, chunk_content, chunk_qn)
@@ -423,6 +540,478 @@ Rules:
             )
 
         return ExtractionResult()
+
+
+VERB_REGISTRY: dict[str, str] = {
+    # Hierarchical (🌳)
+    "is-a": "HIERARCHICAL",
+    "subtype-of": "HIERARCHICAL",
+    "classifies-as": "HIERARCHICAL",
+    "categorizes-under": "HIERARCHICAL",
+    "inherits-from": "HIERARCHICAL",
+    "specializes": "HIERARCHICAL",
+    "generalizes-to": "HIERARCHICAL",
+    "instance-of": "HIERARCHICAL",
+    "supertype-of": "HIERARCHICAL",
+    "descends-from": "HIERARCHICAL",
+    "is-parent-of": "HIERARCHICAL",
+    "falls-under": "HIERARCHICAL",
+    "derives-from": "HIERARCHICAL",
+    # Compositional (🧩)
+    "part-of": "COMPOSITIONAL",
+    "comprises": "COMPOSITIONAL",
+    "contains": "COMPOSITIONAL",
+    "includes": "COMPOSITIONAL",
+    "component-of": "COMPOSITIONAL",
+    "constituent-of": "COMPOSITIONAL",
+    "element-of": "COMPOSITIONAL",
+    "member-of": "COMPOSITIONAL",
+    "composed-of": "COMPOSITIONAL",
+    "consists-of": "COMPOSITIONAL",
+    "is-built-from": "COMPOSITIONAL",
+    "aggregates": "COMPOSITIONAL",
+    "is-formed-from": "COMPOSITIONAL",
+    # Contextual (🎯)
+    "located-in": "CONTEXTUAL",
+    "situated-in": "CONTEXTUAL",
+    "provides-context-for": "CONTEXTUAL",
+    "framed-by": "CONTEXTUAL",
+    "environment-of": "CONTEXTUAL",
+    "setting-for": "CONTEXTUAL",
+    "surrounds": "CONTEXTUAL",
+    "contained-within": "CONTEXTUAL",
+    "occurs-within": "CONTEXTUAL",
+    "operates-within": "CONTEXTUAL",
+    "exists-under": "CONTEXTUAL",
+    "takes-place-in": "CONTEXTUAL",
+    "is-bound-by": "CONTEXTUAL",
+    "is-hosted-in": "CONTEXTUAL",
+    # Attributive (💭)
+    "has-property": "ATTRIBUTIVE",
+    "characterized-by": "ATTRIBUTIVE",
+    "exhibits": "ATTRIBUTIVE",
+    "possesses": "ATTRIBUTIVE",
+    "displays": "ATTRIBUTIVE",
+    "manifests": "ATTRIBUTIVE",
+    "features": "ATTRIBUTIVE",
+    "embodies": "ATTRIBUTIVE",
+    "expresses": "ATTRIBUTIVE",
+    "has-characteristic": "ATTRIBUTIVE",
+    "bears": "ATTRIBUTIVE",
+    # Comparative (⚖️)
+    "compares-to": "COMPARATIVE",
+    "contrasts-with": "COMPARATIVE",
+    "similar-to": "COMPARATIVE",
+    "akin-to": "COMPARATIVE",
+    "different-from": "COMPARATIVE",
+    "equivalent-to": "COMPARATIVE",
+    "comparable-to": "COMPARATIVE",
+    "interchangeable-with": "COMPARATIVE",
+    "opposite-of": "COMPARATIVE",
+    "synonym-of": "COMPARATIVE",
+    "antonym-of": "COMPARATIVE",
+    "same-as": "COMPARATIVE",
+    "related-to": "COMPARATIVE",
+    # Sequential (⏩)
+    "precedes": "SEQUENTIAL",
+    "follows": "SEQUENTIAL",
+    "occurs-during": "SEQUENTIAL",
+    "transitions-to": "SEQUENTIAL",
+    "evolves-into": "SEQUENTIAL",
+    "progresses-to": "SEQUENTIAL",
+    "succeeds": "SEQUENTIAL",
+    # Causal (⚡)
+    "causes": "CAUSAL",
+    "produces": "CAUSAL",
+    "triggers": "CAUSAL",
+    "prevents": "CAUSAL",
+    "enables": "CAUSAL",
+    "inhibits": "CAUSAL",
+    "influences": "CAUSAL",
+    "affects": "CAUSAL",
+    "determines": "CAUSAL",
+    "results-in": "CAUSAL",
+    "creates": "CAUSAL",
+    "destroys": "CAUSAL",
+    "modifies": "CAUSAL",
+    "amplifies": "CAUSAL",
+    "reduces": "CAUSAL",
+    "depends-on": "CAUSAL",
+    "accelerates": "CAUSAL",
+    "activates": "CAUSAL",
+    "alleviates": "CAUSAL",
+    "blocks": "CAUSAL",
+    "boosts": "CAUSAL",
+    "catalyzes": "CAUSAL",
+    "constrains": "CAUSAL",
+    "converts": "CAUSAL",
+    "delays": "CAUSAL",
+    "degrades": "CAUSAL",
+    "drives": "CAUSAL",
+    "eases": "CAUSAL",
+    "enhances": "CAUSAL",
+    "facilitates": "CAUSAL",
+    "fosters": "CAUSAL",
+    "generates": "CAUSAL",
+    "impedes": "CAUSAL",
+    "induces": "CAUSAL",
+    "limits": "CAUSAL",
+    "maintains": "CAUSAL",
+    "motivates": "CAUSAL",
+    "obstructs": "CAUSAL",
+    "permits": "CAUSAL",
+    "prolongs": "CAUSAL",
+    "promotes": "CAUSAL",
+    "anticipates": "CAUSAL",
+    "correlates-with": "CAUSAL",
+    "initiates": "CAUSAL",
+    "terminates": "CAUSAL",
+    "leads-to": "CAUSAL",
+    "prepares-for": "CAUSAL",
+    "builds": "CAUSAL",
+    "detects": "CAUSAL",
+    "corrects": "CAUSAL",
+    # Analogical (🌉)
+    "analogous-to": "ANALOGICAL",
+    "corresponds-to": "ANALOGICAL",
+    "maps-to": "ANALOGICAL",
+    "parallels": "ANALOGICAL",
+    "resembles": "ANALOGICAL",
+    "mirrors": "ANALOGICAL",
+    "symbolizes": "ANALOGICAL",
+    "represents": "ANALOGICAL",
+    "stands-for": "ANALOGICAL",
+    "exemplifies": "ANALOGICAL",
+    "illustrates": "ANALOGICAL",
+    "metaphor-for": "ANALOGICAL",
+    "isomorphic-to": "ANALOGICAL",
+    "metaphorically-represents": "ANALOGICAL",
+    # Domain: Software/Application
+    "deployed-in": "CONTEXTUAL",
+    "runs-on": "CONTEXTUAL",
+    "hosted-by": "CONTEXTUAL",
+    "connects-to": "CONTEXTUAL",
+    "interfaces-with": "CONTEXTUAL",
+    "consumes": "CONTEXTUAL",
+    "provides": "CAUSAL",
+    "configured-with": "ATTRIBUTIVE",
+    "secured-by": "ATTRIBUTIVE",
+    "versioned-as": "ATTRIBUTIVE",
+    "requires": "ATTRIBUTIVE",
+    "exposes": "ATTRIBUTIVE",
+    "supports": "CAUSAL",
+    "implements": "COMPOSITIONAL",
+    "integrates-with": "COMPOSITIONAL",
+    "bundles": "COMPOSITIONAL",
+    "encapsulates": "COMPOSITIONAL",
+    "decomposes-into": "COMPOSITIONAL",
+    "layer-in": "COMPOSITIONAL",
+    "alternative-to": "COMPARATIVE",
+    "predecessor-of": "COMPARATIVE",
+    "successor-of": "COMPARATIVE",
+    "replaces": "COMPARATIVE",
+    "extends": "HIERARCHICAL",
+    "supersedes": "COMPARATIVE",
+    "compatible-with": "COMPARATIVE",
+    "processes": "SEQUENTIAL",
+    "handles": "SEQUENTIAL",
+    "validates": "SEQUENTIAL",
+    "transforms": "SEQUENTIAL",
+    "schedules": "SEQUENTIAL",
+    "impacts": "CAUSAL",
+    "resolves": "CAUSAL",
+    "mitigates": "CAUSAL",
+    "pattern-is": "ANALOGICAL",
+    "models": "ANALOGICAL",
+    "abstracts": "ANALOGICAL",
+}
+
+
+def _fuzzy_match_verb(verb: str, cutoff: float = 0.8) -> str | None:
+    """Fuzzy match a verb against VERB_REGISTRY keys as a last resort.
+
+    Uses difflib.get_close_matches to find approximate matches.
+    Returns the resolved category if a close match is found, None otherwise.
+    """
+    import difflib
+
+    matches = difflib.get_close_matches(verb, VERB_REGISTRY.keys(), n=1, cutoff=cutoff)
+    if matches:
+        return VERB_REGISTRY[matches[0]]
+    return None
+
+
+def resolve_category(verb: str, declared_category: str | None) -> tuple[str, str]:
+    """Resolve a verb to its canonical category and emoji.
+
+    4-step resolution:
+    1. Verb in registry AND matches declared → use declared
+    2. Verb in registry AND mismatches declared → use registry (authoritative)
+    3. Verb NOT in registry → use declared_category, log for registry expansion
+    4. Verb NOT in registry AND no declared → fuzzy match, fallback to RELATED_TO
+
+    Emoji is ALWAYS derived server-side from the resolved category via
+    CATEGORY_EMOJI_MAP. LLM-provided emoji is ignored.
+
+    Args:
+        verb: The relationship verb (e.g. "mitigates", "is-a").
+        declared_category: The category the LLM declared, or None.
+
+    Returns:
+        (category, emoji) tuple.
+    """
+    from loguru import logger
+
+    from codebase_rag.constants import CATEGORY_EMOJI_MAP, DOC_CONCEPT_CATEGORIES
+
+    verb_lower = verb.lower().strip()
+    registry_category = VERB_REGISTRY.get(verb_lower)
+
+    if registry_category is not None:
+        if declared_category and registry_category == declared_category.upper():
+            category = declared_category.upper()
+        else:
+            if declared_category and registry_category != declared_category.upper():
+                logger.debug(
+                    f"Verb '{verb}' registry override: LLM declared "
+                    f"'{declared_category}', registry says '{registry_category}'"
+                )
+            category = registry_category
+    elif declared_category and declared_category.upper() in DOC_CONCEPT_CATEGORIES:
+        category = declared_category.upper()
+        logger.info(
+            f"Verb '{verb}' not in registry — using declared category '{category}'. "
+            f"Consider adding to VERB_REGISTRY for future authoritative resolution."
+        )
+    else:
+        category = _fuzzy_match_verb(verb_lower)
+        if category:
+            logger.info(
+                f"Verb '{verb}' not in registry — fuzzy-matched to "
+                f"'{category}' category via registry verbs."
+            )
+        else:
+            category = "RELATED_TO"
+
+    emoji = CATEGORY_EMOJI_MAP.get(category, "🔗")
+    return category, emoji
+
+
+ENTITY_SUBTYPE_REGISTRY: dict[str, str] = {
+    # 🧱 Concrete Entity — Core (8)
+    "Natural Object": "CONCRETE_ENTITY",
+    "Artifact": "CONCRETE_ENTITY",
+    "Substance": "CONCRETE_ENTITY",
+    "Organism": "CONCRETE_ENTITY",
+    "Body Part": "CONCRETE_ENTITY",
+    "Food/Consumable": "CONCRETE_ENTITY",
+    "Geographic Feature": "CONCRETE_ENTITY",
+    "Celestial Body": "CONCRETE_ENTITY",
+    # 🧱 Concrete Entity — Software (5)
+    "Virtual Machine": "CONCRETE_ENTITY",
+    "Container Image": "CONCRETE_ENTITY",
+    "Data Center": "CONCRETE_ENTITY",
+    "Mobile Device": "CONCRETE_ENTITY",
+    "Peripheral": "CONCRETE_ENTITY",
+    # 🧱 Concrete Entity — Business (5)
+    "Facility": "CONCRETE_ENTITY",
+    "Inventory": "CONCRETE_ENTITY",
+    "Equipment": "CONCRETE_ENTITY",
+    "Product": "CONCRETE_ENTITY",
+    "Prototype": "CONCRETE_ENTITY",
+    # 🧱 Concrete Entity — Scientific (6)
+    "Particle": "CONCRETE_ENTITY",
+    "Molecule": "CONCRETE_ENTITY",
+    "Mineral": "CONCRETE_ENTITY",
+    "Fossil": "CONCRETE_ENTITY",
+    "Specimen": "CONCRETE_ENTITY",
+    "Isotope": "CONCRETE_ENTITY",
+
+    # ⏱️ Event/Process — Core (8)
+    "Natural Event": "EVENT_PROCESS",
+    "Human Action": "EVENT_PROCESS",
+    "Process": "EVENT_PROCESS",
+    "Incident": "EVENT_PROCESS",
+    "Activity": "EVENT_PROCESS",
+    "State Change": "EVENT_PROCESS",
+    "Project/Initiative": "EVENT_PROCESS",
+    "Ritual/Routine": "EVENT_PROCESS",
+    # ⏱️ Event/Process — Software (4)
+    "Deployment": "EVENT_PROCESS",
+    "Build": "EVENT_PROCESS",
+    "Test Run": "EVENT_PROCESS",
+    "Migration": "EVENT_PROCESS",
+    # ⏱️ Event/Process — Scientific (6)
+    "Chemical Reaction": "EVENT_PROCESS",
+    "Biological Process": "EVENT_PROCESS",
+    "Mutation": "EVENT_PROCESS",
+    "Observation": "EVENT_PROCESS",
+    "Geological Event": "EVENT_PROCESS",
+    "Astronomical Event": "EVENT_PROCESS",
+
+    # 📨 Information/Expression — Core (7)
+    "Data": "INFORMATION_EXPRESSION",
+    "Signal": "INFORMATION_EXPRESSION",
+    "Symbol": "INFORMATION_EXPRESSION",
+    "Narrative": "INFORMATION_EXPRESSION",
+    "Code/Formula": "INFORMATION_EXPRESSION",
+    "Record/Document": "INFORMATION_EXPRESSION",
+    "Media": "INFORMATION_EXPRESSION",
+    # 📨 Information/Expression — Software (5)
+    "API": "INFORMATION_EXPRESSION",
+    "Protocol": "INFORMATION_EXPRESSION",
+    "Config File": "INFORMATION_EXPRESSION",
+    "Log Stream": "INFORMATION_EXPRESSION",
+    "Source File": "INFORMATION_EXPRESSION",
+
+    # 📏 Property/Attribute — Core (7)
+    "Physical Quality": "PROPERTY_ATTRIBUTE",
+    "Quantitative Measure": "PROPERTY_ATTRIBUTE",
+    "Mental State": "PROPERTY_ATTRIBUTE",
+    "Capability/Skill": "PROPERTY_ATTRIBUTE",
+    "Disposition": "PROPERTY_ATTRIBUTE",
+    "Relational Property": "PROPERTY_ATTRIBUTE",
+    "Evaluative Property": "PROPERTY_ATTRIBUTE",
+    # 📏 Property/Attribute — Software (3)
+    "SLI": "PROPERTY_ATTRIBUTE",
+    "Quality Attribute": "PROPERTY_ATTRIBUTE",
+    "Capacity Metric": "PROPERTY_ATTRIBUTE",
+    # 📏 Property/Attribute — Scientific (4)
+    "Chemical Property": "PROPERTY_ATTRIBUTE",
+    "Biological Trait": "PROPERTY_ATTRIBUTE",
+    "Quantum State": "PROPERTY_ATTRIBUTE",
+    "Ecological Indicator": "PROPERTY_ATTRIBUTE",
+
+    # 🏗️ System/Structure — Core (7)
+    "Natural System": "SYSTEM_STRUCTURE",
+    "Social System": "SYSTEM_STRUCTURE",
+    "Technological System": "SYSTEM_STRUCTURE",
+    "Network": "SYSTEM_STRUCTURE",
+    "Hierarchy": "SYSTEM_STRUCTURE",
+    "Framework": "SYSTEM_STRUCTURE",
+    "Market/Platform": "SYSTEM_STRUCTURE",
+    # 🏗️ System/Structure — Software (5)
+    "Distributed System": "SYSTEM_STRUCTURE",
+    "CI/CD Pipeline": "SYSTEM_STRUCTURE",
+    "Monorepo": "SYSTEM_STRUCTURE",
+    "Service Mesh": "SYSTEM_STRUCTURE",
+    "Feature Flag System": "SYSTEM_STRUCTURE",
+    # 🏗️ System/Structure — Business (6)
+    "Org Chart": "SYSTEM_STRUCTURE",
+    "Holding Company": "SYSTEM_STRUCTURE",
+    "Joint Venture": "SYSTEM_STRUCTURE",
+    "Franchise": "SYSTEM_STRUCTURE",
+    "Cooperative": "SYSTEM_STRUCTURE",
+    "Supply Chain": "SYSTEM_STRUCTURE",
+    # 🏗️ System/Structure — Scientific (4)
+    "Biome": "SYSTEM_STRUCTURE",
+    "Watershed": "SYSTEM_STRUCTURE",
+    "Geological Formation": "SYSTEM_STRUCTURE",
+    "Star System": "SYSTEM_STRUCTURE",
+
+    # 🎭 Agent/Role — Core (6)
+    "Individual": "AGENT_ROLE",
+    "Collective": "AGENT_ROLE",
+    "Institutional Agent": "AGENT_ROLE",
+    "Non-Human Agent": "AGENT_ROLE",
+    "Role/Position": "AGENT_ROLE",
+    "Persona": "AGENT_ROLE",
+    # 🎭 Agent/Role — Software (4)
+    "CI Bot": "AGENT_ROLE",
+    "Service Account": "AGENT_ROLE",
+    "End User": "AGENT_ROLE",
+    "On-Call Engineer": "AGENT_ROLE",
+    # 🎭 Agent/Role — Business (6)
+    "Stakeholder": "AGENT_ROLE",
+    "Vendor/Supplier": "AGENT_ROLE",
+    "Regulator": "AGENT_ROLE",
+    "Board": "AGENT_ROLE",
+    "Founder": "AGENT_ROLE",
+    "Customer/Client": "AGENT_ROLE",
+
+    # 💡 Abstract Concept — Core (6)
+    "Domain/Discipline": "ABSTRACT_CONCEPT",
+    "Theory/Model": "ABSTRACT_CONCEPT",
+    "Principle/Rule": "ABSTRACT_CONCEPT",
+    "Value/Ideal": "ABSTRACT_CONCEPT",
+    "Category/Class": "ABSTRACT_CONCEPT",
+    "Relation/Connection": "ABSTRACT_CONCEPT",
+    # 💡 Abstract Concept — Software (5)
+    "Design Pattern": "ABSTRACT_CONCEPT",
+    "Algorithm": "ABSTRACT_CONCEPT",
+    "Protocol Spec": "ABSTRACT_CONCEPT",
+    "Paradigm": "ABSTRACT_CONCEPT",
+    "SLA": "ABSTRACT_CONCEPT",
+    # 💡 Abstract Concept — Business (5)
+    "Business Model": "ABSTRACT_CONCEPT",
+    "Strategy": "ABSTRACT_CONCEPT",
+    "KPI": "ABSTRACT_CONCEPT",
+    "Brand": "ABSTRACT_CONCEPT",
+    "Moat": "ABSTRACT_CONCEPT",
+}
+
+
+def resolve_entity_category(
+    declared_category: str | None,
+    declared_subtype: str | None,
+    definition: str = "",
+) -> tuple[str, str | None, str]:
+    """Resolve an entity to its canonical category, sub-type, and emoji.
+
+    4-step resolution:
+    1. Valid declared_category → use it
+    2. Invalid/None category + subtype in ENTITY_SUBTYPE_REGISTRY → use registry
+    3. Invalid/None category + no subtype match → ABSTRACT_CONCEPT (last resort)
+    4. ABSTRACT_CONCEPT as result → log debug
+
+    Emoji is ALWAYS server-derived from ENTITY_CATEGORY_EMOJI_MAP.
+    LLM-provided emoji is ignored.
+
+    Args:
+        declared_category: The entity category declared by the LLM, or None.
+        declared_subtype: The entity sub-type declared by the LLM, or None.
+        definition: The concept definition (for future disambiguation context).
+
+    Returns:
+        (category, subtype, emoji) tuple.
+    """
+    from loguru import logger
+
+    from codebase_rag.constants import (
+        DOC_ENTITY_CATEGORIES,
+        ENTITY_CATEGORY_EMOJI_MAP,
+    )
+
+    category: str | None = None
+    subtype: str | None = declared_subtype
+
+    # Step 1: Valid declared category
+    if declared_category and declared_category.upper() in DOC_ENTITY_CATEGORIES:
+        category = declared_category.upper()
+    # Step 2: Sub-type registry lookup
+    elif declared_subtype and declared_subtype in ENTITY_SUBTYPE_REGISTRY:
+        category = ENTITY_SUBTYPE_REGISTRY[declared_subtype]
+        logger.debug(
+            f"Entity category resolved from sub-type registry: "
+            f"'{declared_subtype}' → '{category}'"
+        )
+    # Step 3: Fallback to ABSTRACT_CONCEPT
+    else:
+        category = "ABSTRACT_CONCEPT"
+        logger.warning(
+            f"Entity category not determined — falling back to ABSTRACT_CONCEPT. "
+            f"Declared category: '{declared_category}', subtype: '{declared_subtype}'"
+        )
+
+    # Step 4: Debug-log if ABSTRACT_CONCEPT is the result (routine classification)
+    if category == "ABSTRACT_CONCEPT":
+        logger.debug(
+            f"Entity classified as ABSTRACT_CONCEPT (last resort). "
+            f"Verify other 6 categories were ruled out."
+        )
+
+    emoji = ENTITY_CATEGORY_EMOJI_MAP.get(category, "💡")
+    return category, subtype, emoji
 
 
 def _parse_quota_reset_time(message: str) -> datetime | None:

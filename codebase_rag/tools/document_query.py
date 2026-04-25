@@ -70,18 +70,20 @@ def create_query_document_graph_tool(
             elif source_concept:
                 concepts = [source_concept] + concepts[:1]
 
-            if len(concepts) >= 2 and router.doc_graph is not None:
+            doc_algo_graph = getattr(router, "concept_graph", None) or router.doc_graph
+
+            if len(concepts) >= 2 and doc_algo_graph is not None:
                 algo = DocumentGraphAlgorithms(
-                    graph=router.doc_graph,
+                    graph=doc_algo_graph,
                     workspace=workspace,
                 )
                 path = await algo.find_shortest_path(concepts[0], concepts[1])
                 if path:
                     return _format_path_result(path)
 
-            if len(concepts) == 1 and router.doc_graph is not None:
+            if len(concepts) == 1 and doc_algo_graph is not None:
                 algo = DocumentGraphAlgorithms(
-                    graph=router.doc_graph,
+                    graph=doc_algo_graph,
                     workspace=workspace,
                 )
                 related = await algo.find_related_concepts(concepts[0])
@@ -252,9 +254,22 @@ def _create_document_query_router() -> QueryRouter | None:
             batch_size=100,
         )
 
+        # Connect to concept graph if enabled
+        concept_ingestor = None
+        if settings.CONCEPT_MEMGRAPH_ENABLED:
+            try:
+                concept_ingestor = MemgraphIngestor(
+                    host=settings.CONCEPT_MEMGRAPH_HOST,
+                    port=settings.CONCEPT_MEMGRAPH_PORT,
+                    batch_size=100,
+                )
+            except Exception:
+                pass
+
         return QueryRouter(
             code_graph=None,  # Not needed for document-only queries
             doc_graph=doc_ingestor,
+            concept_graph=concept_ingestor,
         )
 
     except Exception as e:
@@ -283,9 +298,22 @@ def _create_merged_query_router() -> QueryRouter | None:
             batch_size=100,
         )
 
+        # Connect to concept graph if enabled
+        concept_ingestor = None
+        if settings.CONCEPT_MEMGRAPH_ENABLED:
+            try:
+                concept_ingestor = MemgraphIngestor(
+                    host=settings.CONCEPT_MEMGRAPH_HOST,
+                    port=settings.CONCEPT_MEMGRAPH_PORT,
+                    batch_size=100,
+                )
+            except Exception:
+                pass
+
         return QueryRouter(
             code_graph=code_ingestor,
             doc_graph=doc_ingestor,
+            concept_graph=concept_ingestor,
         )
 
     except Exception as e:

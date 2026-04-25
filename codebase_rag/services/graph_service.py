@@ -124,6 +124,17 @@ def configure_connection_socket(conn: mgclient.Connection, timeout: float = 30.0
         pass
 
 
+def _resolve_graph_type(port: int) -> str:
+    """Resolve graph type string from port number for error guidance."""
+    if port == settings.DOC_MEMGRAPH_PORT:
+        return "document"
+    elif port == settings.JSON_MEMGRAPH_PORT:
+        return "json"
+    elif port == settings.CONCEPT_MEMGRAPH_PORT:
+        return "concept"
+    return "code"
+
+
 class MemgraphIngestor:
     _TRANSIENT_ERROR_MARKERS = (
         "broken pipe",
@@ -597,7 +608,7 @@ class MemgraphIngestor:
             context = ErrorContext(
                 operation_type=operation_type,
                 error_category=classification.failure_type,
-                graph_type="code" if self._port == settings.MEMGRAPH_PORT else "document",
+                graph_type=_resolve_graph_type(self._port),
                 embedding_provider=settings.EMBEDDING_PROVIDER,
                 user_expertise=UserExpertiseLevel.INTERMEDIATE,
             )
@@ -622,6 +633,8 @@ class MemgraphIngestor:
             return settings.DOC_MEMGRAPH_CONNECTION_TIMEOUT
         elif self._port == settings.JSON_MEMGRAPH_PORT:
             return settings.JSON_MEMGRAPH_CONNECTION_TIMEOUT
+        elif self._port == settings.CONCEPT_MEMGRAPH_PORT:
+            return settings.CONCEPT_MEMGRAPH_CONNECTION_TIMEOUT
         return settings.MEMGRAPH_CONNECTION_TIMEOUT
 
     def _create_connection(self) -> mgclient.Connection:
@@ -965,6 +978,8 @@ class MemgraphIngestor:
             return "document"
         if self._port == settings.JSON_MEMGRAPH_PORT:
             return "json"
+        if self._port == settings.CONCEPT_MEMGRAPH_PORT:
+            return "concept"
         return "code"
 
     def _vector_recreate_command(self) -> str:
@@ -973,6 +988,7 @@ class MemgraphIngestor:
             "code": "--code",
             "document": "--docs",
             "json": "--json",
+            "concept": "--concept",
         }[graph_type]
         return f"cgr vector recreate-indexes {option}"
 

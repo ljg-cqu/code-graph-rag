@@ -235,9 +235,11 @@ class QueryRouter:
         doc_graph: QueryProtocol | None = None,
         code_vector: VectorBackend | None = None,
         doc_vector: VectorBackend | None = None,
+        concept_graph: QueryProtocol | None = None,
     ):
         self.code_graph = code_graph
         self.doc_graph = doc_graph
+        self.concept_graph = concept_graph
         self._code_vector = code_vector
         self._doc_vector = doc_vector
         self.current_mode: QueryMode = QueryMode.CODE_ONLY  # For in-chat mode switching
@@ -791,7 +793,8 @@ class QueryRouter:
                 from ..document.graph_algorithms import DocumentGraphAlgorithms
 
                 workspace = getattr(self, "workspace", "default")
-                algo = DocumentGraphAlgorithms(self.doc_graph, workspace=workspace)
+                graph = self.concept_graph if self.concept_graph is not None else self.doc_graph
+                algo = DocumentGraphAlgorithms(graph, workspace=workspace)
                 concepts = request.plan.expected_entities
 
                 if len(concepts) >= 2:

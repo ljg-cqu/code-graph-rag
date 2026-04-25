@@ -65,14 +65,20 @@ class MemgraphBackend(VectorBackend):
 
     LABELS_TO_INDEX = cs.EMBEDDABLE_CODE_NODE_LABELS
 
-    def __init__(self, is_document: bool = False) -> None:
+    def __init__(self, is_document: bool = False, is_concept: bool = False) -> None:
         self.is_document = is_document
+        self.is_concept = is_concept
         self._conn: mgclient.Connection | None = None
         self._query_generator: MemgraphQueryGenerator | None = None
 
     def _create_connection(self) -> mgclient.Connection:
         """Create a new Memgraph connection."""
-        if self.is_document:
+        if self.is_concept:
+            host = settings.CONCEPT_MEMGRAPH_HOST
+            port = settings.CONCEPT_MEMGRAPH_PORT
+            username = settings.CONCEPT_MEMGRAPH_USERNAME
+            password = settings.CONCEPT_MEMGRAPH_PASSWORD
+        elif self.is_document:
             host = settings.DOC_MEMGRAPH_HOST
             port = settings.DOC_MEMGRAPH_PORT
             username = settings.DOC_MEMGRAPH_USERNAME

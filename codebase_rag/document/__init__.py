@@ -12,6 +12,8 @@ Key components:
 from .chunking import DocumentChunk, SemanticDocumentChunker
 from .circuit_breaker import CircuitBreaker, CircuitBreakerConfig
 from .concept_extraction import (
+    VERB_REGISTRY,
+    ENTITY_SUBTYPE_REGISTRY,
     ConceptExtractionStats,
     ExtractedConcept,
     ConceptRelationship,
@@ -20,6 +22,8 @@ from .concept_extraction import (
     calculate_adaptive_timeout,
     classify_concept_extraction_error,
     get_user_facing_message,
+    resolve_category,
+    resolve_entity_category,
 )
 from .document_updater import (
     DocumentGraphUnavailableError,
@@ -54,6 +58,10 @@ __all__ = [
     "calculate_adaptive_timeout",
     "classify_concept_extraction_error",
     "get_user_facing_message",
+    "resolve_category",
+    "resolve_entity_category",
+    "VERB_REGISTRY",
+    "ENTITY_SUBTYPE_REGISTRY",
     # Circuit breaker
     "CircuitBreaker",
     "CircuitBreakerConfig",

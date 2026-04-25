@@ -2475,31 +2475,50 @@ def connect_doc_memgraph(batch_size: int = 1000) -> MemgraphIngestor:
     )
 
 
+def connect_concept_memgraph(batch_size: int = 1000) -> MemgraphIngestor:
+    """Connect to CONCEPT graph backend (CONCEPT_MEMGRAPH_HOST:CONCEPT_MEMGRAPH_PORT).
+
+    Args:
+        batch_size: Batch size for bulk operations
+
+    Returns:
+        MemgraphIngestor instance for concept graph
+    """
+    return MemgraphIngestor(
+        host=settings.CONCEPT_MEMGRAPH_HOST,
+        port=settings.CONCEPT_MEMGRAPH_PORT,
+        batch_size=batch_size,
+        username=settings.CONCEPT_MEMGRAPH_USERNAME,
+        password=settings.CONCEPT_MEMGRAPH_PASSWORD,
+    )
+
+
 @contextmanager
-def connect_both_graphs(
+def connect_all_graphs(
     batch_size: int,
     doc_workspace: str = "default",
-) -> Generator[tuple[MemgraphIngestor, MemgraphIngestor], None, None]:
-    """Connect to both code and document graphs with proper context management.
+) -> Generator[tuple[MemgraphIngestor, MemgraphIngestor, MemgraphIngestor | None], None, None]:
+    """Connect to all graph instances with proper context management.
 
     Args:
         batch_size: Batch size for bulk operations
         doc_workspace: Workspace identifier for document graph (used for logging)
 
     Yields:
-        Tuple of (code_graph, doc_graph) ingestors
+        Tuple of (code_graph, doc_graph, concept_graph) ingestors.
+        concept_graph is None if concept instance is disabled or unreachable.
 
     Raises:
         Exception: If connection fails, properly cleans up partial connections
 
     Note:
-        Uses manual __enter__/__exit__ calls to manage both connections within
+        Uses manual __enter__/__exit__ calls to manage connections within
         a single context manager. This is necessary because we need to yield
-        both connections together and ensure both are cleaned up on error.
-        Safety guarantees: both connections open before yield, both closed on
+        all connections together and ensure all are cleaned up on error.
+        Safety guarantees: all connections open before yield, all closed on
         any exception, partial cleanup on mid-connection failure, no connection leaks.
     """
-    logger.info(f"Connecting to dual graphs with doc_workspace={doc_workspace}")
+    logger.info(f"Connecting to all graphs with doc_workspace={doc_workspace}")
 
     code_graph = MemgraphIngestor(
         host=settings.MEMGRAPH_HOST,
@@ -2515,6 +2534,18 @@ def connect_both_graphs(
         username=settings.DOC_MEMGRAPH_USERNAME,
         password=settings.DOC_MEMGRAPH_PASSWORD,
     )
+    concept_graph: MemgraphIngestor | None = None
+    if settings.CONCEPT_MEMGRAPH_ENABLED:
+        try:
+            concept_graph = MemgraphIngestor(
+                host=settings.CONCEPT_MEMGRAPH_HOST,
+                port=settings.CONCEPT_MEMGRAPH_PORT,
+                batch_size=batch_size,
+                username=settings.CONCEPT_MEMGRAPH_USERNAME,
+                password=settings.CONCEPT_MEMGRAPH_PASSWORD,
+            )
+        except Exception as e:
+            logger.warning(f"Concept graph instance unavailable: {e}")
 
     # Enter code_graph first, with proper cleanup on failure
     code_graph.__enter__()
@@ -2525,10 +2556,21 @@ def connect_both_graphs(
         code_graph.__exit__(*sys.exc_info())
         raise
 
+    if concept_graph is not None:
+        try:
+            concept_graph.__enter__()
+        except Exception:
+            # concept_graph failed, cleanup doc_graph and code_graph before raising
+            doc_graph.__exit__(*sys.exc_info())
+            code_graph.__exit__(*sys.exc_info())
+            raise
+
     try:
-        yield (code_graph, doc_graph)
+        yield (code_graph, doc_graph, concept_graph)
     finally:
-        # Exit both on error with proper exception info
+        # Exit all on error with proper exception info
+        if concept_graph is not None:
+            concept_graph.__exit__(*sys.exc_info())
         doc_graph.__exit__(*sys.exc_info())
         code_graph.__exit__(*sys.exc_info())
 
@@ -2920,6 +2962,7 @@ def _initialize_services_and_agent(
     repo_path: str,
     ingestor: QueryProtocol,
     doc_ingestor: MemgraphIngestor | None = None,
+    concept_ingestor: MemgraphIngestor | None = None,
     query_mode: QueryMode | None = None,
     doc_workspace: str = "default",
 ) -> tuple[
@@ -2933,6 +2976,7 @@ def _initialize_services_and_agent(
         repo_path: Repository path
         ingestor: Code graph ingestor
         doc_ingestor: Document graph ingestor (optional)
+        concept_ingestor: Concept graph ingestor (optional)
         query_mode: Initial query mode (defaults to CODE_ONLY)
         doc_workspace: Document workspace identifier
 
@@ -2969,10 +3013,11 @@ def _initialize_services_and_agent(
             doc_graph=doc_ingestor,
         )
 
-        # Create QueryRouter for dual-graph queries
+        # Create QueryRouter for multi-graph queries
         query_router = QueryRouter(
             code_graph=ingestor,
             doc_graph=doc_ingestor,
+            concept_graph=concept_ingestor,
         )
         # Store mode in router instance
         query_router.current_mode = query_mode
@@ -3125,11 +3170,12 @@ async def main_unified_async(
     _display_yolo_warning()
 
     if with_docs:
-        # Connect to both graphs
+        # Connect to all graphs
         try:
-            with connect_both_graphs(batch_size, doc_workspace) as (
+            with connect_all_graphs(batch_size, doc_workspace) as (
                 code_graph,
                 doc_graph,
+                concept_graph,
             ):
                 app_context.console.print(
                     style("✅ Connected to code graph", cs.Color.GREEN)
@@ -3140,6 +3186,10 @@ async def main_unified_async(
                         cs.Color.GREEN,
                     )
                 )
+                if concept_graph is not None:
+                    app_context.console.print(
+                        style("✅ Connected to concept graph", cs.Color.GREEN)
+                    )
 
                 # Get content availability for status display and configuration
                 code_count, doc_count = _get_content_availability(code_graph, doc_graph)
@@ -3154,11 +3204,12 @@ async def main_unified_async(
                     )
                 )
 
-                # Initialize agent with both graphs (auto-detects query_mode if None)
+                # Initialize agent with all graphs (auto-detects query_mode if None)
                 rag_agent, tool_names, query_router = _initialize_services_and_agent(
                     repo_path,
                     code_graph,
                     doc_ingestor=doc_graph,
+                    concept_ingestor=concept_graph,
                     query_mode=query_mode,
                     doc_workspace=doc_workspace,
                 )

@@ -90,7 +90,38 @@ services:
     depends_on:
       - memgraph-json
 
+  # ============================================
+  # Concept Graph (NEW — 4th instance)
+  # ============================================
+  memgraph-concept:
+    image: memgraph/memgraph-mage:latest
+    ports:
+      - "${CONCEPT_MEMGRAPH_PORT:-7690}:7687"
+    command: [
+      "--schema-info-enabled",
+      "--also-log-to-stderr"
+    ]
+    environment:
+      - MEMGRAPH_MEMORY_LIMIT=${CONCEPT_MEMGRAPH_MEMORY_LIMIT:-4GB}
+    volumes:
+      - memgraph_concept_data:/var/lib/memgraph
+    healthcheck:
+      test: ["CMD-SHELL", "echo 'RETURN 1;' | mgconsole"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  lab-concept:
+    image: memgraph/lab:latest
+    ports:
+      - "${CONCEPT_LAB_PORT:-3003}:3000"
+    environment:
+      QUICK_CONNECT_MG_HOST: memgraph-concept
+    depends_on:
+      - memgraph-concept
+
 volumes:
   memgraph_code_data:
   memgraph_doc_data:
   memgraph_json_data: # NEW JSON Graph Volume
+  memgraph_concept_data: # NEW Concept Graph Volume
