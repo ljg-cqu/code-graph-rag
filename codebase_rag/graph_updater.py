@@ -301,6 +301,7 @@ class GraphUpdater:
         self.unignore_paths = unignore_paths
         self.exclude_paths = exclude_paths
         self._deferred_relationships: list[dict] = []  # Cross-file relationships deferred until all nodes flushed
+        self._indexed_code_files: list[tuple[Path, cs.SupportedLanguage]] = []  # Files indexed for call processing
 
         self.factory = ProcessorFactory(
             ingestor=self.ingestor,
@@ -679,12 +680,14 @@ class GraphUpdater:
                 total_chunks = len(futures)
                 # Reset deferred relationships collection for this run
                 self._deferred_relationships = []
+                # Reset indexed files collection for this run
+                self._indexed_code_files = []
 
                 try:
                     for future in as_completed(futures, timeout=worker_timeout):
                         completed_count += 1
                         try:
-                            node_results, rel_results, deferred_rels = future.result()
+                            node_results, rel_results, deferred_rels, indexed_files = future.result()
                         except Exception as e:
                             # Log individual worker error but continue processing other futures
                             logger.error(
@@ -704,6 +707,15 @@ class GraphUpdater:
 
                         # Collect deferred relationships for later processing
                         self._deferred_relationships.extend(deferred_rels)
+
+                        # Track indexed code files for call processing
+                        for file_path_str, lang_value in indexed_files:
+                            try:
+                                file_path = Path(file_path_str)
+                                language = cs.SupportedLanguage(lang_value)
+                                self._indexed_code_files.append((file_path, language))
+                            except ValueError:
+                                pass  # Skip unknown language values
 
                         for node_result in node_results:
                             label = node_result["label"]
@@ -900,6 +912,7 @@ class GraphUpdater:
         all_nodes: list[dict] = []
         all_relationships: list[dict] = []
         deferred_relationships: list[dict] = []  # Cross-file relationships deferred until all nodes flushed
+        indexed_code_files: list[tuple[str, str]] = []  # (file_path_str, language_value) for call processing
 
         for filepath in file_chunk:
             nodes_offset = len(worker_ingestor.nodes)
@@ -927,6 +940,7 @@ class GraphUpdater:
                 if result:
                     root_node, language = result
                     worker_ast_cache[filepath] = (root_node, language)
+                    indexed_code_files.append((str(filepath), language.value))
 
             elif (
                 filepath.name.lower() in cs.DEPENDENCY_FILES
@@ -988,7 +1002,7 @@ class GraphUpdater:
                     else:
                         all_relationships.append(rel_entry)
 
-        return all_nodes, all_relationships, deferred_relationships
+        return all_nodes, all_relationships, deferred_relationships, indexed_code_files
 
     @staticmethod
     def _is_canonical_json_ingestion_payload(data: object) -> bool:
@@ -1061,11 +1075,35 @@ class GraphUpdater:
         logger.info(f"Deferred relationships buffered: {processed_count}")
 
     def _process_function_calls(self) -> None:
-        ast_cache_items = list(self.ast_cache.items())
-        for file_path, (root_node, language) in ast_cache_items:
-            self.factory.call_processor.process_calls_in_file(
-                file_path, root_node, language, self.queries
-            )
+        """Process function calls by re-parsing indexed files.
+
+        Trade-off: Re-parsing costs CPU time but ensures correct call graph.
+        Alternative approaches (storing AST in workers) fail due to
+        non-pickleable tree_sitter.Node objects.
+        """
+        if not self._indexed_code_files:
+            logger.warning("No indexed files available for call processing")
+            return
+
+        logger.info(f"Processing calls in {len(self._indexed_code_files)} files...")
+
+        for file_path, language in self._indexed_code_files:
+            if language not in self.parsers:
+                continue
+
+            try:
+                with open(file_path, "rb") as f:
+                    source = f.read()
+
+                parser = self.parsers[language]
+                tree = parser.parse(source)
+                root_node = tree.root_node
+
+                self.factory.call_processor.process_calls_in_file(
+                    file_path, root_node, language, self.queries
+                )
+            except Exception as e:
+                logger.debug(f"Failed to process calls in {file_path}: {e}")
 
     def _prune_orphan_nodes(self) -> None:
         """Remove graph nodes whose files/folders no longer exist on disk."""

@@ -1671,6 +1671,7 @@ class DocumentGraphUpdater:
             cs.NodeLabel.DOCUMENT.value,
             {
                 cs.UniqueKeyType.PATH.value: doc.path,
+                "name": Path(doc.path).name,
                 "workspace": self.workspace,
                 "file_type": doc.file_type,
                 "total_section_count": doc.total_section_count()
@@ -2622,6 +2623,7 @@ class DocumentGraphUpdater:
                     "workspace": workspace,
                     "name": concept.name,
                     "aliases": concept.aliases,
+                    "type": concept.type,
                     "definition": concept.definition,
                     "confidence": concept.confidence,
                     "source_chunk_qn": concept.source_chunk_qn,
@@ -2677,6 +2679,7 @@ class DocumentGraphUpdater:
             SET c.workspace = node.workspace,
                 c.name = node.name,
                 c.aliases = node.aliases,
+                c.type = node.type,
                 c.definition = node.definition,
                 c.confidence = node.confidence,
                 c.source_chunk_qn = node.source_chunk_qn

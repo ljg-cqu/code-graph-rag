@@ -23,6 +23,10 @@ class ExtractedConcept(BaseModel):
         default_factory=list,
         description="Alternative names for this concept",
     )
+    type: str | None = Field(
+        default=None,
+        description="Concept type: skill, framework, model, process, risk, principle, concept",
+    )
     definition: str = Field(..., description="Brief definition")
     confidence: float = Field(
         ...,
@@ -157,7 +161,17 @@ class LLMConceptExtractor:
     SYSTEM_PROMPT = """You are a concept extractor for technical documentation.
 Given a document chunk, identify:
 1. Key concepts mentioned (with definitions if available)
-2. Relationships between concepts (RELATED_TO, IS_A, PART_OF, CAUSES)
+2. The type/category of each concept
+3. Relationships between concepts (RELATED_TO, IS_A, PART_OF, CAUSES)
+
+Concept types:
+- skill: A learnable capability or competency
+- framework: A structured approach, methodology, or system
+- model: A conceptual representation or theoretical construct
+- process: A systematic sequence of actions or operations
+- risk: A potential negative outcome, pitfall, or concern
+- principle: A fundamental truth, rule, or guideline
+- concept: A general idea, notion, or abstract thought
 
 Respond with JSON matching this structure:
 {
@@ -165,6 +179,7 @@ Respond with JSON matching this structure:
     {
       "name": "concept name",
       "aliases": ["alternative name"],
+      "type": "skill|framework|model|process|risk|principle|concept",
       "definition": "brief definition",
       "confidence": 0.9
     }
@@ -181,6 +196,7 @@ Respond with JSON matching this structure:
 
 Rules:
 - Only extract concepts that are clearly defined or important in the text
+- Assign the most specific type that fits; use "concept" as fallback
 - Confidence should reflect how clearly the concept is presented
 - Relationship types must be one of: RELATED_TO, IS_A, PART_OF, CAUSES
 - Strength reflects how explicitly the relationship is stated"""

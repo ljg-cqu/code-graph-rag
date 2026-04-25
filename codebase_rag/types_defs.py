@@ -564,7 +564,7 @@ NODE_SCHEMAS: tuple[NodeSchema, ...] = (
     # Document GraphRAG node schemas
     NodeSchema(
         NodeLabel.DOCUMENT,
-        "{path: string, workspace: string, file_type: string, total_section_count: int, code_block_count: int, code_references: list[string], resolved_code_references: list[string], resolved_code_reference_count: int, word_count: int, modified_date: string, indexed_at: string, content_hash: string}",
+        "{path: string, name: string | null, workspace: string, file_type: string, total_section_count: int, code_block_count: int, code_references: list[string], resolved_code_references: list[string], resolved_code_reference_count: int, word_count: int, modified_date: string, indexed_at: string, content_hash: string}",
     ),
     NodeSchema(
         NodeLabel.SECTION,
@@ -573,6 +573,32 @@ NODE_SCHEMAS: tuple[NodeSchema, ...] = (
     NodeSchema(
         NodeLabel.CHUNK,
         "{qualified_name: string, workspace: string, content: string, token_count: int, section_title: string, start_line: int, end_line: int, code_references: list[string], resolved_code_references: list[string], resolved_code_reference_count: int, embedding: list[float], embedding_model: string, embedding_version: int, indexed_at: string}",
+    ),
+    # Document GraphRAG concept nodes
+    NodeSchema(
+        NodeLabel.CONCEPT,
+        "{qualified_name: string, name: string, aliases: list[string] | null, definition: string | null, type: string | null, workspace: string, source_chunk_qn: string | null, source_document: string | null, confidence: float | null, indexed_at: string | null}",
+    ),
+    NodeSchema(
+        NodeLabel.TOPIC,
+        "{qualified_name: string, name: string, description: string | null, workspace: string, parent_topic: string | null, indexed_at: string}",
+    ),
+    # AutoHotkey node schemas
+    NodeSchema(
+        NodeLabel.HOTKEY,
+        "{qualified_name: string, name: string, key_sequence: string, replacement: string | null, path: string, absolute_path: string, start_line: int, end_line: int}",
+    ),
+    NodeSchema(
+        NodeLabel.HOTSTRING,
+        "{qualified_name: string, name: string, trigger: string, replacement: string | null, options: list[string], path: string, absolute_path: string, start_line: int, end_line: int}",
+    ),
+    NodeSchema(
+        NodeLabel.LABEL,
+        "{qualified_name: string, name: string, path: string, absolute_path: string, start_line: int, end_line: int}",
+    ),
+    NodeSchema(
+        NodeLabel.CLASS_AHK,
+        "{qualified_name: string, name: string, path: string, absolute_path: string, start_line: int, end_line: int, docstring: string | null}",
     ),
     # JSON content node schemas
     # NOTE: `path` on JSON nodes is the relative filesystem path of the source file,
@@ -595,7 +621,7 @@ NODE_SCHEMAS: tuple[NodeSchema, ...] = (
     ),
     NodeSchema(
         NodeLabel.JSON_ENTITY,
-        "{unique_id: string, entity_id: string, name: string, type: string, dataset_id: string, entity_labels: list[string], embedding: list[float], embedding_model: string, embedding_version: int}",
+        "{unique_id: string, entity_id: string, name: string, type: string, dataset_id: string, entity_labels: list[string], embedding: list[float] | null, embedding_model: string | null, embedding_version: int | null}",
     ),
 )
 
@@ -806,6 +832,47 @@ RELATIONSHIP_SCHEMAS: tuple[RelationshipSchema, ...] = (
         RelationshipType.BELONGS_TO_SECTION,
         (NodeLabel.SECTION,),
     ),
+    # Concept and Topic relationship schemas
+    RelationshipSchema(
+        (NodeLabel.CONCEPT,),
+        RelationshipType.IS_A,
+        (NodeLabel.CONCEPT, NodeLabel.TOPIC),
+    ),
+    RelationshipSchema(
+        (NodeLabel.CONCEPT, NodeLabel.TOPIC),
+        RelationshipType.PART_OF,
+        (NodeLabel.CONCEPT, NodeLabel.TOPIC),
+    ),
+    RelationshipSchema(
+        (NodeLabel.CONCEPT,),
+        RelationshipType.CAUSES,
+        (NodeLabel.CONCEPT,),
+    ),
+    RelationshipSchema(
+        (NodeLabel.CONCEPT, NodeLabel.TOPIC),
+        RelationshipType.RELATED_TO,
+        (NodeLabel.CONCEPT, NodeLabel.TOPIC),
+    ),
+    RelationshipSchema(
+        (NodeLabel.CHUNK, NodeLabel.SECTION),
+        RelationshipType.MENTIONS,
+        (NodeLabel.CONCEPT,),
+    ),
+    RelationshipSchema(
+        (NodeLabel.DOCUMENT, NodeLabel.SECTION),
+        RelationshipType.DISCUSSES,
+        (NodeLabel.CONCEPT, NodeLabel.TOPIC),
+    ),
+    RelationshipSchema(
+        (NodeLabel.DOCUMENT, NodeLabel.SECTION),
+        RelationshipType.COVERS,
+        (NodeLabel.TOPIC,),
+    ),
+    RelationshipSchema(
+        (NodeLabel.CONCEPT, NodeLabel.CHUNK),
+        RelationshipType.BELONGS_TO_TOPIC,
+        (NodeLabel.TOPIC,),
+    ),
     # JSON content relationship schemas
     RelationshipSchema(
         (NodeLabel.FILE,),
@@ -827,5 +894,4 @@ RELATIONSHIP_SCHEMAS: tuple[RelationshipSchema, ...] = (
         RelationshipType.HAS_ELEMENT,
         (NodeLabel.JSON_VALUE, NodeLabel.JSON_OBJECT, NodeLabel.JSON_ARRAY),
     ),
-    # Note: RELATES_TO removed - no ingestion code creates this relationship
 )
