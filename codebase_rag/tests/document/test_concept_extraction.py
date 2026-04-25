@@ -7,18 +7,21 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
-from codebase_rag.document.circuit_breaker import CircuitBreaker, CircuitBreakerConfig, CircuitState
+from codebase_rag.document.circuit_breaker import (
+    CircuitBreaker,
+    CircuitBreakerConfig,
+    CircuitState,
+)
 from codebase_rag.document.concept_extraction import (
     ExtractedConcept,
     ExtractionResult,
     LLMConceptExtractor,
     calculate_adaptive_timeout,
 )
-from codebase_rag.document.error_handling import ErrorType, ExtractionError
 
 
 class TestAdaptiveTimeout:
@@ -314,7 +317,7 @@ class TestLLMConceptExtractorRetry:
             nonlocal call_count
             call_count += 1
             if call_count < 3:
-                raise asyncio.TimeoutError()
+                raise TimeoutError()
             concept = ExtractedConcept(
                 name="test",
                 aliases=[],
@@ -325,7 +328,11 @@ class TestLLMConceptExtractorRetry:
             return _MockAgentOutput(ExtractionResult(concepts=[concept]))
 
         extractor.agent = Mock(run=mock_run)
-        result = await extractor.extract_with_retry("content", "qn")
+        with patch(
+            "codebase_rag.document.concept_extraction.LLMConceptExtractor._probe_provider_health",
+            return_value=True,
+        ):
+            result = await extractor.extract_with_retry("content", "qn")
         assert len(result.concepts) == 1
         assert call_count == 3
 
@@ -352,10 +359,14 @@ class TestLLMConceptExtractorRetry:
         async def mock_run(content):
             nonlocal call_count
             call_count += 1
-            raise asyncio.TimeoutError()
+            raise TimeoutError()
 
         extractor.agent = Mock(run=mock_run)
-        result = await extractor.extract_with_retry("content", "qn")
+        with patch(
+            "codebase_rag.document.concept_extraction.LLMConceptExtractor._probe_provider_health",
+            return_value=True,
+        ):
+            result = await extractor.extract_with_retry("content", "qn")
         assert result == ExtractionResult()
         assert call_count == 4  # initial + 3 retries
 
@@ -412,17 +423,24 @@ class TestLLMConceptExtractorRetry:
 
         async def mock_wait_for(awaitable, timeout):
             timeouts_passed.append(timeout)
-            raise asyncio.TimeoutError()
+            raise TimeoutError()
 
         with patch("asyncio.wait_for", mock_wait_for):
-            result = await extractor.extract_with_retry("content", "qn")
+            with patch(
+                "codebase_rag.document.concept_extraction.LLMConceptExtractor._probe_provider_health",
+                return_value=True,
+            ):
+                result = await extractor.extract_with_retry("content", "qn")
         assert result == ExtractionResult()
         assert len(timeouts_passed) == 4
         # "content" is 7 chars, so size_factor adds ~0.07
-        assert timeouts_passed[0] == pytest.approx(10.07, abs=0.01)
-        assert timeouts_passed[1] == pytest.approx(15.105, abs=0.01)
-        assert timeouts_passed[2] == pytest.approx(22.6575, abs=0.01)
-        assert timeouts_passed[3] == pytest.approx(33.98625, abs=0.01)
+        original = pytest.approx(10.07, abs=0.01)
+        assert timeouts_passed[0] == original
+        # Capped at 1.2x original (12.084) with new multiplier 1.1
+        assert timeouts_passed[1] == pytest.approx(11.077, abs=0.01)
+        assert timeouts_passed[2] == pytest.approx(12.084, abs=0.01)
+        # After 3 consecutive timeouts, fast-fail kicks in (5.0s)
+        assert timeouts_passed[3] == pytest.approx(5.0, abs=0.1)
 
     @pytest.mark.asyncio
     async def test_retry_timeout_capped_at_max_timeout(self):
@@ -435,12 +453,142 @@ class TestLLMConceptExtractorRetry:
 
         async def mock_wait_for(awaitable, timeout):
             timeouts_passed.append(timeout)
-            raise asyncio.TimeoutError()
+            raise TimeoutError()
 
         with patch("asyncio.wait_for", mock_wait_for):
-            await extractor.extract_with_retry("content", "qn")
+            with patch(
+                "codebase_rag.document.concept_extraction.LLMConceptExtractor._probe_provider_health",
+                return_value=True,
+            ):
+                await extractor.extract_with_retry("content", "qn")
         assert len(timeouts_passed) == 4
         assert timeouts_passed[0] == pytest.approx(80.07, abs=0.01)
-        assert timeouts_passed[1] == 100.0
-        assert timeouts_passed[2] == 100.0
-        assert timeouts_passed[3] == 100.0
+        # Capped at 1.2x original (96.084) with new multiplier 1.1
+        assert timeouts_passed[1] == pytest.approx(88.077, abs=0.01)
+        assert timeouts_passed[2] == pytest.approx(96.084, abs=0.01)
+        # After 3 consecutive timeouts, fast-fail kicks in (5.0s)
+        assert timeouts_passed[3] == pytest.approx(5.0, abs=0.1)
+
+
+class TestAdaptiveTimeoutTuning:
+    """Tests for adaptive timeout tuning and provider health probe."""
+
+    @pytest.mark.asyncio
+    async def test_timeout_retry_capped(self):
+        from unittest.mock import patch
+
+        extractor = LLMConceptExtractor(timeout=10.0, max_timeout=100.0)
+        extractor.agent = Mock(run=Mock(return_value=_MockAgentOutput(ExtractionResult())))
+
+        timeouts_passed: list[float] = []
+
+        async def mock_wait_for(awaitable, timeout):
+            timeouts_passed.append(timeout)
+            raise TimeoutError()
+
+        with patch("asyncio.wait_for", mock_wait_for):
+            with patch(
+                "codebase_rag.document.concept_extraction.LLMConceptExtractor._probe_provider_health",
+                return_value=True,
+            ):
+                await extractor.extract_with_retry("content", "qn")
+        assert len(timeouts_passed) == 4
+        original = 10.07
+        cap = original * 1.2
+        assert timeouts_passed[1] <= cap + 0.01
+        assert timeouts_passed[2] <= cap + 0.01
+        assert timeouts_passed[3] <= cap + 0.01
+
+    @pytest.mark.asyncio
+    async def test_provider_health_probe_skips_retry(self):
+        extractor = LLMConceptExtractor()
+        call_count = 0
+
+        async def mock_run(content):
+            nonlocal call_count
+            call_count += 1
+            raise TimeoutError()
+
+        extractor.agent = Mock(run=mock_run)
+        with patch(
+            "codebase_rag.document.concept_extraction.LLMConceptExtractor._probe_provider_health",
+            return_value=False,
+        ):
+            result = await extractor.extract_with_retry("content", "qn")
+        assert result == ExtractionResult()
+        assert call_count == 1  # Only initial attempt, probe fails, skip retry
+
+    @pytest.mark.asyncio
+    async def test_consecutive_timeout_fast_fail(self):
+        from unittest.mock import patch
+
+        extractor = LLMConceptExtractor(timeout=10.0, max_timeout=100.0)
+        extractor.agent = Mock(run=Mock(return_value=_MockAgentOutput(ExtractionResult())))
+
+        timeouts_passed: list[float] = []
+
+        async def mock_wait_for(awaitable, timeout):
+            timeouts_passed.append(timeout)
+            raise TimeoutError()
+
+        with patch("asyncio.wait_for", mock_wait_for):
+            with patch(
+                "codebase_rag.document.concept_extraction.LLMConceptExtractor._probe_provider_health",
+                return_value=True,
+            ):
+                await extractor.extract_with_retry("content", "qn")
+        assert len(timeouts_passed) == 4
+        # After 3 consecutive timeouts, 4th should use fast-fail timeout (5s)
+        assert timeouts_passed[3] == pytest.approx(5.0, abs=0.1)
+
+    @pytest.mark.asyncio
+    async def test_probe_timeout_does_not_affect_breaker(self):
+        cb = CircuitBreaker(name="test")
+        extractor = LLMConceptExtractor(circuit_breaker=cb)
+        extractor.agent = Mock(run=Mock(side_effect=asyncio.TimeoutError))
+        with patch(
+            "codebase_rag.document.concept_extraction.LLMConceptExtractor._probe_provider_health",
+            return_value=False,
+        ):
+            await extractor.extract_with_retry("content", "qn")
+        # Timeout errors do not record breaker failures; probe also should not
+        assert cb.failure_count == 0
+
+
+class TestCircuitBreakerStormMitigation:
+    """Tests for circuit breaker storm mitigation."""
+
+    @pytest.mark.asyncio
+    async def test_silent_return_on_breaker_open_in_retry(self):
+        cb = CircuitBreaker(
+            name="test",
+            config=CircuitBreakerConfig(failure_threshold=1),
+        )
+        extractor = LLMConceptExtractor(circuit_breaker=cb)
+        extractor.agent = Mock(run=Mock(side_effect=RuntimeError("down")))
+
+        await extractor.extract_with_retry("content", "qn1")
+        assert cb.is_open
+
+        result = await extractor.extract_with_retry("content", "qn2")
+        assert result == ExtractionResult()
+
+    @pytest.mark.asyncio
+    async def test_no_regression_on_normal_flow(self):
+        extractor = LLMConceptExtractor()
+        concept = ExtractedConcept(
+            name="test",
+            aliases=[],
+            definition="def",
+            confidence=0.9,
+            source_chunk_qn="",
+        )
+        result = ExtractionResult(concepts=[concept])
+
+        async def mock_run(content):
+            return _MockAgentOutput(result)
+
+        extractor.agent = Mock(run=mock_run)
+
+        output = await extractor.extract_with_retry("content", "qn")
+        assert len(output.concepts) == 1

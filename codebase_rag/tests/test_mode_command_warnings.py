@@ -161,3 +161,13 @@ class TestDetermineDefaultQueryMode:
     def test_code_only_fallback_when_empty(self):
         mode = _determine_default_query_mode(None, None)
         assert mode == QueryMode.CODE_ONLY
+
+    def test_code_only_when_both_empty_even_if_both_default_configured(self):
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            monkeypatch.setattr(
+                "codebase_rag.main.settings.CGR_DEFAULT_MODE_WHEN_BOTH",
+                "both_merged",
+            )
+            mode = _determine_default_query_mode(None, None)
+
+        assert mode == QueryMode.CODE_ONLY

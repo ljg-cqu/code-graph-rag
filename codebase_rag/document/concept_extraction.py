@@ -150,6 +150,8 @@ class LLMConceptExtractor:
         "max_timeout",
         "_initialization_failed",
         "_circuit_breaker",
+        "_consecutive_timeouts",
+        "_consecutive_timeouts_lock",
     )
 
     SYSTEM_PROMPT = """You are a concept extractor for technical documentation.
@@ -190,12 +192,17 @@ Rules:
         circuit_breaker: CircuitBreaker | None = None,
     ) -> None:
         from codebase_rag.config import settings
-        from codebase_rag.document.circuit_breaker import CircuitBreaker, CircuitBreakerConfig
+        from codebase_rag.document.circuit_breaker import (
+            CircuitBreaker,
+            CircuitBreakerConfig,
+        )
 
         self.agent = None
         self.timeout = timeout if timeout is not None else settings.DOC_CONCEPT_BASE_TIMEOUT
         self.max_timeout = max_timeout if max_timeout is not None else settings.DOC_CONCEPT_MAX_TIMEOUT
         self._initialization_failed = False
+        self._consecutive_timeouts = 0
+        self._consecutive_timeouts_lock = asyncio.Lock()
         if circuit_breaker is not None:
             self._circuit_breaker = circuit_breaker
         elif settings.CGR_CIRCUIT_BREAKER_ENABLED:
@@ -211,6 +218,22 @@ Rules:
         else:
             self._circuit_breaker = None
 
+    async def _probe_provider_health(self) -> bool:
+        from codebase_rag.config import settings
+
+        if not self._initialize_agent():
+            return False
+        if self._circuit_breaker is not None and not self._circuit_breaker.can_execute():
+            return False
+        try:
+            await asyncio.wait_for(
+                self.agent.run("Respond with the single word: OK"),
+                timeout=settings.DOC_CONCEPT_PROBE_TIMEOUT,
+            )
+            return True
+        except Exception:
+            return False
+
     def _initialize_agent(self) -> bool:
         if self.agent is not None:
             return True
@@ -219,7 +242,6 @@ Rules:
 
         try:
             from codebase_rag.compat.pydantic_ai import Agent
-
             from codebase_rag.config import settings
             from codebase_rag.services.llm import _create_chat_model
 
@@ -251,9 +273,10 @@ Rules:
 
         if self._circuit_breaker is not None and not self._circuit_breaker.can_execute():
             from loguru import logger
+
             from codebase_rag.document import logs as doc_ls
 
-            logger.warning(
+            logger.debug(
                 doc_ls.DOC_CONCEPT_CIRCUIT_BREAKER_OPEN.format(chunk_qn=chunk_qn)
             )
             return ExtractionResult()
@@ -275,7 +298,7 @@ Rules:
             if self._circuit_breaker is not None:
                 self._circuit_breaker.record_success()
             return result.output
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise
         except Exception:
             if self._circuit_breaker is not None:
@@ -288,19 +311,24 @@ Rules:
         chunk_qn: str,
         dead_letter_queue: DeadLetterQueue | None = None,
     ) -> ExtractionResult:
-        from codebase_rag.config import settings
-        from codebase_rag.document.error_handling import ErrorType
-        from codebase_rag.document import logs as doc_ls
         from loguru import logger
+
+        from codebase_rag.config import settings
+        from codebase_rag.document import logs as doc_ls
+        from codebase_rag.document.error_handling import ErrorType
+
+        if self._circuit_breaker is not None and not self._circuit_breaker.can_execute():
+            return ExtractionResult()
 
         max_retries = settings.DOC_CONCEPT_EXTRACTION_MAX_RETRIES
         base_delay = settings.DOC_CONCEPT_EXTRACTION_RETRY_DELAY
 
-        current_timeout = calculate_adaptive_timeout(
+        original_timeout = calculate_adaptive_timeout(
             chunk_content,
             base_timeout=self.timeout,
             max_timeout=self.max_timeout,
         )
+        current_timeout = original_timeout
 
         last_error = None
 
@@ -328,14 +356,28 @@ Rules:
                     delay = base_delay * (2 ** attempt)
 
                     if error.error_type == ErrorType.CONCEPT_TIMEOUT:
+                        async with self._consecutive_timeouts_lock:
+                            self._consecutive_timeouts += 1
+                            if self._consecutive_timeouts >= settings.DOC_CONCEPT_CONSECUTIVE_TIMEOUT_THRESHOLD:
+                                current_timeout = min(settings.DOC_CONCEPT_FAST_FAIL_TIMEOUT, current_timeout)
+                            else:
+                                current_timeout = min(
+                                    current_timeout * settings.DOC_CONCEPT_TIMEOUT_RETRY_MULTIPLIER,
+                                    original_timeout * settings.DOC_CONCEPT_TIMEOUT_RETRY_CAP_MULTIPLIER,
+                                    self.max_timeout,
+                                )
                         delay = max(
                             base_delay * settings.DOC_CONCEPT_TIMEOUT_RETRY_DELAY_MULTIPLIER,
                             delay,
                         )
-                        current_timeout = min(
-                            current_timeout * settings.DOC_CONCEPT_TIMEOUT_RETRY_MULTIPLIER,
-                            self.max_timeout,
-                        )
+                        if not await self._probe_provider_health():
+                            logger.warning(
+                                doc_ls.DOC_CONCEPT_PROVIDER_UNHEALTHY.format(chunk_qn=chunk_qn)
+                            )
+                            break
+                    else:
+                        async with self._consecutive_timeouts_lock:
+                            self._consecutive_timeouts = 0
 
                     jitter = delay * random.uniform(0.0, 0.25)
                     delay = delay + jitter
@@ -558,8 +600,9 @@ def save_failed_chunk_for_debug(
     Returns:
         Path to the debug file, or None if debug mode is disabled
     """
-    from codebase_rag.config import settings
     from loguru import logger
+
+    from codebase_rag.config import settings
 
     if not settings.CGR_DEBUG_CONCEPT_EXTRACTION:
         return None

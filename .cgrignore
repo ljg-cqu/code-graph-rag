@@ -1,3 +1,11 @@
+# Application internal state
+/.cgr/
+/.venv/
+/.git/
+
+# Transient design specs
+/.specs/
+
 # Exclude build artifacts
 *.egg-info/
 build/

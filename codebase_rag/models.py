@@ -32,7 +32,12 @@ class SessionState:
 
 
 def _default_console() -> Console:
-    return Console(width=None, force_terminal=True)
+    # Don't force terminal - let Rich auto-detect.
+    # force_terminal=True can cause conflicts with prompt_toolkit input handling.
+    # Set a minimum width to prevent rendering issues in narrow terminals.
+    import shutil
+    width = shutil.get_terminal_size((80, 24)).columns
+    return Console(width=max(width, 80) if width else 80)
 
 
 @dataclass

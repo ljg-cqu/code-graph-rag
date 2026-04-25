@@ -267,6 +267,9 @@ class CodeChangeEventHandler(FileSystemEventHandler):
 
         # (H) Step 5: Flush changes to database
         self.updater.ingestor.flush_all()
+        if getattr(settings, "MG_REL_FLUSH_VERIFY_NODES", False):
+            integrity = self.updater.ingestor.verify_hierarchy_integrity()
+            logger.debug(f"Hierarchy integrity after flush: {integrity}")
         logger.success(logs.GRAPH_UPDATED.format(name=path.name))
 
 

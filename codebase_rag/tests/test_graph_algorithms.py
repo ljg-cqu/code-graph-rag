@@ -1,6 +1,21 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
+import mgclient
 from codebase_rag.graph_algorithms import GraphAlgorithms
+
+
+def test_get_connection_reuses_existing_connection() -> None:
+    """Test _get_connection yields the existing connection when available."""
+    algo = GraphAlgorithms()
+    mock_conn = MagicMock()
+    mock_conn.status = mgclient.CONN_STATUS_READY
+    algo._conn = mock_conn
+
+    with algo._get_connection() as conn:
+        assert conn is mock_conn
+
+    # Connection should not be closed when reused
+    mock_conn.close.assert_not_called()
 
 
 def test_run_community_detection_falls_back_to_louvain() -> None:
@@ -14,7 +29,10 @@ def test_run_community_detection_falls_back_to_louvain() -> None:
         assert algo.run_community_detection() == 4
 
     assert mock_execute.call_count == 2
-    assert "CALL leiden_community_detection.get()" in mock_execute.call_args_list[0].args[0]
+    assert (
+        "CALL leiden_community_detection.get()"
+        in mock_execute.call_args_list[0].args[0]
+    )
     assert "CALL community_detection.get()" in mock_execute.call_args_list[1].args[0]
 
 
@@ -58,9 +76,7 @@ def test_run_community_detection_downgrades_no_communities_to_info() -> None:
             algo,
             "_execute_query",
             side_effect=[
-                Exception(
-                    "leiden_community_detection.get: No communities detected."
-                ),
+                Exception("leiden_community_detection.get: No communities detected."),
                 [{"updated_count": 4}],
             ],
         ) as mock_execute,
@@ -72,7 +88,9 @@ def test_run_community_detection_downgrades_no_communities_to_info() -> None:
     mock_logger.warning.assert_not_called()
 
 
-def test_run_community_detection_returns_zero_when_no_algorithms_find_communities() -> None:
+def test_run_community_detection_returns_zero_when_no_algorithms_find_communities() -> (
+    None
+):
     algo = GraphAlgorithms()
 
     with (
@@ -80,9 +98,7 @@ def test_run_community_detection_returns_zero_when_no_algorithms_find_communitie
             algo,
             "_execute_query",
             side_effect=[
-                Exception(
-                    "leiden_community_detection.get: No communities detected."
-                ),
+                Exception("leiden_community_detection.get: No communities detected."),
                 Exception("community_detection.get: No communities detected."),
             ],
         ) as mock_execute,

@@ -733,7 +733,7 @@ cgr start --repo-path /path/to/your/repo --index-docs --with-docs --mode documen
 | `--with-docs` | Connect to document graph for dual-graph querying |
 | `--index-docs` | Index documents before starting chat |
 | `--index-all` | Index both code and documents before starting chat |
-| `--mode` | Query routing mode (see below) |
+| `--mode` | Query routing mode (default: `auto`, see below) |
 | `--doc-workspace` | Document workspace identifier (default: `default`) |
 | `--check-freshness/--no-check-freshness` | Check if indexed graphs are up-to-date and prompt for reindex if stale (default: enabled) |
 | `--index-timeout` | Maximum time in seconds for indexing operations (default: 300) |
@@ -758,6 +758,8 @@ Use `/mode <mode>` to switch query modes during the session:
 /mode code_vs_doc     # Validate code against specs
 /mode document_only   # Query documents only
 ```
+
+Chat input is multiline-aware: press `Enter` to submit, or `Ctrl+J` to insert a newline.
 
 #### Separate Document Commands
 
@@ -809,6 +811,7 @@ cgr validate-doc \
 - `--dry-run`: Estimate cost without running validation
 
 **Query Modes:**
+- `auto`: CLI startup default. Chooses `document_only` when only documents are indexed, `code_only` when only code or no content is indexed, and otherwise uses `CGR_DEFAULT_MODE_WHEN_BOTH` to select between `both_merged` and `code_only`.
 - `code_only`: Query code graph only (for function lookups, call graphs)
 - `document_only`: Query document graph only (for tutorials, guides, API docs)
 - `both_merged`: Query both graphs, merge results with clear attribution

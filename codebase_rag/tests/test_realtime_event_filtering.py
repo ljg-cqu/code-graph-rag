@@ -5,6 +5,8 @@ from typing import Protocol, runtime_checkable
 from unittest.mock import MagicMock
 
 import pytest
+
+pytest.importorskip("watchdog")
 from watchdog.events import (
     FileClosedNoWriteEvent,
     FileCreatedEvent,

@@ -628,10 +628,34 @@ class AppConfig(BaseSettings):
     DOC_CONCEPT_EXTRACTION_MAX_RETRIES: int = Field(default=3, ge=0, le=10)
     DOC_CONCEPT_EXTRACTION_RETRY_DELAY: float = Field(default=1.0, ge=0.1, le=60.0)
     DOC_CONCEPT_TIMEOUT_RETRY_MULTIPLIER: float = Field(
-        default=1.5,
+        default=1.1,
         ge=1.0,
         le=5.0,
         description="Multiplier for timeout on each retry after a timeout error",
+    )
+    DOC_CONCEPT_TIMEOUT_RETRY_CAP_MULTIPLIER: float = Field(
+        default=1.2,
+        ge=1.0,
+        le=3.0,
+        description="Cap retry timeout at Nx the original adaptive timeout",
+    )
+    DOC_CONCEPT_CONSECUTIVE_TIMEOUT_THRESHOLD: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Consecutive timeouts before fast-fail mode",
+    )
+    DOC_CONCEPT_FAST_FAIL_TIMEOUT: float = Field(
+        default=5.0,
+        ge=1.0,
+        le=30.0,
+        description="Seconds timeout when in fast-fail mode",
+    )
+    DOC_CONCEPT_PROBE_TIMEOUT: float = Field(
+        default=10.0,
+        ge=1.0,
+        le=60.0,
+        description="Seconds for provider health probe",
     )
     DOC_CONCEPT_TIMEOUT_RETRY_DELAY_MULTIPLIER: float = Field(
         default=3.0,
@@ -704,6 +728,19 @@ class AppConfig(BaseSettings):
     CGR_DEBUG_DIR: str = Field(
         default=".cgr/debug/concept_extraction",
         description="Directory to save debug output for failed extractions",
+    )
+
+    # Dead letter queue retention
+    DOC_ERRORS_MAX_AGE_DAYS: int = Field(default=7, ge=1, le=365)
+    DOC_ERRORS_MAX_FILES: int = Field(default=100, ge=10, le=10000)
+    DOC_ERRORS_WARNING_THRESHOLD: int = Field(default=50, ge=1, le=1000)
+    DOC_DLQ_MAX_SIZE: int = Field(default=1000, ge=100, le=10000)
+
+    # Relationship flush diagnostics
+    MG_REL_FLUSH_FAILURE_SAMPLE_SIZE: int = Field(default=5, ge=1, le=50)
+    MG_REL_FLUSH_VERIFY_NODES: bool = Field(
+        default=False,
+        description="Verify node existence on relationship flush failure",
     )
 
     # Document graph algorithms

@@ -1235,7 +1235,7 @@ DEFAULT_TABLE_TITLE = "Code-Graph-RAG Initializing..."
 OPTIMIZATION_TABLE_TITLE = "Optimization Session Configuration"
 PROMPT_ASK_QUESTION = "Ask a question"
 PROMPT_YOUR_RESPONSE = "Your response"
-MULTILINE_INPUT_HINT = "(Press Ctrl+J to submit, Enter for new line)"
+MULTILINE_INPUT_HINT = "(Enter to submit, Ctrl+J for newline)"
 
 # (H) Interactive setup prompt - grouped view
 INTERACTIVE_TITLE_GROUPED = "Detected Directories (will be excluded unless kept)"
@@ -4088,6 +4088,7 @@ JSON_INGEST_SKIP_PARSE_ERROR = "Skipping JSON file with parse error: {path}: {er
 JSON_INGEST_SKIP_SCHEMA_MISMATCH = "Skipping JSON file with schema mismatch: {path}: {error}"
 JSON_INGEST_SKIP_IO_ERROR = "Skipping JSON file due to IO error: {path}: {error}"
 JSON_INGEST_SKIP_REASON_SUMMARY = "JSON skip reasons: {reasons}"
+JSON_SCAN_ROOT_FALLBACK = "No data/ or json/ directory found. Falling back to repo root for JSON scan: {path}"
 
 QUERY_GEN_SHOW_VERSION = "SHOW VERSION;"
 QUERY_GEN_SHOW_LICENSE = "SHOW LICENSE INFO;"

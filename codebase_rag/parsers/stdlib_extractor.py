@@ -1,5 +1,7 @@
+import atexit
 import json
 import os
+import threading
 import time
 from pathlib import Path
 from typing import TypedDict
@@ -23,6 +25,41 @@ _CACHE_TTL = cs.IMPORT_CACHE_TTL
 _CACHE_TIMESTAMPS: dict[str, float] = {}
 
 _EXTERNAL_TOOLS: dict[str, bool] = {}
+
+_SAVE_SCHEDULED = False
+_SAVE_LOCK = threading.Lock()
+
+
+def _schedule_persistent_save() -> None:
+    """Schedule cache persistence for interpreter shutdown (log-safe)."""
+    global _SAVE_SCHEDULED
+    with _SAVE_LOCK:
+        if not _SAVE_SCHEDULED:
+            atexit.register(_atexit_save_cache)
+            _SAVE_SCHEDULED = True
+
+
+def _atexit_save_cache() -> None:
+    """Persist cache during interpreter shutdown — safe to log here."""
+    try:
+        cache_dir = Path.home() / cs.IMPORT_CACHE_DIR
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_file = cache_dir / cs.IMPORT_CACHE_FILE
+        tmp_file = cache_file.with_suffix(f".tmp.{os.getpid()}")
+
+        with tmp_file.open("w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    cs.IMPORT_CACHE_KEY: _STDLIB_CACHE,
+                    cs.IMPORT_TIMESTAMPS_KEY: _CACHE_TIMESTAMPS,
+                },
+                f,
+                indent=2,
+            )
+        os.replace(str(tmp_file), str(cache_file))
+        logger.debug(ls.IMP_CACHE_SAVED, path=cache_file)
+    except OSError as e:
+        logger.debug(ls.IMP_CACHE_SAVE_ERROR, error=e)
 
 
 def _is_tool_available(tool_name: str) -> bool:
@@ -90,29 +127,18 @@ def load_persistent_cache() -> None:
 
 
 def save_persistent_cache() -> None:
-    try:
-        cache_dir = Path.home() / cs.IMPORT_CACHE_DIR
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        cache_file = cache_dir / cs.IMPORT_CACHE_FILE
-        tmp_file = cache_file.with_suffix(f".tmp.{os.getpid()}")
+    """Schedule stdlib cache for persistence at interpreter shutdown.
 
-        with tmp_file.open("w", encoding="utf-8") as f:
-            json.dump(
-                {
-                    cs.IMPORT_CACHE_KEY: _STDLIB_CACHE,
-                    cs.IMPORT_TIMESTAMPS_KEY: _CACHE_TIMESTAMPS,
-                },
-                f,
-                indent=2,
-            )
-        os.replace(str(tmp_file), str(cache_file))
-        logger.debug(ls.IMP_CACHE_SAVED, path=cache_file)
-    except OSError as e:
-        logger.debug(ls.IMP_CACHE_SAVE_ERROR, error=e)
+    Defers disk I/O to avoid loguru re-entrancy deadlocks when called
+    from contexts that hold the loguru internal lock (sinks, signal
+    handlers, __del__).
+    """
+    _schedule_persistent_save()
 
 
 def flush_stdlib_cache() -> None:
-    save_persistent_cache()
+    """Force immediate cache persistence. Call during explicit shutdown only."""
+    _atexit_save_cache()
 
 
 def clear_stdlib_cache() -> None:

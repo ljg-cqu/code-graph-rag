@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+pytest.importorskip("mcp")
 from codebase_rag import constants as cs
 from codebase_rag.compat.pydantic_ai import UsageLimits
 from codebase_rag.config import settings

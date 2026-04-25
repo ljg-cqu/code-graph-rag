@@ -37,7 +37,7 @@ CMD_START = (
     "Supports both code and document GraphRAG. "
     "Use --with-docs to enable document queries. "
     "Use --index-docs or --index-all to index before chatting. "
-    "Use --mode to specify query mode (default: code_only)."
+    "Use --mode to specify query mode (default: auto)."
 )
 CMD_INDEX = "Index codebase to protobuf files for offline use"
 CMD_EXPORT = "Export knowledge graph from Memgraph to JSON file"
@@ -185,13 +185,14 @@ HELP_MODE = (
     "  - both_merged: Query both graphs, merge results with attribution\n"
     "  - code_vs_doc: Validate code against documentation (doc is truth)\n"
     "  - doc_vs_code: Validate documentation against code (code is truth)\n"
+    "\nAuto mode falls back to code_only when no indexed content is available."
     "\nNote: Document graph requires --with-docs flag."
 )
 HELP_CHECK_FRESHNESS = (
     "Check if indexed graphs are up-to-date with repository. "
     "If stale, prompts to re-index. Disable with --no-check-freshness for faster startup."
 )
-HELP_INDEX_TIMEOUT = "Maximum seconds for indexing operations (default: 3600s)"
+HELP_INDEX_TIMEOUT = "Maximum seconds for indexing operations (default: 300s)"
 HELP_PARALLEL_WORKERS = "Maximum number of parallel sub-agents to use when the read-only parallel path is selected"
 HELP_AUTO_SPLIT = "Enable or disable automatic safe subtask preview and generation for parallel execution"
 HELP_NO_PARALLEL = "Force sequential execution for this session"

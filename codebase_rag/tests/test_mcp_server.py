@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
+pytest.importorskip("mcp")
 from codebase_rag.mcp.server import get_project_root
 
 

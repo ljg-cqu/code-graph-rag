@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+pytest.importorskip("mcp")
 from codebase_rag.mcp.tools import MCPToolsRegistry
 
 pytestmark = [pytest.mark.anyio]

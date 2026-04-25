@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+pytest.importorskip("mcp")
 from codebase_rag.mcp.tools import MCPToolsRegistry
 from codebase_rag.shared.query_router import (
     QueryMode,

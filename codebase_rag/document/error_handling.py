@@ -13,7 +13,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 
@@ -268,9 +268,19 @@ class DeadLetterQueue:
         queue_path: Path,
         retry_delays: list[int] | None = None,
     ) -> None:
+        from codebase_rag.config import settings
+
         self.queue_path = queue_path
         self.queue_path.mkdir(parents=True, exist_ok=True)
         self.retry_delays = retry_delays or DEFAULT_RETRY_DELAYS
+        self._max_size = getattr(settings, "DOC_DLQ_MAX_SIZE", 1000)
+        self._seen_paths: set[str] = set()
+        for error_file in self.queue_path.glob("*.error.json"):
+            try:
+                data = json.loads(error_file.read_text())
+                self._seen_paths.add(data.get("path", ""))
+            except (json.JSONDecodeError, KeyError, OSError):
+                continue
 
     def _safe_error_filename(self, path: str) -> str:
         """Generate unique, safe filename for error file."""
@@ -287,6 +297,17 @@ class DeadLetterQueue:
         Returns:
             Path to the error file
         """
+        if error.path in self._seen_paths:
+            filename = self._safe_error_filename(error.path)
+            return self.queue_path / filename
+        if len(self._seen_paths) >= self._max_size:
+            from loguru import logger
+
+            logger.debug(f"DLQ at capacity ({self._max_size}), dropping error for {error.path}")
+            filename = self._safe_error_filename(error.path)
+            return self.queue_path / filename
+        self._seen_paths.add(error.path)
+
         filename = self._safe_error_filename(error.path)
         error_file = self.queue_path / filename
 
@@ -410,12 +431,45 @@ class DeadLetterQueue:
 
         return results
 
+    def cleanup_stale_errors(
+        self,
+        max_age_days: int | None = None,
+        max_files: int | None = None,
+    ) -> int:
+        from loguru import logger
+
+        from codebase_rag.config import settings
+        from codebase_rag.document import logs as doc_ls
+
+        max_age = max_age_days if max_age_days is not None else settings.DOC_ERRORS_MAX_AGE_DAYS
+        max_f = max_files if max_files is not None else settings.DOC_ERRORS_MAX_FILES
+        now = datetime.now(UTC)
+        files = sorted(
+            self.queue_path.glob("*.error.json"),
+            key=lambda f: f.stat().st_mtime,
+            reverse=True,
+        )
+        removed = 0
+        for f in files:
+            age = now - datetime.fromtimestamp(f.stat().st_mtime, UTC)
+            if age > timedelta(days=max_age):
+                f.unlink(missing_ok=True)
+                removed += 1
+        remaining = [f for f in files if f.exists()]
+        for f in remaining[max_f:]:
+            f.unlink(missing_ok=True)
+            removed += 1
+        if removed > 0:
+            logger.info(doc_ls.DOC_DLQ_CLEANUP.format(count=removed, path=self.queue_path))
+        return removed
+
     def clear(self) -> int:
         """Clear all pending errors. Returns count of removed files."""
         count = 0
         for error_file in self.queue_path.glob("*.error.json"):
             error_file.unlink()
             count += 1
+        self._seen_paths.clear()
         return count
 
     def size(self) -> int:

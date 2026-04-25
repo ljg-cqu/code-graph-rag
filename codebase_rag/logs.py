@@ -286,6 +286,11 @@ MG_TRANSACTION_CONFLICT_RETRY = (
     "Transaction conflict on '{pattern}', retrying in {backoff}s "
     "(attempt {attempt}/{max_retries})"
 )
+MG_REL_FLUSH_EXHAUSTED = (
+    "Relationship flush exhausted for {rel_type} ({from_label}.{from_key} -> {to_label}.{to_key}): "
+    "{rows} rows, error: {error}"
+)
+MG_REL_FLUSH_EXHAUSTED_SAMPLE = "  Sample {index}: {from_val} -> {to_val}"
 MG_FETCH_QUERY = "Executing fetch query: {query} with params: {params}"
 MG_WRITE_QUERY = "Executing write query: {query} with params: {params}"
 MG_EXPORTING = "Exporting graph data..."

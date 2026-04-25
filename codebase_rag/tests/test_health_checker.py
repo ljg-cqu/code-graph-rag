@@ -2,8 +2,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from codebase_rag.tools.health_checker import HealthChecker
 from codebase_rag.exceptions import QueryExecutionError
+from codebase_rag.tools.health_checker import HealthChecker
 
 
 def test_consume_all_results_handles_exceptions() -> None:
@@ -20,7 +20,9 @@ def test_consume_all_results_handles_exceptions() -> None:
 def test_safe_get_column_with_system_error() -> None:
     """Test _safe_get_column returns None on SystemError without leaking exception."""
     row = MagicMock()
-    row.__getitem__.side_effect = SystemError("<class 'mgclient.Column'> returned a result with an exception set")
+    row.__getitem__.side_effect = SystemError(
+        "<class 'mgclient.Column'> returned a result with an exception set"
+    )
     row.__iter__.side_effect = SystemError("corrupted")
 
     result = HealthChecker._safe_get_column(row, 0)
@@ -41,7 +43,9 @@ def test_run_check_with_retry_succeeds_on_second_attempt() -> None:
         return [MagicMock(passed=True)]
 
     with patch("time.sleep"):
-        results = checker._run_check_with_retry(flaky_check, max_attempts=3, base_delay=0.1)
+        results = checker._run_check_with_retry(
+            flaky_check, max_attempts=3, base_delay=0.1
+        )
 
     assert call_count == 2
     assert len(results) == 1
@@ -56,7 +60,9 @@ def test_run_check_with_retry_exhausts_all_attempts() -> None:
         raise ConnectionError("Persistent failure")
 
     with patch("time.sleep"):
-        results = checker._run_check_with_retry(always_fail, max_attempts=3, base_delay=0.1)
+        results = checker._run_check_with_retry(
+            always_fail, max_attempts=3, base_delay=0.1
+        )
 
     assert len(results) == 1
     assert results[0].passed is False
@@ -74,11 +80,37 @@ def test_run_check_with_retry_no_retry_for_non_retryable() -> None:
         raise ValueError("Logic error")
 
     with patch("time.sleep"):
-        results = checker._run_check_with_retry(non_retryable_fail, max_attempts=3, base_delay=0.1)
+        results = checker._run_check_with_retry(
+            non_retryable_fail, max_attempts=3, base_delay=0.1
+        )
 
     assert call_count == 1
     assert len(results) == 1
     assert results[0].passed is False
+
+
+def test_run_check_with_retry_on_system_error() -> None:
+    """Test retry wrapper retries SystemError and succeeds on second attempt."""
+    checker = HealthChecker()
+    call_count = 0
+
+    def flaky_system_error():
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise SystemError(
+                "<class 'mgclient.Column'> returned a result with an exception set"
+            )
+        return [MagicMock(passed=True)]
+
+    with patch("time.sleep"):
+        results = checker._run_check_with_retry(
+            flaky_system_error, max_attempts=3, base_delay=0.1
+        )
+
+    assert call_count == 2
+    assert len(results) == 1
+    assert results[0].passed is True
 
 
 def test_validate_ingestion_quality_cleanup_on_exception() -> None:
@@ -99,7 +131,10 @@ def test_validate_ingestion_quality_cleanup_on_exception() -> None:
         connection_count[0] += 1
         return conn
 
-    with patch("codebase_rag.tools.health_checker.mgclient.connect", side_effect=create_connection):
+    with patch(
+        "codebase_rag.tools.health_checker.mgclient.connect",
+        side_effect=create_connection,
+    ):
         results = checker.validate_ingestion_quality(expected_node_count=4)
 
     # Should have results from successful checks plus failure results
@@ -125,8 +160,11 @@ def test_validate_ingestion_quality_consumes_pending_results_on_error() -> None:
     def create_connection(*args, **kwargs):
         return conn
 
-    with patch("codebase_rag.tools.health_checker.mgclient.connect", side_effect=create_connection):
-        results = checker.validate_ingestion_quality()
+    with patch(
+        "codebase_rag.tools.health_checker.mgclient.connect",
+        side_effect=create_connection,
+    ):
+        checker.validate_ingestion_quality()
 
     # Each check creates its own connection, so we get partial results
     # Failed checks should still cleanup properly
@@ -156,14 +194,19 @@ def test_validate_ingestion_quality_uses_label_filter_not_pipe_syntax() -> None:
     def create_connection(*args, **kwargs):
         return conn
 
-    with patch("codebase_rag.tools.health_checker.mgclient.connect", side_effect=create_connection):
+    with patch(
+        "codebase_rag.tools.health_checker.mgclient.connect",
+        side_effect=create_connection,
+    ):
         checker.validate_ingestion_quality(
             embedded_node_label="Function|Method|Class",
         )
 
     executed_queries = []
     for cursor in created_cursors:
-        executed_queries.extend([call.args[0] for call in cursor.execute.call_args_list])
+        executed_queries.extend(
+            [call.args[0] for call in cursor.execute.call_args_list]
+        )
 
     assert any(
         "ANY(label IN labels(n) WHERE label IN $embedded_labels)" in query
@@ -251,9 +294,7 @@ def test_check_vector_search_with_results() -> None:
             "codebase_rag.vector_backend.get_shared_backend",
             return_value=mock_backend,
         ),
-        patch(
-            "codebase_rag.tools.health_checker.settings"
-        ) as mock_settings,
+        patch("codebase_rag.tools.health_checker.settings") as mock_settings,
     ):
         mock_settings.active_embedding_config = MagicMock(
             provider="local", model_id="test-model"
@@ -284,9 +325,7 @@ def test_check_vector_search_no_embeddings() -> None:
             "codebase_rag.vector_backend.get_shared_backend",
             return_value=mock_backend,
         ),
-        patch(
-            "codebase_rag.tools.health_checker.settings"
-        ) as mock_settings,
+        patch("codebase_rag.tools.health_checker.settings") as mock_settings,
     ):
         mock_settings.active_embedding_config = MagicMock(
             provider="local", model_id="test-model"
@@ -324,15 +363,21 @@ def test_validate_ingestion_quality_excludes_builtins_from_embedding_check() -> 
         conn.cursor.return_value = create_mock_cursor()
         return conn
 
-    with patch("codebase_rag.tools.health_checker.mgclient.connect", side_effect=create_connection):
-        results = checker.validate_ingestion_quality()
+    with patch(
+        "codebase_rag.tools.health_checker.mgclient.connect",
+        side_effect=create_connection,
+    ):
+        checker.validate_ingestion_quality()
 
     # Check that missing embeddings query excludes builtins
     missing_emb_queries = [
-        q for q in executed_queries
+        q
+        for q in executed_queries
         if "embedding" in q.lower() and "is null" in q.lower()
     ]
-    assert len(missing_emb_queries) >= 1, "Should have at least one missing embeddings query"
+    assert len(missing_emb_queries) >= 1, (
+        "Should have at least one missing embeddings query"
+    )
     for query in missing_emb_queries:
         assert "is_builtin" in query.lower() or "builtin." in query.lower(), (
             f"Missing embeddings query should exclude builtins: {query}"
@@ -360,14 +405,19 @@ def test_get_missing_embeddings_returns_nodes_without_embeddings() -> None:
 
     # Verify query excludes builtins
     executed_query = cursor.execute.call_args[0][0]
-    assert "is_builtin" in executed_query.lower() or "builtin." in executed_query.lower()
+    assert (
+        "is_builtin" in executed_query.lower() or "builtin." in executed_query.lower()
+    )
 
 
 def test_get_missing_embeddings_count_returns_count() -> None:
     """Test get_missing_embeddings_count returns correct count."""
     checker = HealthChecker()
     cursor = MagicMock()
-    cursor.fetchone.side_effect = [(5,), None]  # count, then None for _consume_all_results
+    cursor.fetchone.side_effect = [
+        (5,),
+        None,
+    ]  # count, then None for _consume_all_results
     conn = MagicMock()
     conn.cursor.return_value = cursor
 
@@ -378,7 +428,9 @@ def test_get_missing_embeddings_count_returns_count() -> None:
 
     # Verify query excludes builtins
     executed_query = cursor.execute.call_args[0][0]
-    assert "is_builtin" in executed_query.lower() or "builtin." in executed_query.lower()
+    assert (
+        "is_builtin" in executed_query.lower() or "builtin." in executed_query.lower()
+    )
 
 
 def test_validate_ingestion_quality_error_details_in_result() -> None:
@@ -394,7 +446,10 @@ def test_validate_ingestion_quality_error_details_in_result() -> None:
     def create_connection(*args, **kwargs):
         return conn
 
-    with patch("codebase_rag.tools.health_checker.mgclient.connect", side_effect=create_connection):
+    with patch(
+        "codebase_rag.tools.health_checker.mgclient.connect",
+        side_effect=create_connection,
+    ):
         results = checker.validate_ingestion_quality()
 
     # With isolated connections, we get partial failure results
@@ -419,16 +474,18 @@ def test_validate_ingestion_quality_error_logged_at_warning_level() -> None:
         return conn
 
     with (
-        patch("codebase_rag.tools.health_checker.mgclient.connect", side_effect=create_connection),
+        patch(
+            "codebase_rag.tools.health_checker.mgclient.connect",
+            side_effect=create_connection,
+        ),
         patch("codebase_rag.tools.health_checker.logger") as mock_logger,
     ):
-        results = checker.validate_ingestion_quality()
+        checker.validate_ingestion_quality()
 
     # Error should be logged at WARNING level (per-check logging in isolated pattern)
     warning_calls = [str(call) for call in mock_logger.warning.call_args_list]
     assert any(
-        "failed" in call.lower() or "error" in call.lower()
-        for call in warning_calls
+        "failed" in call.lower() or "error" in call.lower() for call in warning_calls
     ), "Error should be logged at WARNING level"
 
 
@@ -451,7 +508,10 @@ def test_validate_ingestion_quality_stacktrace_with_config_enabled() -> None:
         return conn
 
     with (
-        patch("codebase_rag.tools.health_checker.mgclient.connect", side_effect=create_connection),
+        patch(
+            "codebase_rag.tools.health_checker.mgclient.connect",
+            side_effect=create_connection,
+        ),
         patch("codebase_rag.tools.health_checker.settings", mock_settings),
     ):
         results = checker.validate_ingestion_quality()
@@ -460,10 +520,7 @@ def test_validate_ingestion_quality_stacktrace_with_config_enabled() -> None:
     failure_results = [r for r in results if not r.passed]
     assert len(failure_results) >= 1
     # At least one error should contain the original message
-    assert any(
-        "Invalid query parameter" in str(r.error)
-        for r in failure_results
-    )
+    assert any("Invalid query parameter" in str(r.error) for r in failure_results)
 
 
 def test_validate_ingestion_quality_no_stacktrace_by_default() -> None:
@@ -485,7 +542,10 @@ def test_validate_ingestion_quality_no_stacktrace_by_default() -> None:
         return conn
 
     with (
-        patch("codebase_rag.tools.health_checker.mgclient.connect", side_effect=create_connection),
+        patch(
+            "codebase_rag.tools.health_checker.mgclient.connect",
+            side_effect=create_connection,
+        ),
         patch("codebase_rag.tools.health_checker.settings", mock_settings),
     ):
         results = checker.validate_ingestion_quality()
@@ -494,10 +554,7 @@ def test_validate_ingestion_quality_no_stacktrace_by_default() -> None:
     failure_results = [r for r in results if not r.passed]
     assert len(failure_results) >= 1
     # Error should contain the message
-    assert any(
-        "Test error without traceback" in str(r.error)
-        for r in failure_results
-    )
+    assert any("Test error without traceback" in str(r.error) for r in failure_results)
 
 
 class TestQueryExecutionError:
@@ -557,9 +614,7 @@ class TestFetchSingleInt:
 
         with pytest.raises(QueryExecutionError) as exc_info:
             HealthChecker._fetch_single_int(
-                mock_cursor,
-                "MATCH (n) RETURN count(n)",
-                {"param": "value"}
+                mock_cursor, "MATCH (n) RETURN count(n)", {"param": "value"}
             )
 
         assert "MATCH (n)" in str(exc_info.value)
@@ -573,8 +628,7 @@ class TestFetchSingleInt:
         mock_cursor.fetchone.side_effect = [(42,), None]
 
         result = HealthChecker._fetch_single_int(
-            mock_cursor,
-            "MATCH (n) RETURN count(n)"
+            mock_cursor, "MATCH (n) RETURN count(n)"
         )
 
         assert result == 42
@@ -586,8 +640,7 @@ class TestFetchSingleInt:
         mock_cursor.fetchone.return_value = None
 
         result = HealthChecker._fetch_single_int(
-            mock_cursor,
-            "MATCH (n:NonExistent) RETURN count(n)"
+            mock_cursor, "MATCH (n:NonExistent) RETURN count(n)"
         )
 
         assert result == 0
@@ -607,9 +660,7 @@ class TestFetchEmbeddingDim:
 
         with pytest.raises(QueryExecutionError) as exc_info:
             checker._fetch_embedding_dim(
-                mock_cursor,
-                ["Function", "Method"],
-                "embedding"
+                mock_cursor, ["Function", "Method"], "embedding"
             )
 
         assert "size(n.embedding)" in str(exc_info.value)
@@ -623,9 +674,7 @@ class TestFetchEmbeddingDim:
 
         checker = HealthChecker()
         result = checker._fetch_embedding_dim(
-            mock_cursor,
-            ["Function", "Method"],
-            "embedding"
+            mock_cursor, ["Function", "Method"], "embedding"
         )
 
         assert result == 768
@@ -636,10 +685,75 @@ class TestFetchEmbeddingDim:
         mock_cursor.fetchone.return_value = None
 
         checker = HealthChecker()
-        result = checker._fetch_embedding_dim(
-            mock_cursor,
-            ["Function"],
-            "embedding"
+        result = checker._fetch_embedding_dim(mock_cursor, ["Function"], "embedding")
+
+        assert result is None
+
+
+class TestQueryExecutionErrorRetry:
+    def test_run_check_retries_on_query_execution_error(self):
+        """Test retry wrapper retries QueryExecutionError and succeeds."""
+        checker = HealthChecker()
+        call_count = 0
+
+        def flaky_check():
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 2:
+                raise QueryExecutionError(
+                    "MATCH (n) RETURN count(n)",
+                    None,
+                    SystemError("<class 'mgclient.Column'> returned a result with an exception set"),
+                )
+            return [MagicMock(passed=True)]
+
+        with patch("time.sleep"):
+            results = checker._run_check_with_retry(
+                flaky_check, max_attempts=3, base_delay=0.1
+            )
+
+        assert call_count == 3
+        assert len(results) == 1
+        assert results[0].passed is True
+
+    def test_run_check_exhausts_on_persistent_query_execution_error(self):
+        """Test retry wrapper returns unavailable after QueryExecutionError exhausts."""
+        checker = HealthChecker()
+
+        def always_fail():
+            raise QueryExecutionError(
+                "MATCH (n) RETURN count(n)",
+                None,
+                ConnectionError("Persistent failure"),
+            )
+
+        with patch("time.sleep"):
+            results = checker._run_check_with_retry(
+                always_fail, max_attempts=3, base_delay=0.1
+            )
+
+        assert len(results) == 1
+        assert results[0].passed is False
+        assert "unavailable" in results[0].name
+
+    def test_safe_get_column_handles_value_error_from_corrupted_row(self):
+        """Test _safe_get_column returns None on ValueError without leaking exception."""
+        row = MagicMock()
+        row.__getitem__.side_effect = ValueError(
+            "<class 'mgclient.Column'> returned a result with an exception set"
         )
+        row.__iter__.side_effect = ValueError("corrupted")
+
+        result = HealthChecker._safe_get_column(row, 0)
+
+        assert result is None
+
+    def test_safe_get_column_handles_type_error_from_corrupted_row(self):
+        """Test _safe_get_column returns None on TypeError without leaking exception."""
+        row = MagicMock()
+        row.__getitem__.side_effect = TypeError("bad operand type")
+        row.__iter__.side_effect = TypeError("corrupted")
+
+        result = HealthChecker._safe_get_column(row, 0)
 
         assert result is None

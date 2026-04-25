@@ -498,6 +498,53 @@ class DocumentGraphUpdater:
             return ErrorType.UNKNOWN
         return ErrorType.UNKNOWN
 
+    def _handle_extraction_error(
+        self, doc_path: Path, e: ExtractionException, stats: dict[str, object]
+    ) -> None:
+        if e.error_type in (ErrorType.FILE_NOT_FOUND, ErrorType.NOT_A_FILE):
+            logger.warning(doc_ls.DOC_FILE_MISSING_SKIP.format(path=doc_path, error=e))
+        else:
+            logger.opt(exception=True).error(
+                doc_ls.DOC_EXTRACTION_FAILED.format(path=doc_path, error=e)
+            )
+        stats["failed"] += 1
+        self.version_cache.remove(str(doc_path))
+        try:
+            self.dead_letter_queue.enqueue(e.to_extraction_error())
+        except Exception as dlq_error:
+            logger.warning(
+                doc_ls.DOC_DLQ_ENQUEUE_FAILED.format(path=doc_path, error=dlq_error)
+            )
+
+    def _handle_generic_error(
+        self, doc_path: Path, e: Exception, stats: dict[str, object]
+    ) -> None:
+        logger.opt(exception=True).error(
+            doc_ls.DOC_EXTRACTION_FAILED.format(path=doc_path, error=e)
+        )
+        stats["failed"] += 1
+        self.version_cache.remove(str(doc_path))
+        try:
+            self.dead_letter_queue.enqueue(
+                ExtractionError(
+                    path=str(doc_path),
+                    error_type=self._map_error_type(e),
+                    message=str(e),
+                )
+            )
+        except Exception as dlq_error:
+            logger.warning(
+                doc_ls.DOC_DLQ_ENQUEUE_FAILED.format(path=doc_path, error=dlq_error)
+            )
+
+    def _cleanup_dlq(self) -> None:
+        from codebase_rag.config import settings
+
+        self.dead_letter_queue.cleanup_stale_errors()
+        queue_size = self.dead_letter_queue.size()
+        if queue_size > settings.DOC_ERRORS_WARNING_THRESHOLD:
+            logger.warning(doc_ls.DOC_DLQ_SIZE_WARNING.format(count=queue_size))
+
     def run(self, force: bool = False) -> dict:
         """
         Ingest all documents into document graph.
@@ -555,6 +602,22 @@ class DocumentGraphUpdater:
 
                 documents = self._collect_documents()
 
+                current_paths = {str(d) for d in documents}
+                for cached_path in self.version_cache.keys():
+                    if cached_path not in current_paths and not Path(cached_path).exists():
+                        logger.debug(doc_ls.DOC_CACHE_PRUNE.format(path=cached_path))
+                        self.version_cache.remove(cached_path)
+                self.version_cache.save()
+
+                original_count = len(documents)
+                documents = [d for d in documents if d.exists()]
+                if len(documents) < original_count:
+                    logger.info(
+                        doc_ls.DOC_PRE_VERIFICATION_FILTERED.format(
+                            count=original_count - len(documents)
+                        )
+                    )
+
                 try:
                     deleted_stale = self._delete_stale_documents(documents, ingestor)
                 except Exception as e:
@@ -584,41 +647,15 @@ class DocumentGraphUpdater:
                         f"Indexing document {index}/{total_documents}: {doc_path}"
                     )
                     try:
-                        result = self._process_document(doc_path, ingestor, force=force)
+                        result = self._process_document(doc_path, ingestor, force=force, stats=stats)
                         if result == "indexed":
                             stats["indexed"] += 1
                         elif result == "skipped":
                             stats["skipped"] += 1
                     except ExtractionException as e:
-                        logger.opt(exception=True).error(
-                            f"Failed to process {doc_path}: {type(e).__name__}: {e}"
-                        )
-                        stats["failed"] += 1
-                        self.version_cache.remove(str(doc_path))
-                        try:
-                            self.dead_letter_queue.enqueue(e.to_extraction_error())
-                        except Exception as dlq_error:
-                            logger.warning(
-                                f"Could not enqueue error for {doc_path}: {dlq_error}"
-                            )
+                        self._handle_extraction_error(doc_path, e, stats)
                     except Exception as e:
-                        logger.opt(exception=True).error(
-                            f"Failed to process {doc_path}: {type(e).__name__}: {e}"
-                        )
-                        stats["failed"] += 1
-                        self.version_cache.remove(str(doc_path))
-                        try:
-                            self.dead_letter_queue.enqueue(
-                                ExtractionError(
-                                    path=str(doc_path),
-                                    error_type=self._map_error_type(e),
-                                    message=str(e),
-                                )
-                            )
-                        except Exception as dlq_error:
-                            logger.warning(
-                                f"Could not enqueue error for {doc_path}: {dlq_error}"
-                            )
+                        self._handle_generic_error(doc_path, e, stats)
 
                     if (
                         settings.DOC_INCREMENTAL_FLUSH_INTERVAL > 0
@@ -681,6 +718,8 @@ class DocumentGraphUpdater:
                     self.version_cache.save()
                 except Exception as e:
                     logger.warning(f"Could not save version cache: {e}")
+
+                self._cleanup_dlq()
 
                 logger.info(f"Document indexing complete: {stats}")
                 return stats
@@ -747,6 +786,22 @@ class DocumentGraphUpdater:
                     logger.error(f"Failed to collect documents: {e}")
                     documents = []
 
+                current_paths = {str(d) for d in documents}
+                for cached_path in self.version_cache.keys():
+                    if cached_path not in current_paths and not Path(cached_path).exists():
+                        logger.debug(doc_ls.DOC_CACHE_PRUNE.format(path=cached_path))
+                        self.version_cache.remove(cached_path)
+                self.version_cache.save()
+
+                original_count = len(documents)
+                documents = [d for d in documents if d.exists()]
+                if len(documents) < original_count:
+                    logger.info(
+                        doc_ls.DOC_PRE_VERIFICATION_FILTERED.format(
+                            count=original_count - len(documents)
+                        )
+                    )
+
                 try:
                     deleted_stale = await asyncio.to_thread(
                         self._delete_stale_documents, documents, ingestor
@@ -776,42 +831,16 @@ class DocumentGraphUpdater:
                     )
                     try:
                         result = await self._process_document_async(
-                            doc_path, ingestor, force=force
+                            doc_path, ingestor, force=force, stats=stats
                         )
                         if result == "indexed":
                             stats["indexed"] += 1
                         elif result == "skipped":
                             stats["skipped"] += 1
                     except ExtractionException as e:
-                        logger.opt(exception=True).error(
-                            f"Failed to process {doc_path}: {type(e).__name__}: {e}"
-                        )
-                        stats["failed"] += 1
-                        self.version_cache.remove(str(doc_path))
-                        try:
-                            self.dead_letter_queue.enqueue(e.to_extraction_error())
-                        except Exception as dlq_error:
-                            logger.warning(
-                                f"Could not enqueue error for {doc_path}: {dlq_error}"
-                            )
+                        self._handle_extraction_error(doc_path, e, stats)
                     except Exception as e:
-                        logger.opt(exception=True).error(
-                            f"Failed to process {doc_path}: {type(e).__name__}: {e}"
-                        )
-                        stats["failed"] += 1
-                        self.version_cache.remove(str(doc_path))
-                        try:
-                            self.dead_letter_queue.enqueue(
-                                ExtractionError(
-                                    path=str(doc_path),
-                                    error_type=self._map_error_type(e),
-                                    message=str(e),
-                                )
-                            )
-                        except Exception as dlq_error:
-                            logger.warning(
-                                f"Could not enqueue error for {doc_path}: {dlq_error}"
-                            )
+                        self._handle_generic_error(doc_path, e, stats)
 
                     if (
                         settings.DOC_INCREMENTAL_FLUSH_INTERVAL > 0
@@ -880,6 +909,8 @@ class DocumentGraphUpdater:
                     await asyncio.to_thread(self.version_cache.save)
                 except Exception as e:
                     logger.warning(f"Could not save version cache: {e}")
+
+                self._cleanup_dlq()
 
                 logger.info(f"Document indexing complete: {stats}")
                 return stats
@@ -1367,6 +1398,7 @@ class DocumentGraphUpdater:
         file_path: Path,
         ingestor: MemgraphIngestor,
         force: bool = False,
+        stats: dict[str, object] | None = None,
     ) -> str:
         """
         Process single document.
@@ -1374,6 +1406,11 @@ class DocumentGraphUpdater:
         Returns:
             "indexed", "skipped", or "failed"
         """
+        if not file_path.exists():
+            logger.debug(doc_ls.DOC_PREFLIGHT_MISSING.format(path=file_path))
+            self.version_cache.remove(str(file_path))
+            return "skipped"
+
         # Find appropriate extractor
         extractor = get_extractor_for_file(file_path)
         if not extractor:
@@ -1427,7 +1464,7 @@ class DocumentGraphUpdater:
             except RuntimeError:
                 asyncio.run(
                     self._extract_and_store_concepts(
-                        chunks, ingestor, self.workspace
+                        chunks, ingestor, self.workspace, stats
                     )
                 )
 
@@ -1515,8 +1552,14 @@ class DocumentGraphUpdater:
         file_path: Path,
         ingestor: MemgraphIngestor,
         force: bool = False,
+        stats: dict[str, object] | None = None,
     ) -> str:
         """Async version of _process_document."""
+        if not file_path.exists():
+            logger.debug(doc_ls.DOC_PREFLIGHT_MISSING.format(path=file_path))
+            self.version_cache.remove(str(file_path))
+            return "skipped"
+
         extractor = get_extractor_for_file(file_path)
         if not extractor:
             logger.warning(f"No extractor for {file_path}")
@@ -1565,7 +1608,7 @@ class DocumentGraphUpdater:
 
         # Extract and store concepts from chunks
         if self.concept_extractor and chunks:
-            await self._extract_and_store_concepts(chunks, ingestor, self.workspace)
+            await self._extract_and_store_concepts(chunks, ingestor, self.workspace, stats)
 
         # Update version
         version = self.version_tracker.create_version(doc)
@@ -2506,6 +2549,7 @@ class DocumentGraphUpdater:
         chunks: list[DocumentChunk],
         ingestor: MemgraphIngestor,
         workspace: str,
+        stats: dict[str, object] | None = None,
     ) -> None:
         """Extract concepts from chunks and store in graph via batch MERGE.
 
@@ -2515,6 +2559,25 @@ class DocumentGraphUpdater:
         are stored and failed chunks are logged at debug level.
         """
         if not self.concept_extractor:
+            return
+
+        extractor = cast(LLMConceptExtractor, self.concept_extractor)
+        if extractor._circuit_breaker is not None and not extractor._circuit_breaker.can_execute():
+            remaining = 0.0
+            if extractor._circuit_breaker.last_failure_time is not None:
+                remaining = max(
+                    0.0,
+                    extractor._circuit_breaker.config.timeout_seconds
+                    - (datetime.now(UTC) - extractor._circuit_breaker.last_failure_time).total_seconds(),
+                )
+            logger.warning(
+                doc_ls.DOC_CONCEPT_BREAKER_SKIP_DOC.format(
+                    doc=workspace,
+                    remaining=remaining,
+                )
+            )
+            if stats is not None:
+                stats["concepts_skipped_circuit_breaker"] = stats.get("concepts_skipped_circuit_breaker", 0) + len(chunks)
             return
 
         self._ensure_concept_indexes(ingestor)

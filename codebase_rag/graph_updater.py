@@ -3,6 +3,7 @@ import json
 import multiprocessing as mp
 import os
 import sys
+import time
 import traceback
 from collections import OrderedDict, defaultdict
 from collections.abc import Callable, ItemsView, KeysView
@@ -352,6 +353,8 @@ class GraphUpdater:
 
         self._run_post_ingestion_algorithms()
 
+        time.sleep(1.0)
+
         # Run post-ingestion data quality validation
         if settings.RUN_INGESTION_QUALITY_CHECKS:
             # Skip quality validation if no code files were processed (document-only repo)
@@ -361,7 +364,7 @@ class GraphUpdater:
                     "Document graph (if enabled) may still contain data."
                 )
             else:
-                health_checker = HealthChecker()
+                health_checker = HealthChecker(graph_service=self.ingestor)
                 validation_results = health_checker.validate_ingestion_quality(
                     embedded_node_label="|".join(cs.EMBEDDABLE_CODE_NODE_LABELS)
                 )

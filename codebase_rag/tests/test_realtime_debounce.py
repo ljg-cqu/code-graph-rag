@@ -14,6 +14,8 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+
+pytest.importorskip("watchdog")
 from watchdog.events import FileCreatedEvent, FileDeletedEvent, FileModifiedEvent
 
 from codebase_rag.constants import DEFAULT_DEBOUNCE_SECONDS, DEFAULT_MAX_WAIT_SECONDS

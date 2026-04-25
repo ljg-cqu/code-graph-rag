@@ -45,12 +45,14 @@ cgr start --repo-path /path/to/repo [OPTIONS]
 | `--index-all` | Index both code and documents before starting chat |
 | `--doc-workspace` | Document graph workspace identifier (default: `default`) |
 | `--check-freshness` | Check if graphs are up-to-date before starting (default: enabled, use `--no-check-freshness` to disable) |
-| `--mode` | Query routing mode: `code_only`, `document_only`, `both_merged`, `code_vs_doc`, `doc_vs_code` |
+| `--mode` | Query routing mode: `auto` (default), `code_only`, `document_only`, `both_merged`, `code_vs_doc`, `doc_vs_code` |
 | `--index-timeout` | Maximum seconds for indexing operations (default: 300s) |
 
 #### Unified Dual-Graph Usage
 
 Query both code and documents from a single session:
+
+`--mode auto` is the startup default. It selects `document_only` when only documents are indexed, `code_only` when only code or no content is indexed, and otherwise uses `CGR_DEFAULT_MODE_WHEN_BOTH` to choose between `both_merged` and `code_only`.
 
 ```bash
 # Index and query both code and documents
@@ -73,11 +75,13 @@ cgr start --repo-path /path/to/repo --index-docs --with-docs --mode document_onl
 | `/help` | Show available commands |
 | `/exit` | Exit the session |
 
+Chat input is multiline-aware: press `Enter` to submit, or `Ctrl+J` to insert a newline.
+
 #### Query Modes
 
 | Mode | Description |
 |------|-------------|
-| `code_only` | Query code graph only (default) |
+| `code_only` | Query code graph only |
 | `document_only` | Query document graph only |
 | `both_merged` | Query both graphs, merge results with attribution |
 | `code_vs_doc` | Validate code against documentation (docs = truth) |

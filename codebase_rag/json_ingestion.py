@@ -318,7 +318,7 @@ def validate_json_input(
 def load_json_files(
     input_path: str, exclude_patterns: list[str] | None = None
 ) -> list[tuple[Path, dict[str, Any]]]:
-    json_files, load_errors, skip_count = _load_json_files_with_errors(
+    json_files, load_errors, skip_count, _ = _load_json_files_with_errors(
         input_path, exclude_patterns
     )
     if skip_count:
@@ -397,11 +397,12 @@ def _detect_json_purpose(data: Any, file_path: Path) -> tuple[JSONFilePurpose, s
 
 def _load_json_files_with_errors(
     input_path: str, exclude_patterns: list[str] | None = None, filter_preset: str = "lenient"
-) -> tuple[list[tuple[Path, dict[str, Any]]], list[str], int]:
+) -> tuple[list[tuple[Path, dict[str, Any]]], list[str], int, dict[str, int]]:
     path = Path(input_path)
     json_files: list[tuple[Path, dict[str, Any]]] = []
     load_errors: list[str] = []
     skip_count = 0
+    skip_breakdown: dict[str, int] = {"excluded": 0, "non_entity": 0, "malformed": 0}
 
     # Common JSON files to exclude by default
     # Includes: virtual environments, package managers, IDE files, build artifacts,
@@ -503,7 +504,20 @@ def _load_json_files_with_errors(
         "*/tools/*",
         "*/tools/**/*",
         # Note: .cgr, .embedding_cache, .tmp_cache_*, .cgr-* handled by should_exclude()
+        # Known internal JSON files
+        ".pypi_cache.json",
+        "*/.pypi_cache.json",
+        "memory_profile_results.json",
+        "*/memory_profile_results.json",
+        "funding.json",
+        "*/funding.json",
     }
+
+    # Load .cgrignore patterns if available
+    from codebase_rag.config import load_cgrignore_patterns
+
+    cgrignore = load_cgrignore_patterns(path if path.is_dir() else path.parent)
+    default_exclude_patterns.update(cgrignore.exclude)
 
     # Apply filter preset
     if filter_preset == "none":
@@ -539,14 +553,15 @@ def _load_json_files_with_errors(
         if file_path.name.startswith(".cgr-") and file_path.suffix == ".json":
             return "cgr_internal"
 
-        if any(
-            part == ".embedding_cache" or part.endswith(".egg-info")
-            for part in file_path.parts
-        ):
-            return "embedding_cache_or_egg_info"
-
+        # Block internal application directories entirely
+        INTERNAL_DIRS = {".cgr", ".venv", ".git", ".github", ".pytest_cache", ".ruff_cache"}
         for part in file_path.parts[:-1]:
-            if part.startswith(".") and part != ".cgr":
+            if part in INTERNAL_DIRS:
+                return f"internal_dir:{part}"
+            if part == ".embedding_cache" or part.endswith(".egg-info"):
+                return "embedding_cache_or_egg_info"
+            # Hidden directories outside the repo root are still excluded
+            if part.startswith(".") and part not in INTERNAL_DIRS:
                 return "hidden_directory"
 
         try:
@@ -613,7 +628,9 @@ def _load_json_files_with_errors(
                 f"{count} {reason}" for reason, count in sorted(exclude_reason_counts.items())
             )
             logger.info(cs.JSON_INGEST_SKIP_REASON_SUMMARY.format(reasons=summary))
-            skip_count += sum(exclude_reason_counts.values())
+            excluded_total = sum(exclude_reason_counts.values())
+            skip_count += excluded_total
+            skip_breakdown["excluded"] += excluded_total
 
         if skipped_files_with_guidance:
             purpose_counts: dict[str, int] = {}
@@ -625,13 +642,15 @@ def _load_json_files_with_errors(
                 summary = ", ".join(f"{count} {purpose.replace('_', ' ')}"
                                    for purpose, count in sorted(purpose_counts.items()))
                 logger.info(f"JSON files skipped: {summary}")
-            skip_count += len(skipped_files_with_guidance)
+            non_entity_total = len(skipped_files_with_guidance)
+            skip_count += non_entity_total
+            skip_breakdown["non_entity"] += non_entity_total
     else:
         raise ValueError(
             f"Invalid input path: {input_path} (must be .json file or directory containing JSON files)"
         )
 
-    return json_files, load_errors, skip_count
+    return json_files, load_errors, skip_count, skip_breakdown
 
 
 def generate_embeddings_for_entities(
@@ -1650,11 +1669,14 @@ def ingest_json_data(
         if pre_loaded_data is not None:
             json_files = pre_loaded_data
         else:
-            json_files, load_errors, skip_count = _load_json_files_with_errors(
+            json_files, load_errors, skip_count, skip_breakdown = _load_json_files_with_errors(
                 input_path, exclude_patterns, filter_preset
             )
 
         result.files_skipped += skip_count
+        result.files_excluded += skip_breakdown.get("excluded", 0)
+        result.files_non_entity += skip_breakdown.get("non_entity", 0)
+        result.files_malformed += skip_breakdown.get("malformed", 0)
         result.errors.extend(load_errors)
         logger.info(f"Loaded {len(json_files)} JSON file(s) for ingestion")
 

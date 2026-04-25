@@ -87,6 +87,43 @@ class ConnectionRetryPolicy:
     )
 
 
+def configure_connection_socket(conn: mgclient.Connection, timeout: float = 30.0) -> None:
+    """Configure socket timeout and TCP keepalive on an mgclient connection.
+
+    This is extracted as a standalone helper so that other modules
+    (e.g., health_checker) can apply the same socket hygiene without
+    duplicating the logic.
+    """
+    try:
+        sock = getattr(conn, "socket", getattr(conn, "_socket", None))
+        if sock is not None:
+            sock.settimeout(timeout)
+    except (OSError, AttributeError):
+        pass
+
+    try:
+        sock = getattr(conn, "socket", getattr(conn, "_socket", None))
+        if sock is not None:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            if hasattr(socket, "TCP_KEEPIDLE"):
+                try:
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60)
+                except OSError:
+                    pass
+            if hasattr(socket, "TCP_KEEPINTVL"):
+                try:
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)
+                except OSError:
+                    pass
+            if hasattr(socket, "TCP_KEEPCNT"):
+                try:
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 6)
+                except OSError:
+                    pass
+    except (OSError, AttributeError):
+        pass
+
+
 class MemgraphIngestor:
     _TRANSIENT_ERROR_MARKERS = (
         "broken pipe",
@@ -219,7 +256,7 @@ class MemgraphIngestor:
 
     def __enter__(self) -> MemgraphIngestor:
         logger.info(ls.MG_CONNECTING.format(host=self._host, port=self._port))
-        self.conn = self._create_connection_with_timeout()  # <-- CHANGED
+        self.conn = self._create_connection_with_retry()
         self._executor = ThreadPoolExecutor(max_workers=settings.FLUSH_THREAD_POOL_SIZE)
 
         # Auto-detect Enterprise edition and dynamic algorithm support
@@ -382,7 +419,7 @@ class MemgraphIngestor:
                 self.conn.close()
             except Exception:
                 pass
-            self.conn = self._create_connection_with_timeout()
+            self.conn = self._create_connection_with_retry()
 
     @classmethod
     def _is_retryable_memgraph_error(cls, error: Exception) -> bool:
@@ -401,7 +438,7 @@ class MemgraphIngestor:
                 current_conn.close()
             except Exception:
                 pass
-        self.conn = self._create_connection_with_timeout()
+        self.conn = self._create_connection_with_retry()
 
     def _should_retry_shared_connection_error(
         self,
@@ -593,11 +630,8 @@ class MemgraphIngestor:
         Sets up TCP keepalive and socket timeout to prevent connection drops
         and indefinite blocking during long-running operations.
         """
-        timeout = self._get_connection_timeout()  # <-- CHANGED: use helper
+        timeout = self._get_connection_timeout()
 
-        # Create connection (mgclient.connect() does not accept a timeout parameter;
-        # timeout is enforced via socket.settimeout() below and threading wrapper
-        # in _create_connection_with_timeout() for callers that need it)
         if self._username is not None:
             conn = mgclient.connect(
                 host=self._host,
@@ -609,70 +643,7 @@ class MemgraphIngestor:
             conn = mgclient.connect(host=self._host, port=self._port)
         conn.autocommit = True
 
-        # Set socket timeout to prevent indefinite blocking on I/O operations
-        # (see Fix 2 for details)
-        try:
-            if hasattr(conn, "socket") or hasattr(conn, "_socket"):
-                sock = getattr(conn, "socket", getattr(conn, "_socket", None))
-                if sock:
-                    sock.settimeout(timeout)
-        except (OSError, AttributeError) as e:
-            logger.warning(
-                f"Could not set socket timeout for {self._host}:{self._port}: {e}"
-            )
-
-        # Configure TCP keepalive for long-running connections
-        try:
-            # Get the underlying socket from the connection
-            # This depends on mgclient implementation details
-            if hasattr(conn, "socket") or hasattr(conn, "_socket"):
-                sock = getattr(conn, "socket", getattr(conn, "_socket", None))
-                if sock:
-                    # Enable TCP keepalive
-                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-                    # Set keepalive parameters (platform-specific)
-                    try:
-                        # TCP_KEEPIDLE (seconds before first keepalive probe)
-                        # TCP_KEEPINTVL (seconds between probes)
-                        # TCP_KEEPCNT (number of failed probes before dropping)
-                        sock.setsockopt(
-                            socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60
-                        )  # Start keepalive after 60 seconds
-                        sock.setsockopt(
-                            socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10
-                        )  # Probe every 10 seconds
-                        sock.setsockopt(
-                            socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 6
-                        )  # Drop after 6 failed probes (60s total idle timeout)
-                    except (OSError, AttributeError):
-                        # Some platforms may not support these options
-                        # Use platform-appropriate alternatives
-                        if hasattr(socket, "TCP_KEEPIDLE"):
-                            try:
-                                sock.setsockopt(
-                                    socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60
-                                )
-                            except OSError:
-                                pass
-                        if hasattr(socket, "TCP_KEEPINTVL"):
-                            try:
-                                sock.setsockopt(
-                                    socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10
-                                )
-                            except OSError:
-                                pass
-                        if hasattr(socket, "TCP_KEEPCNT"):
-                            try:
-                                sock.setsockopt(
-                                    socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 6
-                                )
-                            except OSError:
-                                pass
-        except (OSError, AttributeError) as e:
-            # Non-fatal: connection will still work, just without keepalive optimization
-            logger.debug(
-                f"Could not configure TCP keepalive for {self._host}:{self._port}: {e}"
-            )
+        configure_connection_socket(conn, timeout=timeout)
 
         return conn
 
@@ -1219,7 +1190,7 @@ class MemgraphIngestor:
         pattern: tuple[str, str, str, str, str],
         params_list: list[RelBatchRow],
     ) -> tuple[int, int]:
-        conn = self._create_connection_with_timeout()
+        conn = self._create_connection_with_retry()
         try:
             return self._flush_rel_pattern_group(pattern, params_list, conn=conn)
         finally:
@@ -1484,7 +1455,78 @@ class MemgraphIngestor:
                     )
                 )
 
+        if failed == len(params_list) and len(params_list) > 0:
+            self._log_rel_flush_failure_context(
+                pattern, params_list, RuntimeError("All rows returned zero created count")
+            )
+
         return len(params_list), batch_successful
+
+    def _log_rel_flush_failure_context(
+        self,
+        pattern: tuple[str, str, str, str, str],
+        params_list: list[RelBatchRow],
+        error: Exception,
+    ) -> None:
+        from_label, from_key, rel_type, to_label, to_key = pattern
+        sample_size = settings.MG_REL_FLUSH_FAILURE_SAMPLE_SIZE
+        logger.error(
+            ls.MG_REL_FLUSH_EXHAUSTED.format(
+                rel_type=rel_type,
+                from_label=from_label,
+                from_key=from_key,
+                to_label=to_label,
+                to_key=to_key,
+                rows=len(params_list),
+                error=error,
+            )
+        )
+        for i, sample in enumerate(params_list[:sample_size]):
+            logger.error(
+                ls.MG_REL_FLUSH_EXHAUSTED_SAMPLE.format(
+                    index=i + 1,
+                    from_val=sample[KEY_FROM_VAL],
+                    to_val=sample[KEY_TO_VAL],
+                )
+            )
+
+    def _verify_flush_nodes_exist(
+        self,
+        from_label: str,
+        to_label: str,
+        params_list: list[RelBatchRow],
+    ) -> dict[str, bool]:
+        result: dict[str, bool] = {}
+        from_vals = {p[KEY_FROM_VAL] for p in params_list[:10]}
+        to_vals = {p[KEY_TO_VAL] for p in params_list[:10]}
+        try:
+            for val in from_vals:
+                rows = self.fetch_all(
+                    f"MATCH (n:{from_label} {{{KEY_QUALIFIED_NAME}: $val}}) RETURN count(n) AS c",
+                    {"val": val},
+                )
+                result[f"from:{val}"] = (rows[0].get("c", 0) if rows else 0) > 0
+            for val in to_vals:
+                rows = self.fetch_all(
+                    f"MATCH (n:{to_label} {{{KEY_QUALIFIED_NAME}: $val}}) RETURN count(n) AS c",
+                    {"val": val},
+                )
+                result[f"to:{val}"] = (rows[0].get("c", 0) if rows else 0) > 0
+        except Exception as e:
+            logger.debug(f"Node verification query failed: {e}")
+        return result
+
+    def verify_hierarchy_integrity(self) -> dict[str, int]:
+        results: dict[str, int] = {}
+        for rel_type, (from_label, to_label) in {
+            "CONTAINS_FILE": ("Folder", "File"),
+            "CONTAINS_MODULE": ("Folder", "Module"),
+        }.items():
+            rows = self.fetch_all(
+                f"MATCH (f:{from_label})-[r:{rel_type}]->(t:{to_label}) RETURN count(r) AS rel_count"
+            )
+            results[rel_type] = rows[0].get("rel_count", 0) if rows else 0
+        return results
 
     def _flush_rel_pattern_group(
         self,
@@ -1494,13 +1536,29 @@ class MemgraphIngestor:
     ) -> tuple[int, int]:
         """Flush relationship group with automatic retry for transaction conflicts."""
         if not settings.MEMGRAPH_CONFLICT_RETRY_ENABLED:
-            return self._flush_rel_pattern_group_impl(pattern, params_list, conn)
+            try:
+                return self._flush_rel_pattern_group_impl(pattern, params_list, conn)
+            except Exception as e:
+                self._log_rel_flush_failure_context(pattern, params_list, e)
+                if settings.MG_REL_FLUSH_VERIFY_NODES:
+                    from_label, _, _, to_label, _ = pattern
+                    verification = self._verify_flush_nodes_exist(from_label, to_label, params_list)
+                    logger.debug(f"Flush node verification: {verification}")
+                raise
 
-        return self._flush_with_retry(
-            lambda: self._flush_rel_pattern_group_impl(pattern, params_list, conn),
-            pattern,
-            max_retries=settings.MEMGRAPH_CONFLICT_RETRY_MAX_ATTEMPTS,
-        )
+        try:
+            return self._flush_with_retry(
+                lambda: self._flush_rel_pattern_group_impl(pattern, params_list, conn),
+                pattern,
+                max_retries=settings.MEMGRAPH_CONFLICT_RETRY_MAX_ATTEMPTS,
+            )
+        except Exception as e:
+            self._log_rel_flush_failure_context(pattern, params_list, e)
+            if settings.MG_REL_FLUSH_VERIFY_NODES:
+                from_label, _, _, to_label, _ = pattern
+                verification = self._verify_flush_nodes_exist(from_label, to_label, params_list)
+                logger.debug(f"Flush node verification: {verification}")
+            raise
 
     def flush_relationships_with_stats(self) -> dict[str, int]:
         if not self._rel_count:

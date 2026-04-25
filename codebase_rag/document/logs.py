@@ -7,6 +7,8 @@ DOC_CONCEPT_STORE_BATCH = "Storing {count} concept nodes via batch MERGE"
 DOC_MENTIONS_STORE_BATCH = "Creating {count} MENTIONS relationships"
 DOC_REL_STORE_BATCH = "Creating {count} concept-to-concept relationships"
 DOC_CONCEPT_CIRCUIT_BREAKER_OPEN = "Circuit breaker OPEN for concept extraction, skipping {chunk_qn}"
+DOC_CONCEPT_PROVIDER_UNHEALTHY = "Provider unhealthy after timeout, skipping retry for {chunk_qn}"
+DOC_CONCEPT_BREAKER_SKIP_DOC = "Concept extraction circuit breaker is OPEN ({remaining:.0f}s remaining), skipping concept extraction for document {doc}"
 DOC_CONCEPT_RETRY_ATTEMPT = "Concept extraction retry {attempt}/{max_retries} for {chunk_qn} after {delay:.1f}s ({error_type}, timeout={timeout:.1f}s)"
 DOC_CONCEPT_RETRY_EXHAUSTED = "Concept extraction exhausted retries for {chunk_qn}, queued to DLQ"
 
@@ -37,3 +39,13 @@ DOC_INCREMENTAL_FLUSH_FAILED = "Incremental flush failed at doc {index}: {error}
 DOC_FINAL_FLUSH_PARTIAL = "Final flush had partial failures: {stats}"
 DOC_FINAL_FLUSH_OK = "Final flush complete: {stats}"
 DOC_FINAL_FLUSH_FAILED = "Final flush failed: {error}"
+
+# Missing document handling
+DOC_FILE_MISSING_SKIP = "Skipping missing document {path}: {error}"
+DOC_EXTRACTION_FAILED = "Failed to process {path}: {error}"
+DOC_DLQ_ENQUEUE_FAILED = "Could not enqueue error for {path}: {error}"
+DOC_PREFLIGHT_MISSING = "Document disappeared between scan and extraction: {path}"
+DOC_PRE_VERIFICATION_FILTERED = "Filtered {count} documents that no longer exist (likely temporary/generated files)"
+DOC_DLQ_CLEANUP = "Cleaned up {count} stale error files from {path}"
+DOC_DLQ_SIZE_WARNING = "DLQ has accumulated {count} errors — consider investigating root cause"
+DOC_CACHE_PRUNE = "Pruned stale version cache entry: {path}"

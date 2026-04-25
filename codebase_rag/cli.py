@@ -504,8 +504,19 @@ def _handle_indexing(
             )
         )
 
-        # Resolve target JSON path (user-provided or repo root)
-        target_json_path = json_path or str(repo_path)
+        # Resolve target JSON path (user-provided or smart default)
+        if json_path is not None:
+            target_json_path = json_path
+        else:
+            data_dir = repo_path / "data"
+            json_dir = repo_path / "json"
+            if data_dir.exists():
+                target_json_path = str(data_dir)
+            elif json_dir.exists():
+                target_json_path = str(json_dir)
+            else:
+                target_json_path = str(repo_path)
+                logger.info(cs.JSON_SCAN_ROOT_FALLBACK.format(path=repo_path))
 
         try:
             ingest_result = ingest_json_data(
@@ -534,8 +545,16 @@ def _handle_indexing(
                 str(getattr(ingest_result, "files_processed", 0)),
             )
             json_table.add_row(
-                "Invalid JSON files skipped",
-                str(getattr(ingest_result, "files_skipped", 0)),
+                "Excluded by ignore rules",
+                str(getattr(ingest_result, "files_excluded", 0)),
+            )
+            json_table.add_row(
+                "Non-entity JSON skipped",
+                str(getattr(ingest_result, "files_non_entity", 0)),
+            )
+            json_table.add_row(
+                "Malformed JSON skipped",
+                str(getattr(ingest_result, "files_malformed", 0)),
             )
             json_table.add_row(
                 "Entities ingested", str(ingest_result.entities_ingested)
@@ -807,7 +826,7 @@ def start(
     json_path: str | None = typer.Option(
         None,
         "--json-path",
-        help="Path to specific JSON file or directory to ingest (defaults to repo root scanning for *.json if not provided)",
+        help="Path to specific JSON file or directory to ingest (defaults to ./data, ./json, or the repo root)",
     ),
     json_skip_invalid: bool = typer.Option(
         True,

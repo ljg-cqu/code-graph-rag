@@ -1082,3 +1082,62 @@ class TestCypherCreateQueries:
         )
         assert "MERGE" in query
         assert "CREATE" not in query.replace("MERGE", "")
+
+
+class TestRelationshipFlushObservability:
+    """Tests for relationship flush failure context and hierarchy integrity."""
+
+    def test_failure_context_logged_on_exhaustion(self) -> None:
+        from unittest.mock import patch
+
+        ingestor = MemgraphIngestor(
+            host="localhost",
+            port=7687,
+            use_merge=True,
+        )
+        ingestor.conn = None  # Force connection failure
+
+        pattern = ("Folder", "qualified_name", "CONTAINS_FILE", "File", "qualified_name")
+        params = [
+            {"from_val": "folder1", "to_val": "file1", "props": {}},
+            {"from_val": "folder1", "to_val": "file2", "props": {}},
+        ]
+
+        with patch("loguru.logger.error") as mock_error:
+            ingestor._log_rel_flush_failure_context(pattern, params, RuntimeError("test"))
+            assert mock_error.call_count >= 3  # Header + 2 samples
+
+    def test_hierarchy_integrity_returns_counts(self) -> None:
+        from unittest.mock import patch
+
+        ingestor = MemgraphIngestor(
+            host="localhost",
+            port=7687,
+            use_merge=True,
+        )
+
+        with patch(
+            "codebase_rag.services.graph_service.MemgraphIngestor.fetch_all",
+            side_effect=[
+                [{"rel_count": 5}],
+                [{"rel_count": 3}],
+            ],
+        ):
+            results = ingestor.verify_hierarchy_integrity()
+
+        assert results["CONTAINS_FILE"] == 5
+        assert results["CONTAINS_MODULE"] == 3
+
+    def test_no_regression_on_successful_flush(self) -> None:
+        ingestor = MemgraphIngestor(
+            host="localhost",
+            port=7687,
+            use_merge=True,
+        )
+        ingestor.conn = None
+
+        pattern = ("Folder", "qualified_name", "CONTAINS_FILE", "File", "qualified_name")
+        params = [{"from_val": "f1", "to_val": "f2", "props": {}}]
+
+        # Should not raise
+        ingestor._log_rel_flush_failure_context(pattern, params, RuntimeError("test"))

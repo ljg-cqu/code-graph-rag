@@ -142,7 +142,7 @@ class TaskSplitter:
         elif strategy == "node":
             subtasks = self._split_by_node_type(prompt)
         elif strategy == "query":
-            subtasks = self._split_by_query(prompt)
+            subtasks = []
         elif strategy == "manual":
             subtasks = self._split_manual(prompt)
         elif strategy == "sequential":

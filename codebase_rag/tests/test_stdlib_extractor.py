@@ -87,7 +87,7 @@ class TestCachePersistence:
             se._cache_stdlib_result("python", "pathlib.Path", "pathlib")
             se._cache_stdlib_result("javascript", "fs.readFile", "fs")
 
-            se.save_persistent_cache()
+            se.flush_stdlib_cache()
 
             assert (cache_dir / "stdlib_cache.json").exists()
 
@@ -114,7 +114,7 @@ class TestCachePersistence:
             assert len(se._CACHE_TIMESTAMPS) == 0
             assert not cache_file.exists()
 
-    def test_flush_stdlib_cache_calls_save(self, tmp_path: Path) -> None:
+    def test_flush_stdlib_cache_persists(self, tmp_path: Path) -> None:
         with patch.object(Path, "home", return_value=tmp_path):
             se._cache_stdlib_result("python", "test.func", "test")
 
@@ -123,12 +123,18 @@ class TestCachePersistence:
             cache_file = tmp_path / ".cache" / "codebase_rag" / "stdlib_cache.json"
             assert cache_file.exists()
 
-    def test_save_persistent_cache_atomic(self, tmp_path: Path) -> None:
+    def test_save_persistent_cache_schedules(self, tmp_path: Path) -> None:
+        # save_persistent_cache now defers I/O to atexit; it should not raise
+        se._cache_stdlib_result("python", "atomic.test", "atomic")
+
+        se.save_persistent_cache()  # schedules, doesn't fail
+
+    def test_flush_stdlib_cache_atomic(self, tmp_path: Path) -> None:
         with patch.object(Path, "home", return_value=tmp_path):
             se._cache_stdlib_result("python", "atomic.test", "atomic")
             cache_file = tmp_path / ".cache" / "codebase_rag" / "stdlib_cache.json"
 
-            se.save_persistent_cache()
+            se.flush_stdlib_cache()
 
             assert cache_file.exists()
             assert not any(
@@ -417,12 +423,12 @@ class TestCachePersistenceErrorHandling:
 
             assert len(se._STDLIB_CACHE) == 0
 
-    def test_save_persistent_cache_handles_os_error(self, tmp_path: Path) -> None:
+    def test_flush_stdlib_cache_handles_os_error(self, tmp_path: Path) -> None:
         with patch.object(Path, "home", return_value=tmp_path):
             with patch.object(Path, "mkdir", side_effect=OSError("Permission denied")):
                 se._cache_stdlib_result("python", "test.func", "test")
 
-                se.save_persistent_cache()
+                se.flush_stdlib_cache()
 
     def test_clear_stdlib_cache_handles_unlink_error(self, tmp_path: Path) -> None:
         with patch.object(Path, "home", return_value=tmp_path):

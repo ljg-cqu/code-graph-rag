@@ -264,6 +264,11 @@ class VersionCache:
                 return True
             return False
 
+    def keys(self) -> list[str]:
+        """Return a snapshot of all cached paths."""
+        with self._lock:
+            return list(self._cache.keys())
+
     def clear(self) -> None:
         """Clear all versions."""
         with self._lock:

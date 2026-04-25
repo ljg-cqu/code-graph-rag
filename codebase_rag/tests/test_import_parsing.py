@@ -3,6 +3,8 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+
+pytest.importorskip("tree_sitter_python")
 import tree_sitter_python as tsp
 from tree_sitter import Language, Parser
 

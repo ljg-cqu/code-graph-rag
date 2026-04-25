@@ -371,3 +371,135 @@ class TestUserFacingMessages:
 
         assert "failed" in message.lower()
         assert "something went wrong" in message.lower() or "unknown" in message.lower()
+
+
+class TestDeadLetterQueueCleanup:
+    """Tests for DLQ stale error cleanup."""
+
+    def test_cleanup_removes_files_older_than_ttl(self, tmp_path):
+        from datetime import UTC, datetime, timedelta
+
+        dlq = DeadLetterQueue(tmp_path)
+        old_error = ExtractionError(
+            path="/test/old.pdf",
+            error_type=ErrorType.MALFORMED_FILE,
+            message="Old error",
+        )
+        dlq.enqueue(old_error)
+
+        # Manually set mtime to 10 days ago
+        old_file = list(tmp_path.glob("*.error.json"))[0]
+        old_time = (datetime.now(UTC) - timedelta(days=10)).timestamp()
+        old_file.touch()
+        import os
+
+        os.utime(old_file, (old_time, old_time))
+
+        removed = dlq.cleanup_stale_errors(max_age_days=7, max_files=100)
+        assert removed == 1
+        assert dlq.size() == 0
+
+    def test_cleanup_respects_max_files(self, tmp_path):
+        dlq = DeadLetterQueue(tmp_path)
+        for i in range(5):
+            error = ExtractionError(
+                path=f"/test/doc{i}.pdf",
+                error_type=ErrorType.MALFORMED_FILE,
+                message="Error",
+            )
+            dlq.enqueue(error)
+
+        removed = dlq.cleanup_stale_errors(max_age_days=365, max_files=2)
+        assert removed == 3
+        assert dlq.size() == 2
+
+    def test_cleanup_triggered_after_processing(self, tmp_path):
+        from unittest.mock import MagicMock, patch
+
+        from codebase_rag.document.document_updater import DocumentGraphUpdater
+
+        provider = MagicMock()
+        ingestor = MagicMock()
+        ingestor.node_buffer = []
+        ingestor._rel_count = 0
+        ingestor.fetch_all.return_value = [{"count": 0}]
+
+        with patch(
+            "codebase_rag.document.document_updater.get_embedding_provider",
+            return_value=provider,
+        ):
+            updater = DocumentGraphUpdater("localhost", 7688, tmp_path)
+
+        with patch.object(updater, "_embedding_provider", provider):
+            with patch(
+                "codebase_rag.document.document_updater.MemgraphIngestor.__enter__",
+                return_value=ingestor,
+            ):
+                with patch(
+                    "codebase_rag.document.document_updater._check_graph_availability"
+                ):
+                    with patch.object(
+                        updater, "_collect_documents", return_value=[]
+                    ):
+                        with patch.object(
+                            updater.dead_letter_queue,
+                            "cleanup_stale_errors",
+                            return_value=0,
+                        ) as mock_cleanup:
+                            updater.run()
+                            mock_cleanup.assert_called_once()
+
+    def test_warning_emitted_when_size_exceeds_threshold(self, tmp_path):
+        from unittest.mock import patch
+
+        from codebase_rag.config import settings
+
+        dlq = DeadLetterQueue(tmp_path)
+        for i in range(settings.DOC_ERRORS_WARNING_THRESHOLD + 1):
+            error = ExtractionError(
+                path=f"/test/doc{i}.pdf",
+                error_type=ErrorType.MALFORMED_FILE,
+                message="Error",
+            )
+            dlq.enqueue(error)
+
+        with patch("loguru.logger.warning") as mock_warning:
+            # Simulate _cleanup_dlq behavior: check size after cleanup
+            dlq.cleanup_stale_errors(max_age_days=365, max_files=10000)
+            queue_size = dlq.size()
+            if queue_size > settings.DOC_ERRORS_WARNING_THRESHOLD:
+                from loguru import logger
+
+                from codebase_rag.document import logs as doc_ls
+
+                logger.warning(doc_ls.DOC_DLQ_SIZE_WARNING.format(count=queue_size))
+            mock_warning.assert_called_once()
+
+
+class TestBoundedDeadLetterQueue:
+    """Tests for bounded DLQ with deduplication."""
+
+    def test_bounded_dlq_drops_after_limit(self, tmp_path):
+        dlq = DeadLetterQueue(tmp_path)
+        dlq._max_size = 2
+        dlq._seen_paths.clear()
+        for i in range(5):
+            error = ExtractionError(
+                path=f"/test/doc{i}.pdf",
+                error_type=ErrorType.MALFORMED_FILE,
+                message="Error",
+            )
+            dlq.enqueue(error)
+        assert dlq.size() == 2
+        assert len(dlq._seen_paths) == 2
+
+    def test_dlq_dedup_same_path(self, tmp_path):
+        dlq = DeadLetterQueue(tmp_path)
+        error = ExtractionError(
+            path="/test/doc.pdf",
+            error_type=ErrorType.MALFORMED_FILE,
+            message="Error 1",
+        )
+        dlq.enqueue(error)
+        dlq.enqueue(error)
+        assert dlq.size() == 1

@@ -14,7 +14,7 @@ from loguru import logger
 import mgclient
 from ..exceptions import QueryExecutionError
 from ..services.failure_classifier import classify_memgraph_failure
-from ..services.graph_service import MemgraphIngestor
+from ..services.graph_service import MemgraphIngestor, configure_connection_socket
 
 from .. import constants as cs
 from ..config import settings
@@ -22,10 +22,11 @@ from ..schemas import HealthCheckResult
 
 
 class HealthChecker:
-    __slots__ = ("results",)
+    __slots__ = ("results", "graph_service")
 
-    def __init__(self):
+    def __init__(self, graph_service: "MemgraphIngestor | None" = None):
         self.results: list[HealthCheckResult] = []
+        self.graph_service = graph_service
 
     @staticmethod
     def _parse_label_expression(label_expression: str) -> list[str]:
@@ -40,7 +41,7 @@ class HealthChecker:
             return None
         try:
             return row[index]
-        except SystemError:
+        except (SystemError, ValueError, TypeError):
             return None
         except Exception:
             if hasattr(row, '__iter__'):
@@ -157,6 +158,7 @@ class HealthChecker:
                 host=settings.MEMGRAPH_HOST,
                 port=settings.MEMGRAPH_PORT,
             )
+            configure_connection_socket(conn)
 
             cursor = conn.cursor()
             cursor.execute(cs.HEALTH_CHECK_MEMGRAPH_QUERY)
@@ -352,6 +354,7 @@ class HealthChecker:
                 host=settings.MEMGRAPH_HOST,
                 port=settings.MEMGRAPH_PORT,
             )
+            configure_connection_socket(conn)
             cursor = conn.cursor()
             cursor.execute(query)
             row = cursor.fetchone()
@@ -397,6 +400,7 @@ class HealthChecker:
                 host=settings.MEMGRAPH_HOST,
                 port=settings.MEMGRAPH_PORT,
             )
+            configure_connection_socket(conn)
             cursor = conn.cursor()
             cursor.execute(cs.QUERY_GEN_REQUIRED_PROPS)
             row = cursor.fetchone()
@@ -442,6 +446,7 @@ class HealthChecker:
                 host=settings.MEMGRAPH_HOST,
                 port=settings.MEMGRAPH_PORT,
             )
+            configure_connection_socket(conn)
             cursor = conn.cursor()
             cursor.execute(
                 cs.QUERY_GEN_EMBEDDING_MODEL_MISMATCH,
@@ -494,6 +499,7 @@ class HealthChecker:
                 host=settings.MEMGRAPH_HOST,
                 port=settings.MEMGRAPH_PORT,
             )
+            configure_connection_socket(conn)
             cursor = conn.cursor()
             cursor.execute("MATCH (m:Module) RETURN count(m) AS module_count")
             module_row = cursor.fetchone()
@@ -557,6 +563,7 @@ class HealthChecker:
                 host=settings.DOC_MEMGRAPH_HOST,
                 port=settings.DOC_MEMGRAPH_PORT,
             )
+            configure_connection_socket(conn)
             cursor = conn.cursor()
             cursor.execute(
                 """
@@ -669,6 +676,7 @@ class HealthChecker:
                 host=settings.MEMGRAPH_HOST,
                 port=settings.MEMGRAPH_PORT,
             )
+            configure_connection_socket(conn)
             cursor = conn.cursor()
 
             cursor.execute("""
@@ -757,6 +765,7 @@ class HealthChecker:
                 host=settings.MEMGRAPH_HOST,
                 port=settings.MEMGRAPH_PORT,
             )
+            configure_connection_socket(conn)
             cursor = conn.cursor()
 
             # Get existing vector indexes
@@ -876,6 +885,7 @@ class HealthChecker:
                 host=settings.MEMGRAPH_HOST,
                 port=settings.MEMGRAPH_PORT,
             )
+            configure_connection_socket(conn)
             cursor = conn.cursor()
             actual_node_count = self._fetch_single_int(
                 cursor, f"MATCH (n:{node_label}) RETURN count(n) AS count"
@@ -935,6 +945,7 @@ class HealthChecker:
                 host=settings.MEMGRAPH_HOST,
                 port=settings.MEMGRAPH_PORT,
             )
+            configure_connection_socket(conn)
             cursor = conn.cursor()
             actual_edge_count = self._fetch_single_int(
                 cursor, "MATCH ()-->() RETURN count(*) AS count"
@@ -995,6 +1006,7 @@ class HealthChecker:
                 host=settings.MEMGRAPH_HOST,
                 port=settings.MEMGRAPH_PORT,
             )
+            configure_connection_socket(conn)
             cursor = conn.cursor()
             missing_embeddings_count = self._fetch_single_int(
                 cursor,
@@ -1063,6 +1075,7 @@ class HealthChecker:
                 host=settings.MEMGRAPH_HOST,
                 port=settings.MEMGRAPH_PORT,
             )
+            configure_connection_socket(conn)
             cursor = conn.cursor()
             duplicate_count = self._fetch_single_int(
                 cursor,
@@ -1171,6 +1184,36 @@ class HealthChecker:
             return check_fn.func.__name__
         return getattr(check_fn, "__name__", "unknown_check")
 
+    def _execute_recovery_action(self, action: str, context: str) -> None:
+        """Execute a recovery action recommended by the failure classifier.
+
+        Health checks use isolated connections, so connection-level recovery
+        actions (recreate_connection, reconnect) target the shared ingestor
+        connection as a best-effort system-level recovery signal. Per-check
+        connections are always fresh on each retry.
+        """
+        if not self.graph_service:
+            return
+        if action == "recreate_connection":
+            logger.info(
+                f"Health check '{context}': recreating connection per failure classifier guidance"
+            )
+            try:
+                self.graph_service._reset_shared_connection()
+            except Exception as reconnect_err:
+                logger.warning(
+                    f"Health check '{context}': connection recreation failed: {reconnect_err}"
+                )
+        elif action == "reconnect":
+            try:
+                self.graph_service._ensure_connection()
+            except Exception as reconnect_err:
+                logger.warning(
+                    f"Health check '{context}': reconnection failed: {reconnect_err}"
+                )
+        # "retry_with_backoff", "increase_timeout", "cleanup" are handled
+        # implicitly by the existing delay/retry logic — no explicit action needed
+
     def _run_check_with_retry(
         self,
         check_fn: Callable[[], list[HealthCheckResult]],
@@ -1182,9 +1225,16 @@ class HealthChecker:
         for attempt in range(1, max_attempts + 1):
             try:
                 return check_fn()
-            except (mgclient.Error, ConnectionError, OSError) as e:
+            except (
+                mgclient.Error,
+                ConnectionError,
+                OSError,
+                SystemError,
+                QueryExecutionError,
+            ) as e:
+                cause = getattr(e, "__cause__", None) or e
+                classification = classify_memgraph_failure(cause)
                 if attempt >= max_attempts:
-                    classification = classify_memgraph_failure(e)
                     logger.warning(
                         cs.HEALTH_CHECK_RETRY_EXHAUSTED.format(
                             name=check_name,
@@ -1199,7 +1249,16 @@ class HealthChecker:
                             error=str(e),
                         )
                     ]
+
+                # Execute recovery action before retrying
+                if classification.recovery_action:
+                    self._execute_recovery_action(
+                        classification.recovery_action, check_name
+                    )
+
                 delay = min(base_delay * (2 ** (attempt - 1)), max_delay)
+                if isinstance(cause, SystemError):
+                    delay = max(delay, 0.5)
                 logger.debug(
                     cs.HEALTH_CHECK_RETRY_ATTEMPT.format(
                         name=check_name,
@@ -1254,6 +1313,7 @@ class HealthChecker:
                 host=settings.MEMGRAPH_HOST,
                 port=settings.MEMGRAPH_PORT,
             )
+            configure_connection_socket(conn)
             cursor = conn.cursor()
             cursor.execute(
                 cs.QUERY_GEN_MISSING_EMBEDDINGS,
@@ -1310,6 +1370,7 @@ class HealthChecker:
                 host=settings.MEMGRAPH_HOST,
                 port=settings.MEMGRAPH_PORT,
             )
+            configure_connection_socket(conn)
             cursor = conn.cursor()
             cursor.execute(
                 cs.QUERY_GEN_MISSING_EMBEDDINGS_COUNT,
@@ -1398,6 +1459,7 @@ def get_runtime_status() -> RuntimeHealthStatus:
             host=settings.MEMGRAPH_HOST,
             port=settings.MEMGRAPH_PORT,
         )
+        configure_connection_socket(conn)
         cursor = conn.cursor()
         cursor.execute("MATCH (n) RETURN count(n) LIMIT 1")
         cursor.fetchall()
@@ -1425,6 +1487,7 @@ def get_runtime_status() -> RuntimeHealthStatus:
             host=settings.MEMGRAPH_HOST,
             port=settings.MEMGRAPH_PORT,
         )
+        configure_connection_socket(conn)
         cursor = conn.cursor()
         cursor.execute(
             "CALL pagerank.get() YIELD node, rank "

@@ -7,11 +7,7 @@ to skip venv, node_modules, and non-CGR JSON files.
 from __future__ import annotations
 
 import json
-import tempfile
 from pathlib import Path
-from unittest.mock import patch
-
-import pytest
 
 from codebase_rag.json_ingestion import _load_json_files_with_errors
 
@@ -27,7 +23,7 @@ class TestJsonFileFiltering:
         venv_file = venv_dir / "test.json"
         venv_file.write_text('{"entities": []}')
 
-        json_files, _, skip_count = _load_json_files_with_errors(str(tmp_path))
+        json_files, _, skip_count, _ = _load_json_files_with_errors(str(tmp_path))
         assert len(json_files) == 0
 
     def test_filters_site_packages_files(self, tmp_path: Path):
@@ -37,7 +33,7 @@ class TestJsonFileFiltering:
         pkg_file = site_pkg_dir / "test.json"
         pkg_file.write_text('{"entities": []}')
 
-        json_files, _, _ = _load_json_files_with_errors(str(tmp_path))
+        json_files, _, _, _ = _load_json_files_with_errors(str(tmp_path))
         assert len(json_files) == 0
 
     def test_filters_node_modules(self, tmp_path: Path):
@@ -47,7 +43,7 @@ class TestJsonFileFiltering:
         nm_file = nm_dir / "package.json"
         nm_file.write_text('{"name": "lodash"}')
 
-        json_files, _, _ = _load_json_files_with_errors(str(tmp_path))
+        json_files, _, _, _ = _load_json_files_with_errors(str(tmp_path))
         assert len(json_files) == 0
 
     def test_filters_aws_paginators(self, tmp_path: Path):
@@ -55,7 +51,7 @@ class TestJsonFileFiltering:
         aws_file = tmp_path / "paginators-1.json"
         aws_file.write_text('{"pagination": {}}')
 
-        json_files, _, _ = _load_json_files_with_errors(str(tmp_path))
+        json_files, _, _, _ = _load_json_files_with_errors(str(tmp_path))
         assert len([f for f, _ in json_files if "paginators" in str(f)]) == 0
 
     def test_filters_aws_examples(self, tmp_path: Path):
@@ -63,7 +59,7 @@ class TestJsonFileFiltering:
         aws_file = tmp_path / "examples-1.json"
         aws_file.write_text('{"examples": {}}')
 
-        json_files, _, _ = _load_json_files_with_errors(str(tmp_path))
+        json_files, _, _, _ = _load_json_files_with_errors(str(tmp_path))
         assert len([f for f, _ in json_files if "examples" in str(f)]) == 0
 
     def test_filters_aws_service_files(self, tmp_path: Path):
@@ -71,7 +67,7 @@ class TestJsonFileFiltering:
         aws_file = tmp_path / "service-2.json"
         aws_file.write_text('{"service": {}}')
 
-        json_files, _, _ = _load_json_files_with_errors(str(tmp_path))
+        json_files, _, _, _ = _load_json_files_with_errors(str(tmp_path))
         assert len([f for f, _ in json_files if "service" in str(f)]) == 0
 
     def test_allows_valid_cgr_files(self, tmp_path: Path):
@@ -79,19 +75,9 @@ class TestJsonFileFiltering:
         cgr_file = tmp_path / "entities.json"
         cgr_file.write_text('{"entities": [{"id": "1", "name": "test"}]}')
 
-        json_files, _, _ = _load_json_files_with_errors(str(tmp_path))
+        json_files, _, _, _ = _load_json_files_with_errors(str(tmp_path))
         assert len(json_files) == 1
         assert json_files[0][0].name == "entities.json"
-
-    def test_allows_cgr_in_dot_cgr_dir(self, tmp_path: Path):
-        """Test that .cgr directory files are allowed."""
-        cgr_dir = tmp_path / ".cgr"
-        cgr_dir.mkdir()
-        cgr_file = cgr_dir / "output.json"
-        cgr_file.write_text('{"entities": []}')
-
-        json_files, _, _ = _load_json_files_with_errors(str(tmp_path))
-        assert len(json_files) == 1
 
     def test_filters_hidden_directories(self, tmp_path: Path):
         """Test that hidden directories (except .cgr) are filtered."""
@@ -100,7 +86,7 @@ class TestJsonFileFiltering:
         hidden_file = hidden_dir / "test.json"
         hidden_file.write_text('{"entities": []}')
 
-        json_files, _, _ = _load_json_files_with_errors(str(tmp_path))
+        json_files, _, _, _ = _load_json_files_with_errors(str(tmp_path))
         assert len(json_files) == 0
 
     def test_allows_regular_directories(self, tmp_path: Path):
@@ -110,7 +96,7 @@ class TestJsonFileFiltering:
         regular_file = regular_dir / "entities.json"
         regular_file.write_text('{"entities": [{"id": "1", "name": "test"}]}')
 
-        json_files, _, _ = _load_json_files_with_errors(str(tmp_path))
+        json_files, _, _, _ = _load_json_files_with_errors(str(tmp_path))
         assert len(json_files) == 1
 
     def test_filters_tmp_cache_files(self, tmp_path: Path):
@@ -118,7 +104,7 @@ class TestJsonFileFiltering:
         cache_file = tmp_path / ".tmp_cache_123.json"
         cache_file.write_text('{"entities": []}')
 
-        json_files, _, _ = _load_json_files_with_errors(str(tmp_path))
+        json_files, _, _, _ = _load_json_files_with_errors(str(tmp_path))
         assert len(json_files) == 0
 
     def test_filters_cgr_cache_files(self, tmp_path: Path):
@@ -126,7 +112,7 @@ class TestJsonFileFiltering:
         cache_file = tmp_path / ".cgr-hash-cache.json"
         cache_file.write_text('{"cache": {}}')
 
-        json_files, _, _ = _load_json_files_with_errors(str(tmp_path))
+        json_files, _, _, _ = _load_json_files_with_errors(str(tmp_path))
         assert len(json_files) == 0
 
     def test_filters_embedding_cache_dir(self, tmp_path: Path):
@@ -136,7 +122,7 @@ class TestJsonFileFiltering:
         cache_file = cache_dir / "data.json"
         cache_file.write_text('{"vectors": []}')
 
-        json_files, _, _ = _load_json_files_with_errors(str(tmp_path))
+        json_files, _, _, _ = _load_json_files_with_errors(str(tmp_path))
         assert len(json_files) == 0
 
     def test_skip_count_includes_excluded_files(self, tmp_path: Path):
@@ -149,7 +135,7 @@ class TestJsonFileFiltering:
         cgr_file = tmp_path / "entities.json"
         cgr_file.write_text('{"entities": [{"id": "1", "name": "test"}]}')
 
-        json_files, _, skip_count = _load_json_files_with_errors(str(tmp_path))
+        json_files, _, skip_count, _ = _load_json_files_with_errors(str(tmp_path))
         assert len(json_files) == 1
         assert skip_count == 1
 
@@ -160,9 +146,8 @@ class TestJsonFileFiltering:
         test_file = test_dir / "test.json"
         test_file.write_text('{"entities": []}')
 
-        json_files, _, _ = _load_json_files_with_errors(
-            str(tmp_path),
-            exclude_patterns=["test_data/*", "test_data/**/*"]
+        json_files, _, _, _ = _load_json_files_with_errors(
+            str(tmp_path), exclude_patterns=["test_data/*", "test_data/**/*"]
         )
         assert len(json_files) == 0
 
@@ -180,9 +165,8 @@ class TestJsonFileFiltering:
         custom_file = custom_dir / "test.json"
         custom_file.write_text('{"entities": []}')
 
-        json_files, _, _ = _load_json_files_with_errors(
-            str(tmp_path),
-            exclude_patterns=["custom_skip/*", "custom_skip/**/*"]
+        json_files, _, _, _ = _load_json_files_with_errors(
+            str(tmp_path), exclude_patterns=["custom_skip/*", "custom_skip/**/*"]
         )
         assert len(json_files) == 0
 
@@ -190,16 +174,20 @@ class TestJsonFileFiltering:
         """Test that existing functionality still works."""
         # Create valid CGR file
         valid_file = tmp_path / "valid.json"
-        valid_file.write_text(json.dumps({
-            "metadata": {"dataset_id": "test"},
-            "entities": [{"id": "1", "name": "Entity1"}]
-        }))
+        valid_file.write_text(
+            json.dumps(
+                {
+                    "metadata": {"dataset_id": "test"},
+                    "entities": [{"id": "1", "name": "Entity1"}],
+                }
+            )
+        )
 
         # Create invalid JSON file (schema doesn't match)
         invalid_file = tmp_path / "invalid.txt"  # Not a JSON file
         invalid_file.write_text("not json")
 
-        json_files, errors, skip_count = _load_json_files_with_errors(str(tmp_path))
+        json_files, errors, skip_count, _ = _load_json_files_with_errors(str(tmp_path))
 
         # Should find the valid file
         assert len(json_files) == 1
@@ -221,7 +209,7 @@ class TestFilterPresets:
         valid_file = tmp_path / "valid.json"
         valid_file.write_text('{"entities": [{"id": "1", "name": "test"}]}')
 
-        json_files, _, _ = _load_json_files_with_errors(
+        json_files, _, _, _ = _load_json_files_with_errors(
             str(tmp_path), filter_preset="lenient"
         )
         assert len(json_files) == 1
@@ -237,7 +225,7 @@ class TestFilterPresets:
         cgr_file = tmp_path / "data.cgr.json"
         cgr_file.write_text('{"entities": [{"id": "2", "name": "cgr_test"}]}')
 
-        json_files, _, _ = _load_json_files_with_errors(
+        json_files, _, _, _ = _load_json_files_with_errors(
             str(tmp_path), filter_preset="strict"
         )
         assert len(json_files) == 1
@@ -252,7 +240,7 @@ class TestFilterPresets:
         build_file.write_text('{"entities": [{"id": "1", "name": "test"}]}')
 
         # With "none" preset, should process files in build dir
-        json_files, _, _ = _load_json_files_with_errors(
+        json_files, _, _, _ = _load_json_files_with_errors(
             str(tmp_path), filter_preset="none"
         )
         # Note: hidden directories are still filtered by should_exclude()
@@ -273,6 +261,91 @@ class TestFilterPresets:
         valid_file.write_text('{"entities": [{"id": "1", "name": "test"}]}')
 
         # Without specifying filter_preset, should use lenient
-        json_files, _, _ = _load_json_files_with_errors(str(tmp_path))
+        json_files, _, _, _ = _load_json_files_with_errors(str(tmp_path))
         assert len(json_files) == 1
         assert json_files[0][0].name == "valid.json"
+
+    def test_cgrignore_applied_to_json(self, tmp_path: Path):
+        """Test that .cgrignore patterns are applied to JSON file discovery."""
+        (tmp_path / ".cgrignore").write_text("custom/*.json\n")
+        custom = tmp_path / "custom"
+        custom.mkdir()
+        (custom / "ignored.json").write_text('{"entities":[]}')
+        (tmp_path / "kept.json").write_text('{"entities":[]}')
+
+        json_files, _, _, _ = _load_json_files_with_errors(str(tmp_path))
+        assert len(json_files) == 1
+        assert json_files[0][0].name == "kept.json"
+
+
+class TestInternalPathExclusion:
+    def test_filters_cgr_directory(self, tmp_path: Path):
+        """Test that .cgr directory files are excluded as internal_dir."""
+        cgr_dir = tmp_path / ".cgr"
+        cgr_dir.mkdir()
+        cgr_file = cgr_dir / "doc_versions.json"
+        cgr_file.write_text('{"versions": {}}')
+
+        json_files, _, _, _ = _load_json_files_with_errors(str(tmp_path))
+        assert len(json_files) == 0
+
+    def test_filters_cgr_doc_errors(self, tmp_path: Path):
+        """Test that .cgr/doc_errors files are excluded as internal_dir."""
+        errors_dir = tmp_path / ".cgr" / "doc_errors"
+        errors_dir.mkdir(parents=True)
+        error_file = errors_dir / "abc123_test.error.json"
+        error_file.write_text('{"path": "/x", "error_type": "x"}')
+
+        json_files, _, _, _ = _load_json_files_with_errors(str(tmp_path))
+        assert len(json_files) == 0
+
+    def test_filters_venv_directory(self, tmp_path: Path):
+        """Test that .venv directory files are excluded as internal_dir."""
+        venv_dir = tmp_path / ".venv" / "lib"
+        venv_dir.mkdir(parents=True)
+        venv_file = venv_dir / "package.json"
+        venv_file.write_text('{"name": "test"}')
+
+        json_files, _, _, _ = _load_json_files_with_errors(str(tmp_path))
+        assert len(json_files) == 0
+
+    def test_filters_pypi_cache_json(self, tmp_path: Path):
+        """Test that .pypi_cache.json is excluded by default pattern."""
+        cache_file = tmp_path / ".pypi_cache.json"
+        cache_file.write_text('{"packages": {}}')
+
+        json_files, _, _, _ = _load_json_files_with_errors(str(tmp_path))
+        assert len(json_files) == 0
+
+    def test_filters_memory_profile_results_json(self, tmp_path: Path):
+        """Test that memory_profile_results.json is excluded by default pattern."""
+        profile_file = tmp_path / "memory_profile_results.json"
+        profile_file.write_text('{"profiles": []}')
+
+        json_files, _, _, _ = _load_json_files_with_errors(str(tmp_path))
+        assert len(json_files) == 0
+
+    def test_filters_funding_json(self, tmp_path: Path):
+        """Test that funding.json is excluded by default pattern."""
+        funding_file = tmp_path / "funding.json"
+        funding_file.write_text('{"sponsors": []}')
+
+        json_files, _, _, _ = _load_json_files_with_errors(str(tmp_path))
+        assert len(json_files) == 0
+
+    def test_load_json_skips_internal_files_entirely(self, tmp_path: Path):
+        """Test that internal files are skipped and valid files are kept."""
+        cgr_dir = tmp_path / ".cgr"
+        cgr_dir.mkdir()
+        cgr_file = cgr_dir / "doc_versions.json"
+        cgr_file.write_text('{"versions": {}}')
+
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        valid_file = data_dir / "entities.json"
+        valid_file.write_text('{"entities": [{"id": "1", "name": "test"}]}')
+
+        json_files, _, skip_count, _ = _load_json_files_with_errors(str(tmp_path))
+        assert len(json_files) == 1
+        assert json_files[0][0].name == "entities.json"
+        assert skip_count >= 1

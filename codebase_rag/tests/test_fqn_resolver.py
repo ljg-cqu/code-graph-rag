@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+pytest.importorskip("tree_sitter_python")
 import tree_sitter_python as tspython
 from tree_sitter import Language, Parser, Tree
 

@@ -9,6 +9,7 @@ import re
 import shlex
 import shutil
 import signal
+import subprocess
 import sys
 import uuid
 from collections import deque
@@ -19,11 +20,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
-from prompt_toolkit import prompt
-from prompt_toolkit.completion import WordCompleter
-from prompt_toolkit.formatted_text import HTML
-from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.shortcuts import print_formatted_text
+
 from .compat.pydantic_ai import (
     HAS_PYDANTIC_AI,
     ModelHTTPError,
@@ -35,6 +32,9 @@ from .compat.pydantic_ai import (
 # Additional imports for tool handling (only available when pydantic_ai is installed)
 if HAS_PYDANTIC_AI:
     from pydantic_ai import DeferredToolRequests, DeferredToolResults, ToolDenied
+from prompt_toolkit import prompt
+from prompt_toolkit.formatted_text import HTML
+from prompt_toolkit.key_binding import KeyBindings
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -99,12 +99,12 @@ from .tools.shell_command import ShellCommander, create_shell_command_tool
 from .types_defs import (
     CHAT_LOOP_UI,
     OPTIMIZATION_LOOP_UI,
-    ORANGE_STYLE,
     AgentLoopUI,
     CancelledResult,
     ConfirmationToolNames,
     CreateFileArgs,
     GraphData,
+    ORANGE_STYLE,
     RawToolArgs,
     ReplaceCodeArgs,
     ShellCommandArgs,
@@ -1276,14 +1276,16 @@ def _handle_chat_images(question: str, project_root: Path) -> str:
     return updated_question
 
 
+class InputCancelled(Exception):
+    """Raised when user cancels input with Ctrl+C."""
+    pass
+
+
 def get_multiline_input(prompt_text: str = cs.PROMPT_ASK_QUESTION) -> str:
+    """Get input from user with stable prompt_toolkit terminal rendering."""
     bindings = KeyBindings()
 
-    @bindings.add(cs.KeyBinding.CTRL_J)
-    def submit(event: KeyPressEvent) -> None:
-        event.app.exit(result=event.app.current_buffer.text)
-
-    @bindings.add(cs.KeyBinding.ENTER)
+    @bindings.add("c-j", eager=True)
     def new_line(event: KeyPressEvent) -> None:
         event.current_buffer.insert_text("\n")
 
@@ -1291,39 +1293,36 @@ def get_multiline_input(prompt_text: str = cs.PROMPT_ASK_QUESTION) -> str:
     def keyboard_interrupt(event: KeyPressEvent) -> None:
         event.app.exit(exception=KeyboardInterrupt)
 
-    command_completer = WordCompleter(
-        [
-            cs.MODELS_COMMAND_PREFIX,
-            cs.MODEL_COMMAND_PREFIX,
-            cs.MODE_COMMAND_PREFIX,
-            cs.HELP_COMMAND,
-            cs.COMPRESS_COMMAND_PREFIX,
-        ],
-        ignore_case=True,
-    )
-
     clean_prompt = Text.from_markup(prompt_text).plain
-
-    print_formatted_text(
-        HTML(
-            cs.UI_INPUT_PROMPT_HTML.format(
-                prompt=clean_prompt, hint=cs.MULTILINE_INPUT_HINT
-            )
+    prompt_message = HTML(
+        cs.UI_INPUT_PROMPT_HTML.format(
+            prompt=clean_prompt, hint=cs.MULTILINE_INPUT_HINT
         )
     )
 
-    result = prompt(
-        "",
-        multiline=True,
-        key_bindings=bindings,
-        completer=command_completer,
-        wrap_lines=True,
-        style=ORANGE_STYLE,
-    )
-    if result is None:
-        raise EOFError
-    stripped: str = result.strip()
-    return stripped
+    sys.stdout.flush()
+    sys.stderr.flush()
+
+    try:
+        result = prompt(
+            prompt_message,
+            multiline=False,
+            key_bindings=bindings,
+            wrap_lines=True,
+            style=ORANGE_STYLE,
+        )
+    except EOFError:
+        result = ""
+    except KeyboardInterrupt:
+        raise InputCancelled()
+
+    return result.strip()
+
+
+async def get_multiline_input_async(
+    prompt_text: str = cs.PROMPT_ASK_QUESTION,
+) -> str:
+    return await asyncio.to_thread(get_multiline_input, prompt_text)
 
 
 def _handle_models_command(
@@ -1677,7 +1676,7 @@ def _handle_mode_command(
             current_mode,
             """
 Available modes:
-  /mode code_only       - Query code graph only
+    /mode code_only       - Query code graph only
   /mode document_only   - Query document graph only
   /mode both_merged     - Query both, merge results
   /mode code_vs_doc     - Validate code against docs
@@ -1815,8 +1814,8 @@ async def _run_interactive_loop(
                 f"\n{style(cs.MSG_THINKING_CANCELLED, cs.Color.YELLOW)}"
             )
             _current_processing_task.cancel()
-        # During input (no processing task), let prompt_toolkit's Ctrl+C
-        # binding handle the first interrupt, but track that shutdown was
+        # During input (no processing task), let the input's Ctrl+C
+        # handler handle the first interrupt, but track that shutdown was
         # requested so second Ctrl+C forces exit
 
     def _handle_sigterm() -> None:
@@ -1844,9 +1843,32 @@ async def _run_interactive_loop(
                 _shutdown_requested = False  # Reset for each iteration
 
                 if not initial_question or question != initial_question:
-                    question = await asyncio.to_thread(
-                        get_multiline_input, input_prompt
-                    )
+                    # Ensure Rich console is in a clean state before prompting.
+                    # Rich's status display can leave the terminal in a state that
+                    # interferes with input handling.
+                    try:
+                        app_context.console.clear_live()
+                    except (IndexError, AttributeError):
+                        pass  # No live display active, that's fine
+
+                    # Temporarily remove signal handlers so KeyboardInterrupt
+                    # can be raised normally during input
+                    try:
+                        loop.remove_signal_handler(signal.SIGINT)
+                    except (NotImplementedError, RuntimeError):
+                        pass
+
+                    try:
+                        question = await get_multiline_input_async(input_prompt)
+                    except InputCancelled:
+                        # User pressed Ctrl+C to cancel input
+                        break
+                    finally:
+                        # Re-install signal handler after input
+                        try:
+                            loop.add_signal_handler(signal.SIGINT, _handle_sigint)
+                        except (NotImplementedError, RuntimeError):
+                            pass
 
                 stripped_question = question.strip()
                 stripped_lower = stripped_question.lower()
@@ -2872,6 +2894,10 @@ def _determine_default_query_mode(
     Mode is a hint for the LLM agent, not a tool filter.
     """
     code_count, doc_count = _get_content_availability(code_graph, doc_graph)
+
+    if code_count == 0 and doc_count == 0:
+        logger.info("Auto-selecting CODE_ONLY mode (no indexed code or documents found)")
+        return QueryMode.CODE_ONLY
 
     if code_count == 0 and doc_count > 0:
         logger.info(f"Auto-selecting DOCUMENT_ONLY mode (docs: {doc_count}, code: {code_count})")

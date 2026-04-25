@@ -143,6 +143,9 @@ class IngestionResult(BaseModel):
     # New fields for file tracking
     files_processed: int = 0
     files_skipped: int = 0
+    files_excluded: int = 0
+    files_non_entity: int = 0
+    files_malformed: int = 0
     # Existing fields unchanged
     entities_processed: int = 0
     entities_ingested: int = 0

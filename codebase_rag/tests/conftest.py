@@ -222,6 +222,11 @@ def mock_updater(temp_repo: Path, mock_ingestor: MagicMock) -> MagicMock:
 # Dependency Check Functions
 # =============================================================================
 
+def _check_module(name: str) -> bool:
+    import importlib.util
+    return importlib.util.find_spec(name) is not None
+
+
 def _check_pydantic_ai() -> bool:
     """Check if pydantic_ai is available."""
     try:
@@ -272,6 +277,21 @@ requires_memgraph = pytest.mark.skipif(
 requires_embeddings = pytest.mark.skipif(
     not _check_embeddings(),
     reason="Embedding model not available (install with: uv sync --extra semantic)"
+)
+
+requires_mcp = pytest.mark.skipif(
+    not _check_module("mcp"),
+    reason="mcp not installed"
+)
+
+requires_watchdog = pytest.mark.skipif(
+    not _check_module("watchdog"),
+    reason="watchdog not installed"
+)
+
+requires_tree_sitter_python = pytest.mark.skipif(
+    not _check_module("tree_sitter_python"),
+    reason="tree-sitter-python not installed"
 )
 
 
