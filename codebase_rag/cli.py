@@ -821,7 +821,7 @@ def start(
     ingest_json: bool = typer.Option(
         False,
         "--ingest-json",
-        help="Enable automatic JSON ingestion (runs independently of document/code indexing, validates against ingestion_schema.json)",
+        help="Enable automatic JSON ingestion (runs independently of document/code indexing, validates against codebase_rag/schema.json)",
     ),
     json_path: str | None = typer.Option(
         None,

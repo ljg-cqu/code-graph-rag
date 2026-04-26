@@ -49,7 +49,7 @@ An accurate Retrieval-Augmented Generation (RAG) system that analyzes multi-lang
 
 ## Latest News 🔥
 
-- **📄 Automatic JSON Ingestion on Start**: Automatically ingest valid JSON data when running `cgr start --index-docs` or `--index-all`, with parallel processing (up to 32 workers), automatic schema validation against [ingestion_schema.json](./ingestion_schema.json), and workspace isolation.
+- **📄 Automatic JSON Ingestion on Start**: Automatically ingest valid JSON data when running `cgr start --index-docs` or `--index-all`, with parallel processing (up to 32 workers), automatic schema validation against [codebase_rag/schema.json](./codebase_rag/schema.json), and workspace isolation.
 - **🌐 Global Filesystem Access**: Full support for reading, writing, and editing files anywhere on the host filesystem, with configurable security controls and approval workflows.
 - **📚 Document GraphRAG Support**: Full document indexing and querying now available! Index Markdown, PDF, DOCX files and query them alongside your code. Features include bidirectional validation (code vs docs), merged queries across both graphs, and specification compliance checking.
 - **💎 Solidity Support**: Full Solidity smart contract support added — contracts, interfaces, libraries, events, modifiers, state variables, fallback/receive functions, and call graph analysis for blockchain development.
@@ -624,9 +624,9 @@ Import custom domain knowledge, entities, relationships, and metadata directly i
 ---
 
 #### 2. JSON Schema Specification (Deterministic, Fully Validated)
-All JSON input is strictly validated against [ingestion_schema.json](./ingestion_schema.json) for deterministic behavior. NO TRANSFORMATIONS OR CONVERSIONS ARE PERFORMED DURING INGESTION - the schema is the single source of truth.
+All JSON input is strictly validated against [codebase_rag/schema.json](./codebase_rag/schema.json) for deterministic behavior. NO TRANSFORMATIONS OR CONVERSIONS ARE PERFORMED DURING INGESTION - the schema is the single source of truth.
 
-For schema definition, see [ingestion_schema.json](./ingestion_schema.json).
+For schema definition, see [codebase_rag/schema.json](./codebase_rag/schema.json).
       "properties": "object (optional, key-value properties for the relationship)"
     }
   ]
@@ -743,7 +743,7 @@ cgr start --repo-path /path/to/your/repo --index-docs --with-docs --mode documen
 | `--realtime-code` | **NEW**: Enable realtime updates for code files (default: `true`) |
 | `--realtime-docs` | **NEW**: Enable realtime updates for document files (default: `false`) |
 | `--realtime-json` | **NEW**: Enable realtime updates for JSON files (default: `false`) |
-| `--ingest-json` | **NEW**: Enable automatic JSON ingestion during document indexing (validates against [ingestion_schema.json](./ingestion_schema.json)) |
+| `--ingest-json` | **NEW**: Enable automatic JSON ingestion during document indexing (validates against [codebase_rag/schema.json](./codebase_rag/schema.json)) |
 | `--json-path` | **NEW**: Path to specific JSON file or directory to ingest (defaults to scanning repo root for all *.json files if not provided) |
 | `--json-skip-invalid/--json-fail-on-invalid` | **NEW**: Skip invalid JSON files (default) or fail ingestion if any JSON file fails schema validation |
 | `--json-workers` | **NEW**: Number of parallel workers for JSON ingestion (default: 10, max: 32) |

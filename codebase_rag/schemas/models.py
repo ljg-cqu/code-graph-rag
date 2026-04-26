@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from .types_defs import PropertyDict, ResultRow, ResultValue
+from ..types_defs import PropertyDict, ResultRow, ResultValue
 
 
 def _normalize_value(val: object) -> ResultValue:
@@ -132,7 +132,7 @@ class JSONMetadata(BaseModel):
 
 
 # JSONInputSchema REMOVED:
-# Deprecated in favor of direct validation against ingestion_schema.json
+# Deprecated in favor of direct validation against codebase_rag/schema.json
 # as the single source of truth for input validation
 
 

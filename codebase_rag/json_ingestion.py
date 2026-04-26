@@ -39,7 +39,7 @@ __all__ = [
 config = settings
 
 SCHEMA_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)), "ingestion_schema.json"
+    os.path.dirname(__file__), "schema.json"
 )
 with open(SCHEMA_PATH, encoding="utf-8") as schema_file:
     INGESTION_SCHEMA = json.load(schema_file)
@@ -1666,6 +1666,7 @@ def ingest_json_data(
     try:
         load_errors: list[str] = []
         skip_count = 0
+        skip_breakdown: dict[str, int] = {"excluded": 0, "non_entity": 0, "malformed": 0}
         if pre_loaded_data is not None:
             json_files = pre_loaded_data
         else:

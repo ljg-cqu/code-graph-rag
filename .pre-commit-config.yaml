@@ -59,3 +59,17 @@ repos:
         entry: scripts/hooks/check-single-line-commit.sh
         language: script
         stages: [commit-msg]
+  - repo: local
+    hooks:
+      - id: generate-schemas
+        name: Generate Pydantic schemas from JSON
+        entry: uv run python scripts/generate_schemas.py
+        language: system
+        files: ^codebase_rag/schema\.json$
+        pass_filenames: false
+      - id: check-schema-sync
+        name: Check schema and models are in sync
+        entry: uv run python scripts/check_schema_sync.py
+        language: system
+        always_run: true
+        pass_filenames: false

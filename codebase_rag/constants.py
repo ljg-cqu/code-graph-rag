@@ -4282,7 +4282,7 @@ HEALTH_CHECK_JSON_SCHEMA_FAIL = "JSON schema validation failed"
 HEALTH_CHECK_JSON_SCHEMA_PASS_MSG = "JSON file conforms to the ingestion schema"
 HEALTH_CHECK_JSON_SCHEMA_FAIL_MSG = "JSON validation error: {error}"
 HEALTH_CHECK_JSON_SCHEMA_IO_ERROR_MSG = "Cannot read schema or data file: {error}"
-HEALTH_CHECK_JSON_SCHEMA_FILE = "ingestion_schema.json"
+HEALTH_CHECK_JSON_SCHEMA_FILE = "codebase_rag/schema.json"
 HEALTH_CHECK_JSON_SAMPLE_FILE = "sample_json_ingest.json"
 
 # Vector index health checks
