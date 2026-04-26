@@ -1084,6 +1084,37 @@ ENTITY_SUBTYPE_REGISTRY: dict[str, str] = {
     # 🏗️ System/Structure — Pedagogical & Cognitive (13)
     "Framework Component": "SYSTEM_STRUCTURE",
     "Educational Framework": "SYSTEM_STRUCTURE",
+
+    # ═══════════════════════════════════════════════════════════════
+    # JSON Entity Types — CTO Competency Framework & General
+    # ═══════════════════════════════════════════════════════════════
+
+    # 🎭 Agent/Role
+    "Role": "AGENT_ROLE",
+
+    # 💡 Abstract Concept
+    "Mindset": "ABSTRACT_CONCEPT",
+    "Competency": "ABSTRACT_CONCEPT",
+    "AntiPattern": "ABSTRACT_CONCEPT",
+    "MentalModel": "ABSTRACT_CONCEPT",
+
+    # 🏗️ System/Structure
+    "FrameworkComponent": "SYSTEM_STRUCTURE",
+    "GovernanceConstruct": "SYSTEM_STRUCTURE",
+    "Layer": "SYSTEM_STRUCTURE",
+
+    # ⏱️ Event/Process
+    "ProgressionStage": "EVENT_PROCESS",
+
+    # 📏 Property/Attribute
+    "SafetyBoundary": "PROPERTY_ATTRIBUTE",
+
+    # 📨 Information Expression
+    "GovernanceRule": "INFORMATION_EXPRESSION",
+    "Reference": "INFORMATION_EXPRESSION",
+
+    # 🧱 Concrete Entity
+    "Tool": "CONCRETE_ENTITY",
 }
 
 

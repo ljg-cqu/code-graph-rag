@@ -47,6 +47,8 @@ cgr start --repo-path /path/to/repo [OPTIONS]
 | `--check-freshness` | Check if graphs are up-to-date before starting (default: enabled, use `--no-check-freshness` to disable) |
 | `--mode` | Query routing mode: `auto` (default), `code_only`, `document_only`, `both_merged`, `code_vs_doc`, `doc_vs_code` |
 | `--index-timeout` | Maximum seconds for indexing operations (default: 300s) |
+| `--json-compute-pagerank` | Compute PageRank scores for JSON graph after ingestion (default: enabled) |
+| `--no-json-compute-pagerank` | Skip PageRank computation for JSON graph |
 
 #### Unified Dual-Graph Usage
 

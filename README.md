@@ -627,11 +627,7 @@ Import custom domain knowledge, entities, relationships, and metadata directly i
 All JSON input is strictly validated against [codebase_rag/schema.json](./codebase_rag/schema.json) for deterministic behavior. NO TRANSFORMATIONS OR CONVERSIONS ARE PERFORMED DURING INGESTION - the schema is the single source of truth.
 
 For schema definition, see [codebase_rag/schema.json](./codebase_rag/schema.json).
-      "properties": "object (optional, key-value properties for the relationship)"
-    }
-  ]
-}
-```
+
 **Validation Guarantees:**
 - Missing required fields fail fast with clear error messages
 - ID uniqueness is enforced per dataset
@@ -679,6 +675,44 @@ The JSON ingestion system provides these deterministic guarantees:
 
 #### 5. CLI Command Usage
 See [JSON Data Ingestion Commands](#json-data-ingestion-commands) in the CLI section for interactive usage examples.
+
+#### 6. Querying JSON Data
+
+Once ingested, JSON entities can be queried using the `query_json_graph` tool in the interactive chat:
+
+```
+> What competencies does a CTO need?
+> Show me all stakeholders in the organization
+> What does Strategic Thinking influence?
+> Find all frameworks related to governance
+```
+
+**Entity Categories**: All JSON entities are automatically classified into 7 MECE categories:
+
+| Category | Emoji | Description |
+|----------|-------|-------------|
+| `CONCRETE_ENTITY` | 🧱 | Physical objects (Tool, Product) |
+| `EVENT_PROCESS` | ⏱️ | Time-based events (ProgressionStage, Deployment) |
+| `INFORMATION_EXPRESSION` | 📨 | Data/knowledge (GovernanceRule, Reference) |
+| `PROPERTY_ATTRIBUTE` | 📏 | Characteristics (SafetyBoundary, SLI) |
+| `SYSTEM_STRUCTURE` | 🏗️ | Organized collections (Framework, Layer) |
+| `AGENT_ROLE` | 🎭 | Intentional entities (Role, Stakeholder) |
+| `ABSTRACT_CONCEPT` | 💡 | Mental constructs (Mindset, Competency) |
+
+**Relationship Properties**: Relationships automatically receive:
+- **Category**: `relationship_category` (e.g., `CAUSAL`, `HIERARCHICAL`)
+- **Emoji**: `relationship_emoji` (e.g., ⚡, 🌳)
+- **Verb**: Inferred verb (`enables`, `contains`, `precedes`, etc.) for precise queries
+
+**Python API**:
+```python
+from codebase_rag import JsonGraphQueryEngine
+
+# Query programmatically
+results = engine.semantic_search("strategic thinking", top_k=10)
+roles = engine.get_entities_by_category("AGENT_ROLE")
+rels = engine.find_relationships("Strategic Thinking", relationship_category="CAUSAL")
+```
 
 ### Step 4: Document GraphRAG (New!)
 
@@ -746,6 +780,7 @@ cgr start --repo-path /path/to/your/repo --index-docs --with-docs --mode documen
 | `--ingest-json` | **NEW**: Enable automatic JSON ingestion during document indexing (validates against [codebase_rag/schema.json](./codebase_rag/schema.json)) |
 | `--json-path` | **NEW**: Path to specific JSON file or directory to ingest (defaults to scanning repo root for all *.json files if not provided) |
 | `--json-skip-invalid/--json-fail-on-invalid` | **NEW**: Skip invalid JSON files (default) or fail ingestion if any JSON file fails schema validation |
+| `--json-compute-pagerank/--no-json-compute-pagerank` | **NEW**: Compute PageRank scores for JSON graph after ingestion (default: enabled) |
 | `--json-workers` | **NEW**: Number of parallel workers for JSON ingestion (default: 10, max: 32) |
 | `--scheduling-strategy` | **NEW**: Scheduling strategy for parallel JSON ingestion: `fifo` (default) or `round-robin` (even distribution of large/small files across workers) |
 

@@ -13,76 +13,30 @@ Generated from: codebase_rag/schema.json
 
 from __future__ import annotations
 
-from enum import StrEnum
+from typing import Any
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, confloat, constr
+from pydantic import AwareDatetime, BaseModel, ConfigDict, constr
 
 
 class Metadata(BaseModel):
     """
-    Top-level metadata applied to all entities and relationships in this dataset
+    Optional metadata for the dataset
     """
 
     model_config = ConfigDict(
         extra='allow',
     )
-    dataset_id: constr(pattern=r'^[a-zA-Z0-9_.-]+$')
+    dataset_id: str | None = None
     """
-    Required unique identifier for the entire dataset (used for deduplication and bulk deletion)
+    Unique identifier for this dataset (used for deduplication and bulk operations)
     """
     source: str | None = None
     """
-    Optional source attribution for the data
+    Source attribution for the data
     """
     created_at: AwareDatetime | None = None
     """
-    Optional ISO 8601 timestamp of when the dataset was generated
-    """
-    default_entity_labels: list[str] | None = None
-    """
-    Optional default labels to apply to all entities if no labels are specified on individual entities
-    """
-    schema_version: str = '1.2.0'
-    """
-    Optional schema version identifier for forward compatibility
-    """
-    taxonomy_reference: str | None = None
-    """
-    Optional reference to the taxonomy system used (e.g., 'thinking-maps-v3.0')
-    """
-
-
-class Operation(StrEnum):
-    """
-    Optional default operation for all entities/relationships in this batch (overridden by per-entity/relationship operation values if present). Defaults to 'add' if not specified.
-    """
-
-    add = 'add'
-    update = 'update'
-    delete = 'delete'
-
-
-class Operation1(StrEnum):
-    """
-    Optional operation for this specific entity, overrides batch-level default operation
-    """
-
-    add = 'add'
-    update = 'update'
-    delete = 'delete'
-
-
-class Properties(BaseModel):
-    """
-    Arbitrary key-value properties to attach to the graph node
-    """
-
-    model_config = ConfigDict(
-        extra='allow',
-    )
-    description: str | None = None
-    """
-    Recommended default field used for embedding generation (used for semantic search)
+    Timestamp when the dataset was created (ISO 8601)
     """
 
 
@@ -92,87 +46,55 @@ class Entity(BaseModel):
     )
     id: str | None = None
     """
-    Optional unique entity ID within the dataset (auto-generated if not provided). Will be required in v2.0.
+    Unique entity ID (auto-generated if not provided)
     """
-    name: constr(
-        pattern=r'^[^\x00-\x7F]+\s+[a-zA-Z0-9].*$', min_length=1, max_length=255
-    )
+    name: constr(min_length=1)
     """
-    Required human-readable name of the entity. Must start with emoji followed by space and text for UI readability (e.g. '👤 CTO Role', '🧱 Database Server'). Used for deduplication if no ID is provided.
+    Human-readable name of the entity (required, used for deduplication if no ID)
     """
     type: str | None = None
     """
-    Optional primary type of the entity. Compatible with taxonomy categories (🧱 Concrete Entity, ⏱️ Event/Process, 📨 Information/Expression, 📏 Property/Attribute, 🏗️ System/Structure, 🎭 Agent/Role, 💡 Abstract Concept) or domain-specific types (e.g., 'Role', 'Mindset', 'Competency').
+    Entity type or category (e.g., 'Person', 'Concept', 'Role')
     """
     labels: list[str] | None = None
     """
-    Optional list of labels to apply to the graph node (e.g. ['Job', 'Skill'])
+    Labels to apply to the graph node
     """
-    operation: Operation1 | None = None
+    properties: dict[str, Any] | None = None
     """
-    Optional operation for this specific entity, overrides batch-level default operation
+    Arbitrary key-value properties
     """
-    last_updated: AwareDatetime | None = None
-    """
-    Optional last updated timestamp for this specific entity, overrides batch-level default timestamp
-    """
-    properties: Properties | None = None
-    """
-    Arbitrary key-value properties to attach to the graph node
-    """
-
-
-class Operation2(StrEnum):
-    """
-    Optional operation for this specific relationship, overrides batch-level default operation
-    """
-
-    add = 'add'
-    update = 'update'
-    delete = 'delete'
 
 
 class Relationship(BaseModel):
     model_config = ConfigDict(
         extra='allow',
     )
-    source: constr(pattern=r'^[^\x00-\x7F]+\s+[a-zA-Z0-9].*$', min_length=1)
+    source: constr(min_length=1)
     """
-    Required source entity name or ID (matches entities[].name or entities[].id). Must start with emoji followed by space and text for UI readability.
+    Source entity name or ID
     """
-    target: constr(pattern=r'^[^\x00-\x7F]+\s+[a-zA-Z0-9].*$', min_length=1)
+    target: constr(min_length=1)
     """
-    Required target entity name or ID. Must start with emoji followed by space and text for UI readability. Note: comma-separated multiple targets are deprecated (will be rejected in v2.0).
+    Target entity name or ID
     """
-    relationship: constr(pattern=r'^[^\x00-\x7F]+\s+[a-zA-Z0-9].*$', min_length=1)
+    relationship: constr(min_length=1)
     """
-    Required relationship type. Compatible with Thinking Maps taxonomy categories: 🌳 Hierarchical (is-a, classifies-as), 🧩 Compositional (part-of, comprises), 🎯 Contextual (located-in, provides-context-for), 💭 Attribute (has-property, exhibits), ⚖️ Comparative (similar-to, contrasts-with), ⏩ Sequential (precedes, follows), ⚡ Causal (causes, enables), 🌉 Analogical (analogous-to, maps-to). Format: emoji + space + verb (e.g. '🌳 is a', '⚡ causes'). Domain-specific verbs allowed.
+    Relationship type (e.g., 'IS_A', 'PART_OF', 'causes')
     """
-    operation: Operation2 | None = None
+    category: str | None = None
     """
-    Optional operation for this specific relationship, overrides batch-level default operation
+    Relationship category for verb inference and visualization. One of: CAUSAL, HIERARCHICAL, COMPOSITIONAL, CONTEXTUAL, ATTRIBUTIVE, SEQUENTIAL, COMPARATIVE, ANALOGICAL. Auto-inferred from relationship type if not provided.
     """
-    last_updated: AwareDatetime | None = None
+    properties: dict[str, Any] | None = None
     """
-    Optional last updated timestamp for this specific relationship, overrides batch-level default timestamp
-    """
-    confidence: confloat(ge=0.0, le=1.0) | None = None
-    """
-    Optional confidence score for the relationship (0-1), used for conflict resolution
-    """
-    explanation: str | None = None
-    """
-    Optional explanation for the relationship (used for relationship embedding generation if provided)
-    """
-    isInferred: bool | None = None
-    """
-    Optional flag indicating if the relationship was inferred vs manually curated
+    Arbitrary key-value properties (e.g., confidence, explanation)
     """
 
 
 class IngestionPayload(BaseModel):
     """
-    Standard schema for ingesting custom entities, relationships, and metadata into Memgraph + vector database. Designed to be compatible with the Thinking Maps taxonomy (8 relationship categories, 7 entity categories) while remaining flexible for domain-specific extensions. Entities and relationships use emoji+text format for UI readability. THIS IS THE SINGLE SOURCE OF TRUTH FOR ALL JSON INGESTION.
+    Minimal schema for ingesting entities and relationships into Memgraph. Designed for maximum flexibility - users control display format, naming conventions, and content structure.
     """
 
     model_config = ConfigDict(
@@ -180,25 +102,13 @@ class IngestionPayload(BaseModel):
     )
     metadata: Metadata | None = None
     """
-    Top-level metadata applied to all entities and relationships in this dataset
+    Optional metadata for the dataset
     """
-    operation: Operation | None = None
+    entities: list[Entity]
     """
-    Optional default operation for all entities/relationships in this batch (overridden by per-entity/relationship operation values if present). Defaults to 'add' if not specified.
-    """
-    batch_id: str | None = None
-    """
-    Optional unique ID for this ingestion batch, used for audit tracking and idempotency guarantees
-    """
-    last_updated: AwareDatetime | None = None
-    """
-    Optional default last updated timestamp for all entities/relationships in this batch (overridden by per-entity/relationship timestamps if present), used for incremental update change detection
-    """
-    entities: list[Entity] = Field(..., min_length=1)
-    """
-    List of graph nodes (entities) to ingest. Compatible with the 7-category entity taxonomy (🧱 Concrete Entity, ⏱️ Event/Process, 📨 Information/Expression, 📏 Property/Attribute, 🏗️ System/Structure, 🎭 Agent/Role, 💡 Abstract Concept) but supports domain-specific types. Names use emoji+text format for UI readability.
+    Graph nodes to ingest. Each entity must have a name. All other fields are optional.
     """
     relationships: list[Relationship] | None = None
     """
-    List of graph relationships between entities. Compatible with the 8-category Thinking Maps taxonomy (🌳 Hierarchical, 🧩 Compositional, 🎯 Contextual, 💭 Attribute, ⚖️ Comparative, ⏩ Sequential, ⚡ Causal, 🌉 Analogical) but supports domain-specific verbs. All fields use emoji+text format for UI readability. Note: comma-separated targets are deprecated and will be rejected in v2.0.
+    Graph relationships between entities. Each relationship requires source, target, and type.
     """

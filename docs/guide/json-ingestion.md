@@ -102,6 +102,7 @@ All ingested JSON files must conform to the official ingestion schema. Entities 
       "source": "job_001",
       "target": "skill_001",
       "relationship": "REQUIRES_SKILL",
+      "category": "CAUSAL",
       "properties": {
         "description": "Job requires Python proficiency",
         "minimum_experience_years": 3,
@@ -112,6 +113,7 @@ All ingested JSON files must conform to the official ingestion schema. Entities 
       "source": "job_001",
       "target": "skill_002",
       "relationship": "REQUIRES_SKILL",
+      "category": "CAUSAL",
       "properties": {
         "description": "Job requires Neo4j experience",
         "minimum_experience_years": 2,
@@ -150,6 +152,79 @@ All ingested JSON files must conform to the official ingestion schema. Entities 
 - JSON entity embeddings are indexed directly in the JSON Memgraph instance
 - The JSON ingestion path does not persist relationship embeddings
 - Dataset deletion removes JSON nodes and relationships without a separate vector-store cleanup step
+
+### 5. Entity Category Taxonomy
+All JSON entities are automatically classified into one of 7 MECE (Mutually Exclusive, Collectively Exhaustive) categories:
+
+| Category | Emoji | Description | Example Types |
+|----------|-------|-------------|---------------|
+| `CONCRETE_ENTITY` | 🧱 | Physical objects or instances | Tool, Product, Facility |
+| `EVENT_PROCESS` | ⏱️ | Things that unfold over time | ProgressionStage, Deployment, Migration |
+| `INFORMATION_EXPRESSION` | 📨 | Representations of data/knowledge | GovernanceRule, Reference, API |
+| `PROPERTY_ATTRIBUTE` | 📏 | Characteristics or measurements | SafetyBoundary, SLI, Metric |
+| `SYSTEM_STRUCTURE` | 🏗️ | Organized collections or frameworks | Framework, Layer, GovernanceConstruct |
+| `AGENT_ROLE` | 🎭 | Entities that exercise intention | Role, Stakeholder, CI Bot |
+| `ABSTRACT_CONCEPT` | 💡 | Pure ideas or mental constructs | Mindset, Competency, AntiPattern |
+
+**Automatic Classification**: Entities are classified based on their `type` field using a 122+ entry subtype registry. If no match is found, entities default to `ABSTRACT_CONCEPT`.
+
+**Stored Properties**:
+- `entity_category` — The MECE category name (e.g., `"AGENT_ROLE"`)
+- `entity_subtype` — The specific type (e.g., `"Role"`)
+- `entity_emoji` — The category emoji (e.g., `"🎭"`)
+
+### 6. Relationship Verb Inference
+Relationships automatically receive inferred properties for precise semantic queries:
+
+| Category | Emoji | Default Verb | Type-Specific Examples |
+|----------|-------|--------------|------------------------|
+| `CAUSAL` | ⚡ | `influences` | Mindset → Competency: `enables` |
+| `COMPOSITIONAL` | 🧩 | `part-of` | Framework → Framework: `contains` |
+| `HIERARCHICAL` | 🌳 | `is-a` | Competency → Competency: `subtype-of` |
+| `CONTEXTUAL` | 🎯 | `contextualizes` | Layer → Construct: `defines-context` |
+| `SEQUENTIAL` | ⏩ | `precedes` | ProgressionStage → ProgressionStage: `precedes` |
+| `COMPARATIVE` | ⚖️ | `compares-to` | Competency → Competency: `contrasts-with` |
+| `ATTRIBUTIVE` | 💭 | `has-property` | Framework → Property: `characterizes` |
+| `ANALOGICAL` | 🌉 | `analogous-to` | Concept → Concept: `similar-to` |
+| `RELATED_TO` | 🔗 | `related-to` | Generic fallback |
+
+**Stored Properties**:
+- `relationship_category` — The normalized category (e.g., `"CAUSAL"`)
+- `relationship_emoji` — The category emoji (e.g., `"⚡"`)
+- `verb` — The inferred or provided verb (e.g., `"enables"`)
+
+**Category Normalization**: JSON categories like `ATTRIBUTE` are automatically mapped to internal taxonomy (e.g., `ATTRIBUTIVE`).
+
+### 7. Emoji Extraction
+Entity names with emoji prefixes are automatically parsed:
+
+```json
+{"name": "👤 CTO Role"}
+```
+
+Results in stored properties:
+- `name`: `"CTO Role"` (clean name for search)
+- `emoji`: `"👤"` (extracted prefix)
+- `display_name`: `"👤 CTO Role"` (original for display)
+
+### 8. Post-Ingestion Processing
+After successful ingestion:
+
+1. **Property Indexes Created**:
+   - `entity_category` — Fast filtering by MECE category
+   - `type` — Fast filtering by entity type
+   - `pagerank_score` — Efficient importance ranking
+
+2. **PageRank Computation** (optional, enabled by default):
+   - Calculates importance scores for all entities
+   - Improves ranking quality for semantic search
+   - Requires MAGE procedures (gracefully skipped if unavailable)
+
+Control with CLI flag:
+```bash
+cgr start --ingest-json --json-compute-pagerank  # enable (default)
+cgr start --ingest-json --no-json-compute-pagerank  # disable
+```
 
 ## CLI Usage
 
@@ -274,24 +349,104 @@ cgr list-datasets
 
 ## Querying Ingested Data
 
-Once ingested, your custom JSON data is fully integrated into the Code-Graph-RAG system and can be queried just like code entities:
+Once ingested, your custom JSON data can be queried using the `query_json_graph` tool available in the interactive chat:
 
-### Natural Language Queries
+### JSON Graph Query Tool
+
+The `query_json_graph` tool provides semantic search, category filtering, and relationship traversal for JSON-ingested entities:
+
+**Natural Language Queries**:
 ```
-> Find all job postings that require Python skills
-> What skills are required for senior backend engineer positions?
-> Show me all remote jobs with salary above $150k
+> What competencies does a CTO need?
+> Show me all stakeholders in the organization
+> What does Strategic Thinking influence?
+> Find all frameworks related to governance
+```
+
+**Category Filtering**:
+Query by MECE entity category:
+```
+> Show me all agents and roles in the system
+> List all abstract concepts in the CTO framework
+> What concrete entities (tools) are available?
+```
+
+**Relationship Traversal**:
+Explore connections between entities:
+```
+> What competencies are enabled by Strategic Thinking?
+> Show the hierarchy under the CTO Framework
+> What relationships involve the Technical Architecture competency?
+```
+
+### Query Methods Available
+
+| Method | Description | Requirements |
+|--------|-------------|--------------|
+| `semantic_search` | Vector similarity + PageRank ranking | Embeddings, vector index |
+| `keyword_search` | Name/description keyword matching | None |
+| `find_related_entities` | Graph traversal from entity | Relationships |
+| `find_relationships` | Filter by category/verb | Relationships |
+| `get_entities_by_category` | Filter by MECE category | Entity categories |
+| `get_important_entities` | Top entities by PageRank | PageRank scores |
+| `get_entity_taxonomy` | Hierarchical taxonomy view | Relationships |
+
+### Graceful Degradation
+
+All query methods degrade gracefully when optional features are unavailable:
+
+| Scenario | Fallback Behavior |
+|----------|-------------------|
+| No embedding provider | Falls back to keyword search |
+| No vector index | Falls back to keyword search |
+| No PageRank scores | Uses default score 0.1 |
+| No entity category | Treats as `ABSTRACT_CONCEPT` |
+| No relationship category | Uses `"RELATED_TO"` |
+| No relationship emoji | Uses `"🔗"` |
+| No relationship verb | Uses `"related-to"` |
+
+**Backward Compatibility**: The `find_relationships` method uses `COALESCE(r.relationship_category, type(r))` for filtering, so it works correctly with:
+- New data that has the `relationship_category` property
+- Legacy data that only has the relationship type (e.g., `CAUSAL`)
+
+### Python API
+
+You can also query JSON data programmatically:
+
+```python
+from codebase_rag.json_queries import JsonGraphQueryEngine
+from codebase_rag.json_ingestion import _create_json_ingestor
+from codebase_rag.config import settings
+
+with _create_json_ingestor(settings.JSON_MEMGRAPH_BATCH_SIZE) as executor:
+    engine = JsonGraphQueryEngine(executor=executor)
+    
+    # Semantic search
+    results = engine.semantic_search("strategic thinking", top_k=10)
+    
+    # Filter by category
+    roles = engine.get_entities_by_category("AGENT_ROLE", top_k=50)
+    
+    # Find relationships
+    rels = engine.find_relationships("Strategic Thinking", relationship_category="CAUSAL")
+    
+    # Get important entities
+    important = engine.get_important_entities(top_k=20)
 ```
 
 ### Combined Code + Custom Data Queries
-You can query across both your ingested custom data and codebase at the same time:
+
+You can query across both your ingested custom data and codebase:
+
 ```
 > What Python functions in the codebase are related to the job requirements for backend engineers?
 > Compare the skill requirements in our job postings with the skills used in our actual codebase
 ```
 
 ### Validation
+
 Use the existing validation capabilities to verify your data:
+
 ```bash
 # Validate that your ingested data matches a specification document
 cgr validate-spec --spec-path ./job-posting-requirements.md --dataset-id job_hunting_jd_2024

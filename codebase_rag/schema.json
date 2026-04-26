@@ -1,67 +1,35 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://code-graph-rag.io/schemas/ingestion/v1.2.json",
-  "version": "1.2.0",
-  "title": "Code-Graph RAG Custom Data Ingestion Schema",
-  "description": "Standard schema for ingesting custom entities, relationships, and metadata into Memgraph + vector database. Designed to be compatible with the Thinking Maps taxonomy (8 relationship categories, 7 entity categories) while remaining flexible for domain-specific extensions. Entities and relationships use emoji+text format for UI readability. THIS IS THE SINGLE SOURCE OF TRUTH FOR ALL JSON INGESTION.",
+  "title": "Graph Data Ingestion Schema",
+  "description": "Minimal schema for ingesting entities and relationships into Memgraph. Designed for maximum flexibility - users control display format, naming conventions, and content structure.",
   "type": "object",
   "required": ["entities"],
   "additionalProperties": true,
   "properties": {
     "metadata": {
       "type": "object",
-      "description": "Top-level metadata applied to all entities and relationships in this dataset",
+      "description": "Optional metadata for the dataset",
       "additionalProperties": true,
       "properties": {
         "dataset_id": {
           "type": "string",
-          "description": "Required unique identifier for the entire dataset (used for deduplication and bulk deletion)",
-          "pattern": "^[a-zA-Z0-9_.-]+$"
+          "description": "Unique identifier for this dataset (used for deduplication and bulk operations)"
         },
         "source": {
           "type": "string",
-          "description": "Optional source attribution for the data"
+          "description": "Source attribution for the data"
         },
         "created_at": {
           "type": "string",
           "format": "date-time",
-          "description": "Optional ISO 8601 timestamp of when the dataset was generated"
-        },
-        "default_entity_labels": {
-          "type": "array",
-          "items": {"type": "string"},
-          "description": "Optional default labels to apply to all entities if no labels are specified on individual entities"
-        },
-        "schema_version": {
-          "type": "string",
-          "description": "Optional schema version identifier for forward compatibility",
-          "default": "1.2.0"
-        },
-        "taxonomy_reference": {
-          "type": "string",
-          "description": "Optional reference to the taxonomy system used (e.g., 'thinking-maps-v3.0')"
+          "description": "Timestamp when the dataset was created (ISO 8601)"
         }
-      },
-      "required": ["dataset_id"]
-    },
-    "operation": {
-      "type": "string",
-      "enum": ["add", "update", "delete"],
-      "description": "Optional default operation for all entities/relationships in this batch (overridden by per-entity/relationship operation values if present). Defaults to 'add' if not specified."
-    },
-    "batch_id": {
-      "type": "string",
-      "description": "Optional unique ID for this ingestion batch, used for audit tracking and idempotency guarantees"
-    },
-    "last_updated": {
-      "type": "string",
-      "format": "date-time",
-      "description": "Optional default last updated timestamp for all entities/relationships in this batch (overridden by per-entity/relationship timestamps if present), used for incremental update change detection"
+      }
     },
     "entities": {
       "type": "array",
-      "description": "List of graph nodes (entities) to ingest. Compatible with the 7-category entity taxonomy (🧱 Concrete Entity, ⏱️ Event/Process, 📨 Information/Expression, 📏 Property/Attribute, 🏗️ System/Structure, 🎭 Agent/Role, 💡 Abstract Concept) but supports domain-specific types. Names use emoji+text format for UI readability.",
-      "minItems": 1,
+      "description": "Graph nodes to ingest. Each entity must have a name. All other fields are optional.",
       "items": {
         "type": "object",
         "additionalProperties": true,
@@ -69,51 +37,33 @@
         "properties": {
           "id": {
             "type": "string",
-            "description": "Optional unique entity ID within the dataset (auto-generated if not provided). Will be required in v2.0."
+            "description": "Unique entity ID (auto-generated if not provided)"
           },
           "name": {
             "type": "string",
-            "description": "Required human-readable name of the entity. Must start with emoji followed by space and text for UI readability (e.g. '👤 CTO Role', '🧱 Database Server'). Used for deduplication if no ID is provided.",
-            "minLength": 1,
-            "maxLength": 255,
-            "pattern": "^[^\\x00-\\x7F]+\\s+[a-zA-Z0-9].*$"
+            "description": "Human-readable name of the entity (required, used for deduplication if no ID)",
+            "minLength": 1
           },
           "type": {
             "type": "string",
-            "description": "Optional primary type of the entity. Compatible with taxonomy categories (🧱 Concrete Entity, ⏱️ Event/Process, 📨 Information/Expression, 📏 Property/Attribute, 🏗️ System/Structure, 🎭 Agent/Role, 💡 Abstract Concept) or domain-specific types (e.g., 'Role', 'Mindset', 'Competency')."
+            "description": "Entity type or category (e.g., 'Person', 'Concept', 'Role')"
           },
           "labels": {
             "type": "array",
             "items": {"type": "string"},
-            "description": "Optional list of labels to apply to the graph node (e.g. ['Job', 'Skill'])"
-          },
-          "operation": {
-            "type": "string",
-            "enum": ["add", "update", "delete"],
-            "description": "Optional operation for this specific entity, overrides batch-level default operation"
-          },
-          "last_updated": {
-            "type": "string",
-            "format": "date-time",
-            "description": "Optional last updated timestamp for this specific entity, overrides batch-level default timestamp"
+            "description": "Labels to apply to the graph node"
           },
           "properties": {
             "type": "object",
             "additionalProperties": true,
-            "description": "Arbitrary key-value properties to attach to the graph node",
-            "properties": {
-              "description": {
-                "type": "string",
-                "description": "Recommended default field used for embedding generation (used for semantic search)"
-              }
-            }
+            "description": "Arbitrary key-value properties"
           }
         }
       }
     },
     "relationships": {
-      "type": ["array", "object"],
-      "description": "List of graph relationships between entities. Compatible with the 8-category Thinking Maps taxonomy (🌳 Hierarchical, 🧩 Compositional, 🎯 Contextual, 💭 Attribute, ⚖️ Comparative, ⏩ Sequential, ⚡ Causal, 🌉 Analogical) but supports domain-specific verbs. All fields use emoji+text format for UI readability. Note: comma-separated targets are deprecated and will be rejected in v2.0.",
+      "type": "array",
+      "description": "Graph relationships between entities. Each relationship requires source, target, and type.",
       "items": {
         "type": "object",
         "additionalProperties": true,
@@ -121,103 +71,27 @@
         "properties": {
           "source": {
             "type": "string",
-            "description": "Required source entity name or ID (matches entities[].name or entities[].id). Must start with emoji followed by space and text for UI readability.",
-            "minLength": 1,
-            "pattern": "^[^\\x00-\\x7F]+\\s+[a-zA-Z0-9].*$"
+            "description": "Source entity name or ID",
+            "minLength": 1
           },
           "target": {
             "type": "string",
-            "description": "Required target entity name or ID. Must start with emoji followed by space and text for UI readability. Note: comma-separated multiple targets are deprecated (will be rejected in v2.0).",
-            "minLength": 1,
-            "pattern": "^[^\\x00-\\x7F]+\\s+[a-zA-Z0-9].*$"
+            "description": "Target entity name or ID",
+            "minLength": 1
           },
           "relationship": {
             "type": "string",
-            "description": "Required relationship type. Compatible with Thinking Maps taxonomy categories: 🌳 Hierarchical (is-a, classifies-as), 🧩 Compositional (part-of, comprises), 🎯 Contextual (located-in, provides-context-for), 💭 Attribute (has-property, exhibits), ⚖️ Comparative (similar-to, contrasts-with), ⏩ Sequential (precedes, follows), ⚡ Causal (causes, enables), 🌉 Analogical (analogous-to, maps-to). Format: emoji + space + verb (e.g. '🌳 is a', '⚡ causes'). Domain-specific verbs allowed.",
-            "minLength": 1,
-            "pattern": "^[^\\x00-\\x7F]+\\s+[a-zA-Z0-9].*$"
+            "description": "Relationship type (e.g., 'IS_A', 'PART_OF', 'causes')",
+            "minLength": 1
           },
-          "operation": {
+          "category": {
             "type": "string",
-            "enum": ["add", "update", "delete"],
-            "description": "Optional operation for this specific relationship, overrides batch-level default operation"
+            "description": "Relationship category for verb inference and visualization. One of: CAUSAL, HIERARCHICAL, COMPOSITIONAL, CONTEXTUAL, ATTRIBUTIVE, SEQUENTIAL, COMPARATIVE, ANALOGICAL. Auto-inferred from relationship type if not provided."
           },
-          "last_updated": {
-            "type": "string",
-            "format": "date-time",
-            "description": "Optional last updated timestamp for this specific relationship, overrides batch-level default timestamp"
-          },
-          "confidence": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 1,
-            "description": "Optional confidence score for the relationship (0-1), used for conflict resolution"
-          },
-          "explanation": {
-            "type": "string",
-            "description": "Optional explanation for the relationship (used for relationship embedding generation if provided)"
-          },
-          "isInferred": {
-            "type": "boolean",
-            "description": "Optional flag indicating if the relationship was inferred vs manually curated"
-          }
-        }
-      },
-      "if": {"type": "object"},
-      "then": {
-        "required": ["relationships"],
-        "properties": {
-          "relationships": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "additionalProperties": true,
-              "required": ["source", "target", "relationship"],
-              "properties": {
-                "source": {
-                  "type": "string",
-                  "description": "Required source entity name or ID (matches entities[].name or entities[].id). Must start with emoji followed by space and text for UI readability.",
-                  "minLength": 1,
-                  "pattern": "^[^\\x00-\\x7F]+\\s+[a-zA-Z0-9].*$"
-                },
-                "target": {
-                  "type": "string",
-                  "description": "Required target entity name or ID. Must start with emoji followed by space and text for UI readability. Note: comma-separated multiple targets are deprecated (will be rejected in v2.0).",
-                  "minLength": 1,
-                  "pattern": "^[^\\x00-\\x7F]+\\s+[a-zA-Z0-9].*$"
-                },
-                "relationship": {
-                  "type": "string",
-                  "description": "Required relationship type. Compatible with Thinking Maps taxonomy categories. Format: emoji + space + verb. Domain-specific verbs allowed.",
-                  "minLength": 1,
-                  "pattern": "^[^\\x00-\\x7F]+\\s+[a-zA-Z0-9].*$"
-                },
-                "operation": {
-                  "type": "string",
-                  "enum": ["add", "update", "delete"],
-                  "description": "Optional operation for this specific relationship, overrides batch-level default operation"
-                },
-                "last_updated": {
-                  "type": "string",
-                  "format": "date-time",
-                  "description": "Optional last updated timestamp for this specific relationship, overrides batch-level default timestamp"
-                },
-                "confidence": {
-                  "type": "number",
-                  "minimum": 0,
-                  "maximum": 1,
-                  "description": "Optional confidence score for the relationship (0-1), used for conflict resolution"
-                },
-                "explanation": {
-                  "type": "string",
-                  "description": "Optional explanation for the relationship (used for relationship embedding generation if provided)"
-                },
-                "isInferred": {
-                  "type": "boolean",
-                  "description": "Optional flag indicating if the relationship was inferred vs manually curated"
-                }
-              }
-            }
+          "properties": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Arbitrary key-value properties (e.g., confidence, explanation)"
           }
         }
       }

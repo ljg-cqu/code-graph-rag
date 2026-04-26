@@ -77,6 +77,7 @@ The interactive agent has access to these tools:
 | `semantic_search` | Semantic function search by description |
 | `get_function_source` | Retrieve source code by node ID |
 | `get_code_snippet` | Retrieve source code by qualified name |
+| `query_json_graph` | Query JSON-ingested entities and relationships (domain knowledge, competencies, etc.) |
 
 ## Intelligent File Editing
 

@@ -18,6 +18,7 @@ from loguru import logger
 
 from . import constants as cs
 from .config import settings
+from .document.concept_extraction import resolve_entity_category
 from .embedder import EmbeddingCache, get_embedding_provider_instance
 from .embeddings.base import EmbeddingProvider
 from .schemas import IngestionResult, JSONEntity, JSONRelationship, UpdateResult
@@ -145,6 +146,163 @@ def _split_relationship_targets(target: str) -> list[str]:
 
     targets = [part.strip() for part in target.split(",") if part.strip()]
     return targets or [target.strip()]
+
+
+def _extract_emoji_prefix(name: str) -> tuple[str, str | None]:
+    """Extract leading emoji prefix from entity name.
+
+    Handles multi-codepoint emoji including variation selectors (U+FE0F).
+
+    Args:
+        name: Entity name possibly containing emoji prefix.
+
+    Returns:
+        Tuple of (clean_name, emoji_or_none).
+
+    Example:
+        >>> _extract_emoji_prefix("👤 CTO Role")
+        ("CTO Role", "👤")
+    """
+    if not name:
+        return name, None
+
+    idx = 0
+    chars = list(name)
+
+    while idx < len(chars):
+        cp = ord(chars[idx])
+        is_emoji = (
+            (0x2300 <= cp <= 0x23FF)
+            or (0x2600 <= cp <= 0x26FF)
+            or (0x2700 <= cp <= 0x27BF)
+            or (0x1F1E0 <= cp <= 0x1F1FF)
+            or (0x1F300 <= cp <= 0x1F9FF)
+            or (0x1FA00 <= cp <= 0x1FA6F)
+            or (0x1FA70 <= cp <= 0x1FAFF)
+        )
+        if not is_emoji:
+            break
+        idx += 1
+        if idx < len(chars) and ord(chars[idx]) == 0xFE0F:
+            idx += 1
+
+    if idx == 0:
+        return name, None
+
+    emoji = name[:idx]
+    clean_name = name[idx:].strip()
+    return clean_name, emoji
+
+
+def _normalize_relationship_category(category: str) -> str:
+    """Normalize JSON relationship category to internal taxonomy.
+
+    Maps common JSON category names to the canonical categories used
+    by VERB_REGISTRY and internal relationship classification.
+
+    Args:
+        category: Raw category string from JSON relationship data.
+
+    Returns:
+        Normalized canonical category name, defaults to RELATED_TO
+        for empty or unrecognized categories.
+    """
+    if not category or not category.strip():
+        return "RELATED_TO"
+
+    category = category.upper().strip()
+    mapping = {
+        "ATTRIBUTE": "ATTRIBUTIVE",
+        "INFERRED": "RELATED_TO",
+    }
+    result = mapping.get(category, category)
+
+    # Validate against known categories
+    valid_categories = {
+        "CAUSAL", "HIERARCHICAL", "COMPOSITIONAL", "CONTEXTUAL",
+        "ATTRIBUTIVE", "SEQUENTIAL", "COMPARATIVE", "ANALOGICAL", "RELATED_TO",
+    }
+    if result not in valid_categories:
+        return "RELATED_TO"
+
+    return result
+
+
+def _infer_relationship_verb(
+    category: str,
+    from_type: str,
+    to_type: str,
+) -> str:
+    """Infer specific verb from relationship context.
+
+    Uses type-specific patterns with fallback to category default.
+
+    Args:
+        category: Relationship category (CAUSAL, COMPOSITIONAL, etc.).
+        from_type: Source entity type.
+        to_type: Target entity type.
+
+    Returns:
+        Inferred verb string.
+    """
+    normalized_category = _normalize_relationship_category(category)
+
+    TYPE_VERB_PATTERNS: dict[str, dict[tuple[str, str], str]] = {
+        "CAUSAL": {
+            ("Mindset", "Competency"): "enables",
+            ("Competency", "Competency"): "complements",
+            ("Framework", "Competency"): "develops",
+            ("Framework", "Tool"): "provides",
+            ("SafetyBoundary", "Risk"): "prevents",
+            ("GovernanceRule", "Process"): "governs",
+        },
+        "COMPOSITIONAL": {
+            ("Framework", "Framework"): "contains",
+            ("Framework", "FrameworkComponent"): "includes",
+            ("FrameworkComponent", "Tool"): "comprises",
+        },
+        "HIERARCHICAL": {
+            ("Framework", "Framework"): "specializes",
+            ("Competency", "Competency"): "subtype-of",
+            ("ProgressionStage", "ProgressionStage"): "precedes",
+        },
+        "CONTEXTUAL": {
+            ("Layer", "Construct"): "defines-context",
+            ("Stakeholder", "Process"): "participates-in",
+        },
+        "SEQUENTIAL": {
+            ("ProgressionStage", "ProgressionStage"): "precedes",
+            ("Process", "Process"): "follows",
+        },
+        "COMPARATIVE": {
+            ("Competency", "Competency"): "contrasts-with",
+            ("Framework", "Framework"): "differs-from",
+        },
+        "ATTRIBUTIVE": {
+            ("Framework", "Property"): "characterizes",
+            ("Competency", "Attribute"): "exhibits",
+        },
+    }
+
+    DEFAULT_VERBS: dict[str, str] = {
+        "CAUSAL": "influences",
+        "COMPOSITIONAL": "part-of",
+        "HIERARCHICAL": "is-a",
+        "CONTEXTUAL": "contextualizes",
+        "SEQUENTIAL": "precedes",
+        "COMPARATIVE": "compares-to",
+        "ATTRIBUTIVE": "has-property",
+        "ANALOGICAL": "analogous-to",
+        "RELATED_TO": "related-to",
+    }
+
+    patterns = TYPE_VERB_PATTERNS.get(normalized_category, {})
+    key = (from_type, to_type)
+
+    if key in patterns:
+        return patterns[key]
+
+    return DEFAULT_VERBS.get(normalized_category, "related-to")
 
 
 def _batch_operation(data: dict[str, Any]) -> str:
@@ -290,6 +448,11 @@ def validate_json_input(
     errors: list[str] = []
     try:
         normalized_data = copy.deepcopy(data)
+        # Pre-normalize relationship wrapper objects ({"relationships": [...]})
+        # before schema validation so _extract_relationships logic is respected
+        raw_relationships = normalized_data.get("relationships", [])
+        if isinstance(raw_relationships, dict):
+            normalized_data["relationships"] = raw_relationships.get("relationships", [])
         jsonschema.validate(instance=normalized_data, schema=INGESTION_SCHEMA)
 
         errors.extend(_normalize_entities(normalized_data))
@@ -906,18 +1069,39 @@ def _entity_properties(
     metadata: dict[str, Any],
 ) -> dict[str, Any]:
     entity_id = str(entity["id"])
-    name = str(entity["name"])
+    name = str(entity.get("name", ""))
     entity_type = str(entity.get("type") or "Entity")
+
+    clean_name, emoji = _extract_emoji_prefix(name)
     labels = _entity_labels(entity)
     properties = dict(_metadata_properties(metadata))
     properties.update(copy.deepcopy(entity.get("properties") or {}))
+
     properties["id"] = entity_id
     properties["entity_id"] = entity_id
     properties["unique_id"] = _build_unique_id(dataset_id, entity_id)
-    properties["name"] = name
+    properties["qualified_name"] = properties["unique_id"]
+    properties["name"] = clean_name
     properties["type"] = entity_type
     properties["dataset_id"] = dataset_id
     properties["entity_labels"] = labels
+
+    if emoji:
+        properties["emoji"] = emoji
+        properties["display_name"] = name
+
+    category, subtype, cat_emoji = resolve_entity_category(
+        declared_category=None,
+        declared_subtype=entity_type,
+        definition=properties.get("description", ""),
+    )
+    properties["entity_category"] = category
+    properties["entity_subtype"] = subtype or entity_type
+    properties["entity_emoji"] = cat_emoji
+
+    properties["pagerank_score"] = 0.1
+    properties["community_id"] = -1
+    properties["community_importance"] = 0.0
 
     if entity.get("last_updated"):
         properties["last_updated"] = str(entity["last_updated"])
@@ -929,6 +1113,7 @@ def _relationship_properties(
     dataset_id: str,
     relationship: dict[str, Any],
     metadata: dict[str, Any],
+    entities_by_id: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     properties = dict(_metadata_properties(metadata))
     properties.update(copy.deepcopy(relationship.get("properties") or {}))
@@ -944,6 +1129,37 @@ def _relationship_properties(
         properties["explanation"] = str(relationship["explanation"])
     if relationship.get("isInferred") is not None:
         properties["isInferred"] = bool(relationship["isInferred"])
+
+    # Determine and store relationship category
+    raw_category = str(
+        relationship.get("category")
+        or relationship.get("relationship")
+        or "RELATED_TO"
+    )
+    normalized_category = _normalize_relationship_category(raw_category)
+
+    # Store category for filtering and visualization
+    if "relationship_category" not in properties:
+        properties["relationship_category"] = normalized_category
+
+    # Store category emoji for visualization
+    if "relationship_emoji" not in properties:
+        properties["relationship_emoji"] = cs.CATEGORY_EMOJI_MAP.get(
+            normalized_category, "🔗"
+        )
+
+    if "verb" not in properties and entities_by_id:
+        source_id = str(relationship.get("source", ""))
+        target_id = str(relationship.get("target", ""))
+
+        source_entity = entities_by_id.get(source_id, {})
+        target_entity = entities_by_id.get(target_id, {})
+
+        properties["verb"] = _infer_relationship_verb(
+            normalized_category,
+            source_entity.get("type", "Entity"),
+            target_entity.get("type", "Entity"),
+        )
 
     return properties
 
@@ -1140,6 +1356,7 @@ def ingest_relationships(
     dry_run: bool = False,
     incremental: bool = False,
     graph_connection: MemgraphIngestor | None = None,
+    entities_by_id: dict[str, dict[str, Any]] | None = None,
 ) -> OperationSummary:
     summary = OperationSummary()
     existing_relationships: dict[tuple[str, str, str], str | None] = {}
@@ -1278,6 +1495,7 @@ def ingest_relationships(
                         dataset_id,
                         relationship,
                         metadata,
+                        entities_by_id=entities_by_id,
                     ),
                 },
             )
@@ -1497,6 +1715,10 @@ def _ingest_relationship_file(
     dry_run: bool,
     incremental: bool,
 ) -> OperationSummary:
+    entity_lookup = {
+        str(e.get("id")): e for e in prepared_file.entities if e.get("id")
+    }
+
     if dry_run:
         return ingest_relationships(
             prepared_file.dataset_id,
@@ -1507,6 +1729,7 @@ def _ingest_relationship_file(
             dry_run=True,
             incremental=incremental,
             graph_connection=None,
+            entities_by_id=entity_lookup,
         )
 
     with _create_json_ingestor(batch_size) as graph_connection:
@@ -1520,7 +1743,75 @@ def _ingest_relationship_file(
             dry_run=False,
             incremental=incremental,
             graph_connection=graph_connection,
+            entities_by_id=entity_lookup,
         )
+
+
+def _compute_json_graph_pagerank() -> int:
+    """Compute PageRank for JSON graph entities.
+
+    Uses direct Cypher execution against the JSON graph instance.
+    Falls back gracefully if MAGE procedures are unavailable.
+
+    Returns:
+        Number of nodes updated with PageRank score.
+    """
+    logger.info("Computing PageRank for JSON graph...")
+
+    try:
+        with _create_json_ingestor(
+            settings.JSON_MEMGRAPH_BATCH_SIZE
+        ) as graph_connection:
+            rows = graph_connection.fetch_all(
+                """
+                CALL pagerank.get() YIELD node, rank
+                SET node.pagerank_score = rank
+                RETURN count(node) AS updated_count;
+                """,
+            )
+            updated = int(rows[0].get("updated_count", 0)) if rows else 0
+            logger.info(f"Updated PageRank for {updated} JSON entities")
+            return updated
+    except Exception as exc:
+        message = str(exc).lower()
+        if "there is no procedure named" in message or (
+            "procedure" in message and "not found" in message
+        ):
+            logger.info(
+                "Skipping PageRank for JSON graph: "
+                "pagerank.get() not available (Memgraph Community or MAGE not installed)"
+            )
+        else:
+            logger.warning(f"Failed to compute PageRank for JSON graph: {exc}")
+        return 0
+
+
+def _create_json_graph_indexes() -> None:
+    """Create property indexes for JSON graph query optimization.
+
+    Indexes improve filtering performance on entity_category, type,
+    pagerank_score for nodes, and relationship_category for edges.
+    Vector index is managed separately by recreate_json_vector_index().
+    """
+    indexes = [
+        # Node indexes
+        "CREATE INDEX IF NOT EXISTS FOR (n:JsonEntity) ON (n.entity_category);",
+        "CREATE INDEX IF NOT EXISTS FOR (n:JsonEntity) ON (n.type);",
+        "CREATE INDEX IF NOT EXISTS FOR (n:JsonEntity) ON (n.pagerank_score);",
+        # Edge index for relationship category filtering
+        "CREATE INDEX IF NOT EXISTS FOR ()-[r]-() ON (r.relationship_category);",
+    ]
+    try:
+        with _create_json_ingestor(
+            settings.JSON_MEMGRAPH_BATCH_SIZE
+        ) as graph_connection:
+            for index_cypher in indexes:
+                try:
+                    graph_connection.execute_write(index_cypher)
+                except Exception as exc:
+                    logger.debug(f"Index creation warning: {exc}")
+    except Exception as exc:
+        logger.warning(f"Failed to create JSON graph indexes: {exc}")
 
 
 def delete_dataset(
@@ -1653,6 +1944,7 @@ def ingest_json_data(
     metadata_override: dict[str, Any] | None = None,
     exclude_patterns: list[str] | None = None,
     filter_preset: str = "lenient",
+    compute_pagerank: bool = True,
 ) -> IngestionResult:
     del conflict_resolution
 
@@ -1798,6 +2090,12 @@ def ingest_json_data(
                     ),
                     is_entity_summary=False,
                 )
+
+        # Post-ingestion: create indexes and compute PageRank
+        if not dry_run and result.entities_ingested > 0:
+            _create_json_graph_indexes()
+            if compute_pagerank:
+                _compute_json_graph_pagerank()
 
         # Log completion with guidance if nothing was ingested
         if result.entities_ingested == 0 and result.files_processed > 0:

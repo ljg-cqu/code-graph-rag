@@ -1,0 +1,256 @@
+// Code-Graph-RAG Style for Memgraph Lab
+// Displays entity emoji + name on nodes, and relationship emoji + verb on edges
+
+// A palette of colors for entity categories
+Define(COLOR_PALETTE, AsArray(
+  #E67E22, #9B59B6, #3498DB, #1ABC9C,
+  #2ECC71, #E74C3C, #95A5A6
+))
+Define(COLOR_PALETTE_ITER, AsIterator(COLOR_PALETTE))
+
+Define(RandomColor, Function(RGB(RandomInt(255), RandomInt(255), RandomInt(255))))
+Define(GetNextColor, Function(
+  Coalesce(Next(COLOR_PALETTE_ITER), RandomColor())
+))
+
+// Cache map for label colors
+Define(ColorByLabel, AsMap())
+Define(GetColorByLabel, Function(labels, Coalesce(
+  Get(ColorByLabel, labels),
+  Set(ColorByLabel, labels, GetNextColor())
+)))
+Define(JoinLabels, Function(labels, Join(Sort(labels), ":")))
+
+// ============================================
+// BASELINE NODE STYLE
+// ============================================
+
+@NodeStyle {
+  Define(COLOR, GetColorByLabel(JoinLabels(Labels(node))))
+
+  size: 6
+  color: COLOR
+  color-hover: Lighter(COLOR)
+  color-selected: Darker(COLOR)
+  border-width: 0.6
+  border-color: #1D1D1D
+  font-size: 3
+  font-color: #1D1D1D
+}
+
+// Default label: show node labels
+@NodeStyle Greater(Size(Labels(node)), 0) {
+  label: Format(":{}", Join(Labels(node), " :"))
+}
+
+// ============================================
+// JSON ENTITY NODES - Emoji + Name Display
+// ============================================
+
+// For JsonEntity nodes with entity_emoji property: show "emoji name"
+@NodeStyle And(HasLabel(node, "JsonEntity"), HasProperty(node, "entity_emoji")) {
+  label: AsText(Property(node, "entity_emoji"), " ", Property(node, "name"))
+}
+
+// For JsonEntity nodes without entity_emoji: show just the name
+@NodeStyle And(HasLabel(node, "JsonEntity"), Not(HasProperty(node, "entity_emoji"))) {
+  label: AsText(Property(node, "name"))
+}
+
+// Entity Category Color Coding for JsonEntity
+// CONCRETE_ENTITY - Orange (Tools, Products)
+@NodeStyle And(HasLabel(node, "JsonEntity"), Equal(Property(node, "entity_category"), "CONCRETE_ENTITY")) {
+  color: #E67E22
+  color-hover: #F39C12
+  color-selected: #D35400
+}
+
+// EVENT_PROCESS - Purple (Deployments, Migrations)
+@NodeStyle And(HasLabel(node, "JsonEntity"), Equal(Property(node, "entity_category"), "EVENT_PROCESS")) {
+  color: #9B59B6
+  color-hover: #A569BD
+  color-selected: #8E44AD
+}
+
+// INFORMATION_EXPRESSION - Blue (APIs, Protocols)
+@NodeStyle And(HasLabel(node, "JsonEntity"), Equal(Property(node, "entity_category"), "INFORMATION_EXPRESSION")) {
+  color: #3498DB
+  color-hover: #5DADE2
+  color-selected: #2980B9
+}
+
+// PROPERTY_ATTRIBUTE - Teal (Metrics, SLIs)
+@NodeStyle And(HasLabel(node, "JsonEntity"), Equal(Property(node, "entity_category"), "PROPERTY_ATTRIBUTE")) {
+  color: #1ABC9C
+  color-hover: #48C9B0
+  color-selected: #16A085
+}
+
+// SYSTEM_STRUCTURE - Green (Frameworks, Layers)
+@NodeStyle And(HasLabel(node, "JsonEntity"), Equal(Property(node, "entity_category"), "SYSTEM_STRUCTURE")) {
+  color: #2ECC71
+  color-hover: #58D68D
+  color-selected: #27AE60
+}
+
+// AGENT_ROLE - Red (Roles, Stakeholders)
+@NodeStyle And(HasLabel(node, "JsonEntity"), Equal(Property(node, "entity_category"), "AGENT_ROLE")) {
+  color: #E74C3C
+  color-hover: #EC7063
+  color-selected: #C0392B
+}
+
+// ABSTRACT_CONCEPT - Gray (Concepts, Patterns)
+@NodeStyle And(HasLabel(node, "JsonEntity"), Equal(Property(node, "entity_category"), "ABSTRACT_CONCEPT")) {
+  color: #95A5A6
+  color-hover: #BDC3C7
+  color-selected: #7F8C8D
+}
+
+// ============================================
+// DOCUMENT CONCEPT NODES
+// ============================================
+
+@NodeStyle HasLabel(node, "Concept") {
+  color: #8E44AD
+  color-hover: #A569BD
+  color-selected: #7D3C98
+  size: 8
+}
+
+@NodeStyle And(HasLabel(node, "Concept"), HasProperty(node, "entity_emoji")) {
+  label: AsText(Property(node, "entity_emoji"), " ", Property(node, "name"))
+}
+
+// ============================================
+// CODE GRAPH NODES
+// ============================================
+
+@NodeStyle HasLabel(node, "Function") {
+  color: #27AE60
+  size: 7
+}
+
+@NodeStyle HasLabel(node, "Class") {
+  color: #2980B9
+  size: 10
+}
+
+@NodeStyle HasLabel(node, "Method") {
+  color: #16A085
+  size: 6
+}
+
+@NodeStyle HasLabel(node, "Module") {
+  color: #8E44AD
+  size: 12
+}
+
+// ============================================
+// BASELINE EDGE STYLE
+// ============================================
+
+@EdgeStyle {
+  color: #7F8C8D
+  color-hover: #1D1D1D
+  color-selected: #1D1D1D
+  width: 0.3
+  width-hover: 0.9
+  width-selected: 0.9
+  font-size: 3
+  font-color: #1D1D1D
+}
+
+// Show edge label only if there are fewer than 30 edges
+@EdgeStyle Less(EdgeCount(graph), 30) {
+  label: Type(edge)
+}
+
+// ============================================
+// RELATIONSHIP EMOJI + VERB DISPLAY
+// ============================================
+
+// With both relationship_emoji and verb: show "emoji verb"
+@EdgeStyle And(HasProperty(edge, "relationship_emoji"), HasProperty(edge, "verb")) {
+  label: AsText(Property(edge, "relationship_emoji"), " ", Property(edge, "verb"))
+}
+
+// With relationship_emoji only (no verb): show "emoji Type"
+@EdgeStyle And(HasProperty(edge, "relationship_emoji"), Not(HasProperty(edge, "verb"))) {
+  label: AsText(Property(edge, "relationship_emoji"), " ", Type(edge))
+}
+
+// With verb only (no emoji): show just the verb
+@EdgeStyle And(Not(HasProperty(edge, "relationship_emoji")), HasProperty(edge, "verb")) {
+  label: AsText(Property(edge, "verb"))
+}
+
+// ============================================
+// RELATIONSHIP CATEGORY COLOR CODING
+// ============================================
+
+// CAUSAL - Red (causes/influences)
+@EdgeStyle Equal(Property(edge, "relationship_category"), "CAUSAL") {
+  color: #E74C3C
+  color-hover: #EC7063
+  color-selected: #C0392B
+}
+
+// HIERARCHICAL - Blue (is-a/subtype)
+@EdgeStyle Equal(Property(edge, "relationship_category"), "HIERARCHICAL") {
+  color: #3498DB
+  color-hover: #5DADE2
+  color-selected: #2980B9
+}
+
+// COMPOSITIONAL - Green (contains/part-of)
+@EdgeStyle Equal(Property(edge, "relationship_category"), "COMPOSITIONAL") {
+  color: #2ECC71
+  color-hover: #58D68D
+  color-selected: #27AE60
+}
+
+// CONTEXTUAL - Purple (context)
+@EdgeStyle Equal(Property(edge, "relationship_category"), "CONTEXTUAL") {
+  color: #9B59B6
+  color-hover: #A569BD
+  color-selected: #8E44AD
+}
+
+// ATTRIBUTIVE - Teal (has-property)
+@EdgeStyle Equal(Property(edge, "relationship_category"), "ATTRIBUTIVE") {
+  color: #1ABC9C
+  color-hover: #48C9B0
+  color-selected: #16A085
+}
+
+// SEQUENTIAL - Orange (precedes)
+@EdgeStyle Equal(Property(edge, "relationship_category"), "SEQUENTIAL") {
+  color: #F39C12
+  color-hover: #F5B041
+  color-selected: #D68910
+}
+
+// COMPARATIVE - Dark Orange (compares)
+@EdgeStyle Equal(Property(edge, "relationship_category"), "COMPARATIVE") {
+  color: #E67E22
+  color-hover: #EB984E
+  color-selected: #CA6F1E
+}
+
+// ANALOGICAL - Dark Teal (similar-to)
+@EdgeStyle Equal(Property(edge, "relationship_category"), "ANALOGICAL") {
+  color: #16A085
+  color-hover: #1ABC9C
+  color-selected: #138D75
+}
+
+// ============================================
+// VIEW STYLE
+// ============================================
+
+@ViewStyle {
+  view: "default"
+  background-color: #FFFFFF00
+  map-tile-layer: "detailed"
+}

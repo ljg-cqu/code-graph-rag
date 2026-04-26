@@ -40,6 +40,7 @@
             "source": "job_001",
             "target": "skill_001",
             "relationship": "REQUIRES_SKILL",
+            "category": "CAUSAL",
             "properties": {
                 "description": "Job requires Python proficiency",
                 "minimum_experience_years": 3
@@ -49,6 +50,7 @@
             "source": "job_001",
             "target": "skill_002",
             "relationship": "REQUIRES_SKILL",
+            "category": "CAUSAL",
             "properties": {
                 "description": "Job requires Neo4j proficiency",
                 "minimum_experience_years": 2

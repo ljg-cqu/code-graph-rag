@@ -332,6 +332,7 @@ def _handle_indexing(
     json_skip_invalid: bool = True,
     json_parallel_workers: int = 10,
     json_exclude: list[str] | None = None,
+    json_compute_pagerank: bool = True,
 ) -> tuple[bool, bool, bool]:
     """Handle code and document indexing before chat.
 
@@ -527,6 +528,7 @@ def _handle_indexing(
                 dry_run=False,
                 parallel_workers=json_parallel_workers,
                 exclude_patterns=json_exclude,
+                compute_pagerank=json_compute_pagerank,
                 # Link ingested data to active document workspace for isolation
                 metadata_override={"workspace": doc_workspace},
             )
@@ -845,6 +847,11 @@ def start(
         "--json-exclude",
         help="Patterns of JSON files to exclude from ingestion (supports glob patterns)",
     ),
+    json_compute_pagerank: bool = typer.Option(
+        True,
+        "--json-compute-pagerank/--no-json-compute-pagerank",
+        help="Compute PageRank scores for JSON graph after ingestion",
+    ),
     # === Realtime Updater Flags ===
     realtime_updater: bool = typer.Option(
         settings.REALTIME_UPDATER_ENABLED,
@@ -1026,6 +1033,7 @@ def start(
         json_skip_invalid=json_skip_invalid,
         json_parallel_workers=json_parallel_workers,
         json_exclude=json_exclude,
+        json_compute_pagerank=json_compute_pagerank,
     )
 
     # If only updating graph (no chat), return

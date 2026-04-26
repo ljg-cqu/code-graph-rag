@@ -28,6 +28,8 @@ class AgenticToolName(StrEnum):
     # Document GraphRAG tools
     QUERY_DOCUMENT_GRAPH = "query_document_graph"
     QUERY_BOTH_GRAPHS = "query_both_graphs"
+    # JSON GraphRAG tools
+    QUERY_JSON_GRAPH = "query_json_graph"
     # Advanced graph algorithm tools
     COMMUNITY_SUMMARY = "community_summary"
     ANALYZE_PATH = "analyze_path"
@@ -102,6 +104,15 @@ QUERY_BOTH_GRAPHS = (
     "Use for comprehensive searches spanning code and documentation. "
     "Results are labeled with their source (code_graph or document_graph). "
     "Examples: 'Tell me everything about authentication', 'Find all information about the API'"
+)
+
+QUERY_JSON_GRAPH = (
+    "Query the JSON knowledge graph for entities and relationships. "
+    "Use for questions about domain concepts, competencies, frameworks, stakeholders, "
+    "or any data ingested from JSON files. Supports semantic search, category filtering, "
+    "and relationship traversal. "
+    "Examples: 'What competencies does a CTO need?', 'Show me all stakeholders', "
+    "'What does Strategic Thinking influence?'"
 )
 
 # (H) Python introspection tool
@@ -388,6 +399,8 @@ AGENTIC_TOOLS: dict[AgenticToolName, str] = {
     # Document GraphRAG tools
     AgenticToolName.QUERY_DOCUMENT_GRAPH: QUERY_DOCUMENT_GRAPH,
     AgenticToolName.QUERY_BOTH_GRAPHS: QUERY_BOTH_GRAPHS,
+    # JSON GraphRAG tools
+    AgenticToolName.QUERY_JSON_GRAPH: QUERY_JSON_GRAPH,
     # Advanced graph algorithm tools
     AgenticToolName.COMMUNITY_SUMMARY: MCP_COMMUNITY_SUMMARY,
     AgenticToolName.ANALYZE_PATH: MCP_ANALYZE_PATH,

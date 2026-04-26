@@ -9,7 +9,6 @@ import re
 import shlex
 import shutil
 import signal
-import subprocess
 import sys
 import uuid
 from collections import deque
@@ -46,7 +45,12 @@ from . import constants as cs
 from . import exceptions as ex
 from . import logs as ls
 from . import tool_errors as te
-from .config import ModelConfig, load_cgrignore_patterns, settings, validate_ai_dependencies
+from .config import (
+    ModelConfig,
+    load_cgrignore_patterns,
+    settings,
+    validate_ai_dependencies,
+)
 from .graph_updater import GraphUpdater
 from .models import AppContext
 from .models_dynamic import DynamicModelInfo
@@ -87,6 +91,7 @@ from .tools.graph_navigation import (
     create_get_project_structure_tool,
 )
 from .tools.graph_query import create_graph_query_tool
+from .tools.json_query import create_query_json_graph_tool
 from .tools.python_inspector import (
     PythonObjectInspector,
     create_inspect_python_object_tool,
@@ -99,12 +104,12 @@ from .tools.shell_command import ShellCommander, create_shell_command_tool
 from .types_defs import (
     CHAT_LOOP_UI,
     OPTIMIZATION_LOOP_UI,
+    ORANGE_STYLE,
     AgentLoopUI,
     CancelledResult,
     ConfirmationToolNames,
     CreateFileArgs,
     GraphData,
-    ORANGE_STYLE,
     RawToolArgs,
     ReplaceCodeArgs,
     ShellCommandArgs,
@@ -824,7 +829,6 @@ async def _run_agent_response_loop(
     model_override_config: ModelConfig | None = None,
 ) -> None:
     from .compat.pydantic_ai import ModelRequest, UserPromptPart
-
     from .orchestrator.investigation_tracker import InvestigationState
     from .orchestrator.sufficiency_analyzer import (
         InvestigationRequirements,
@@ -1190,7 +1194,6 @@ def _update_state_from_tool_returns(
     state: object,
 ) -> None:
     from .compat.pydantic_ai import ModelRequest, ToolReturnPart
-
     from .orchestrator.investigation_tracker import InvestigationState
 
     if not isinstance(state, InvestigationState):
@@ -3089,6 +3092,10 @@ def _initialize_services_and_agent(
             graph_query_tool,
         ]
         tools.extend(doc_tools)
+
+    # Add JSON graph query tool (independent of query_router)
+    query_json_graph_tool = create_query_json_graph_tool()
+    tools.append(query_json_graph_tool)
 
     confirmation_tool_names = ConfirmationToolNames(
         replace_code=file_editor_tool.name,
