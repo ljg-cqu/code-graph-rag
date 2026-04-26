@@ -269,6 +269,7 @@ class ImportProcessor:
                 cs.KEY_PATH: None,
                 cs.KEY_IMPORT_PATH: full_name,
                 cs.KEY_IS_EXTERNAL: True,
+                cs.KEY_ABSOLUTE_PATH: None,
             },
         )
 

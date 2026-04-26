@@ -399,6 +399,7 @@ class CallProcessor:
                     cs.KEY_QUALIFIED_NAME: cs.BUILTIN_MODULE_QN,
                     cs.KEY_NAME: "__builtins__",
                     cs.KEY_IS_VIRTUAL: True,
+                    cs.KEY_ABSOLUTE_PATH: None,
                 },
             )
             self._builtin_module_ensured = True

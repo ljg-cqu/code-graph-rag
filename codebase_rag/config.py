@@ -112,9 +112,7 @@ def format_missing_api_key_errors(
 LOCAL_PROVIDERS = frozenset({cs.Provider.OLLAMA, cs.Provider.LOCAL, cs.Provider.VLLM})
 
 
-def _model_config_from_mapping(entry: Mapping[object, object]) -> ModelConfig:
-    if not all(isinstance(key, str) for key in entry):
-        raise ValueError("ModelConfig mapping keys must be strings")
+def _model_config_from_mapping(entry: Mapping[str, object]) -> ModelConfig:
     provider = entry.get("provider")
     model_id = entry.get("model_id")
     if not isinstance(provider, str) or not isinstance(model_id, str):
@@ -202,7 +200,7 @@ class EmbeddingConfig:
         provider_type: Google provider type (gla/vertex).
         service_account_file: Path to Google service account JSON.
         device: Device for local models (auto/cpu/cuda).
-        ssl_verify: SSL verification — True (default), False to disable, or path to CA bundle.
+        ssl_verify: SSL verification — True (default) or False to disable.
         proxy: Optional HTTP proxy URL for external API requests.
         fallback_to_local: Fall back to local embedding model on API failure.
         fallback_model: Local model to use when fallback is triggered.
@@ -643,13 +641,13 @@ class AppConfig(BaseSettings):
         default=3,
         ge=1,
         le=10,
-        description="Consecutive timeouts before fast-fail mode",
+        description="Consecutive timeouts before fast-fail mode on first attempt of new chunks",
     )
     DOC_CONCEPT_FAST_FAIL_TIMEOUT: float = Field(
         default=5.0,
         ge=1.0,
         le=30.0,
-        description="Seconds timeout when in fast-fail mode",
+        description="Seconds timeout when in fast-fail mode (applies only to attempt 0)",
     )
     DOC_CONCEPT_PROBE_TIMEOUT: float = Field(
         default=10.0,
@@ -1471,11 +1469,16 @@ class AppConfig(BaseSettings):
         )
 
     def parse_model_string(self, model_string: str) -> tuple[str, str]:
+        model_string = model_string.strip()
         if ":" not in model_string:
             return cs.Provider.OLLAMA, model_string
         provider, model = model_string.split(":", 1)
+        provider = provider.strip()
+        model = model.strip()
         if not provider:
             raise ValueError(ex.PROVIDER_EMPTY)
+        if not model:
+            raise ValueError(ex.MODEL_ID_EMPTY)
         return provider.lower(), model
 
     def resolve_batch_size(self, batch_size: int | None) -> int:
@@ -1489,10 +1492,7 @@ class AppConfig(BaseSettings):
     def validate_embedding_max_length(cls, v: int, info) -> int:
         """Validate EMBEDDING_MAX_LENGTH against model-specific context limits."""
         model = info.data.get("EMBEDDING_MODEL", "")
-        if "unixcoder" in model.lower():
-            max_context = 512
-        else:
-            max_context = cs.UNIXCODER_MAX_CONTEXT - 4  # Reserve for special tokens
+        max_context = cs.EMBEDDING_MODEL_MAX_LENGTHS.get(model, 2048)
         if v > max_context:
             raise ValueError(
                 f"EMBEDDING_MAX_LENGTH ({v}) must be <= {max_context} "

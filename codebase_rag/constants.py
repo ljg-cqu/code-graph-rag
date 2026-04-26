@@ -1597,6 +1597,24 @@ UNIXCODER_MASK_TOKEN = "<mask0>"
 UNIXCODER_BUFFER_BIAS = "bias"
 UNIXCODER_MAX_CONTEXT = 1024
 
+EMBEDDING_MODEL_MAX_LENGTHS: dict[str, int] = {
+    "microsoft/unixcoder-base": 512,
+    "text-embedding-3-small": 8191,
+    "text-embedding-3-large": 8191,
+    "text-embedding-ada-002": 8191,
+    "text-embedding-004": 2048,
+    "text-embedding-005": 2048,
+    "embedding-001": 2048,
+    "sentence-transformers/all-MiniLM-L6-v2": 512,
+    "BAAI/bge-small-en-v1.5": 512,
+    "BAAI/bge-base-en-v1.5": 512,
+    "BAAI/bge-large-en-v1.5": 512,
+    "nomic-embed-text": 512,
+    "mxbai-embed-large": 512,
+    "all-minilm": 512,
+    "snowflake-arctic-embed": 512,
+}
+
 REL_TYPE_CALLS = "CALLS"
 REL_TYPE_IMPORTS = "IMPORTS"
 

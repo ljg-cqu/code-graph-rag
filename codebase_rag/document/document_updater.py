@@ -2786,7 +2786,6 @@ class DocumentGraphUpdater:
                     "type": concept.type,
                     "definition": concept.definition,
                     "confidence": concept.confidence,
-                    "source_chunk_qn": concept.source_chunk_qn,
                     "entity_category": concept.entity_category,
                     "entity_subtype": concept.entity_subtype,
                     "entity_emoji": concept.entity_emoji,
@@ -2824,11 +2823,47 @@ class DocumentGraphUpdater:
         )
 
         if concept_nodes:
-            self._merge_concept_nodes_batch(concept_ingestor, concept_nodes)
+            deduped_nodes = self._deduplicate_concept_nodes(concept_nodes)
+            if len(deduped_nodes) < len(concept_nodes):
+                logger.info(
+                    f"Deduplicated {len(concept_nodes)} concepts to "
+                    f"{len(deduped_nodes)} unique nodes"
+                )
+            self._merge_concept_nodes_batch(concept_ingestor, deduped_nodes)
         if mention_rels:
             self._create_mentions_batch(concept_ingestor, mention_rels, workspace)
         if concept_relationships:
             self._store_concept_relationships_batch(concept_ingestor, concept_relationships, workspace)
+
+    def _deduplicate_concept_nodes(
+        self,
+        concept_nodes: list[dict[str, object]],
+    ) -> list[dict[str, object]]:
+        """Deduplicate concepts by qualified_name, keeping highest-confidence instance.
+
+        Merges aliases across duplicate extractions and sorts by qualified_name
+        for reproducible MERGE behavior.
+        """
+        seen: dict[str, dict[str, object]] = {}
+        for node in concept_nodes:
+            qn = str(node["qualified_name"])
+            if qn not in seen:
+                seen[qn] = dict(node)
+            else:
+                existing = seen[qn]
+                # Merge aliases
+                existing_aliases = set(existing.get("aliases") or [])
+                new_aliases = set(node.get("aliases") or [])
+                merged_aliases = sorted(existing_aliases | new_aliases)
+                existing["aliases"] = merged_aliases
+                # Keep highest-confidence instance
+                existing_conf = float(existing.get("confidence") or 0.0)
+                new_conf = float(node.get("confidence") or 0.0)
+                if new_conf > existing_conf:
+                    seen[qn] = dict(node)
+                    seen[qn]["aliases"] = merged_aliases
+        # Sort by qualified_name for reproducible batch ordering
+        return sorted(seen.values(), key=lambda n: str(n["qualified_name"]))
 
     def _merge_concept_nodes_batch(
         self,
@@ -2847,7 +2882,6 @@ class DocumentGraphUpdater:
                 c.type = node.type,
                 c.definition = node.definition,
                 c.confidence = node.confidence,
-                c.source_chunk_qn = node.source_chunk_qn,
                 c.entity_category = node.entity_category,
                 c.entity_subtype = node.entity_subtype,
                 c.entity_emoji = node.entity_emoji

@@ -86,6 +86,13 @@ def create_inheritance_relationship(
                 cs.KEY_QUALIFIED_NAME: parent_qn,
                 cs.KEY_NAME: parent_qn.rsplit(".", 1)[-1],
                 cs.KEY_IS_EXTERNAL: True,
+                cs.KEY_DECORATORS: [],
+                cs.KEY_START_LINE: 0,
+                cs.KEY_END_LINE: 0,
+                cs.KEY_DOCSTRING: None,
+                cs.KEY_IS_EXPORTED: False,
+                cs.KEY_PATH: None,
+                cs.KEY_ABSOLUTE_PATH: None,
             },
         )
     ingestor.ensure_relationship_batch(

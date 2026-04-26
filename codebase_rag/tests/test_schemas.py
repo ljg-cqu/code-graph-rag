@@ -103,14 +103,17 @@ class TestQueryGraphData:
         )
         assert data.results == [{"name": "test", "desc": None}]
 
-    def test_skips_non_dict_rows(self) -> None:
-        """Non-dict rows should be skipped."""
-        data = QueryGraphData(
-            query_used="MATCH (n) RETURN n",
-            results=[{"valid": "row"}, "invalid", 123],  # type: ignore
-            summary="Processed",
-        )
-        assert data.results == [{"valid": "row"}]
+    def test_rejects_non_dict_rows(self) -> None:
+        """Non-dict rows should raise ValidationError."""
+        import pytest
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="each result row must be a dict"):
+            QueryGraphData(
+                query_used="MATCH (n) RETURN n",
+                results=[{"valid": "row"}, "invalid", 123],  # type: ignore
+                summary="Processed",
+            )
 
     def test_converts_non_standard_types_to_string(self) -> None:
         """Non-standard types should be converted to strings."""

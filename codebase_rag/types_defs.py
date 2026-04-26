@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
     from .models import LanguageSpec
 
-type LanguageLoader = Callable[[], object] | None
+type LanguageLoader = Callable[[], Language] | None
 
 type PropertyScalar = str | int | float | bool
 type PropertyValue = PropertyScalar | Sequence[PropertyValue] | dict[str, PropertyValue] | None
@@ -189,7 +189,7 @@ class EmbeddingConfigKwargs(TypedDict, total=False):
     provider_type: str | None
     service_account_file: str | None
     device: str | None
-    ssl_verify: bool | str
+    ssl_verify: bool
     proxy: str | None
     fallback_to_local: bool
     fallback_model: str
@@ -395,7 +395,7 @@ MCPToolArguments = dict[str, str | int | float | bool | None]
 class MCPInputSchemaProperty(TypedDict, total=False):
     type: str
     description: str
-    default: str | int | float | bool
+    default: str | int | float | bool | None
 
 
 MCPInputSchemaProperties = dict[str, MCPInputSchemaProperty]
@@ -429,7 +429,6 @@ class CodeSnippetResultDict(TypedDict, total=False):
     docstring: str | None
     found: bool
     error_message: str | None
-    error: str
 
 
 class ListProjectsSuccessResult(TypedDict):
@@ -497,35 +496,35 @@ NODE_SCHEMAS: tuple[NodeSchema, ...] = (
     ),
     NodeSchema(
         NodeLabel.MODULE,
-        "{qualified_name: string, name: string, path: string | null, import_path: string | null, absolute_path: string, is_external: bool | null}",
+        "{qualified_name: string, name: string, path: string | null, import_path: string | null, absolute_path: string | null, is_external: bool | null, is_virtual: bool | null}",
     ),
     NodeSchema(
         NodeLabel.CLASS,
-        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string, is_exported: bool, path: string, absolute_path: string, embedding: list[float] | null, embedding_model: string | null, embedding_version: int | null}",
+        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string | null, is_exported: bool, is_external: bool | null, path: string, absolute_path: string, embedding: list[float] | null, embedding_model: string | null, embedding_version: int | null}",
     ),
     NodeSchema(
         NodeLabel.FUNCTION,
-        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string, is_exported: bool, path: string, absolute_path: string, embedding: list[float] | null, embedding_model: string | null, embedding_version: int | null}",
+        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string | null, is_exported: bool, path: string, absolute_path: string, embedding: list[float] | null, embedding_model: string | null, embedding_version: int | null}",
     ),
     NodeSchema(
         NodeLabel.METHOD,
-        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string, is_exported: bool, path: string, absolute_path: string, embedding: list[float] | null, embedding_model: string | null, embedding_version: int | null}",
+        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string | null, is_exported: bool, path: string, absolute_path: string, embedding: list[float] | null, embedding_model: string | null, embedding_version: int | null}",
     ),
     NodeSchema(
         NodeLabel.INTERFACE,
-        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string, is_exported: bool, path: string, absolute_path: string, embedding: list[float] | null, embedding_model: string | null, embedding_version: int | null}",
+        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string | null, is_exported: bool, path: string, absolute_path: string, embedding: list[float] | null, embedding_model: string | null, embedding_version: int | null}",
     ),
     NodeSchema(
         NodeLabel.ENUM,
-        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string, is_exported: bool, path: string, absolute_path: string, embedding: list[float] | null, embedding_model: string | null, embedding_version: int | null}",
+        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string | null, is_exported: bool, path: string, absolute_path: string, embedding: list[float] | null, embedding_model: string | null, embedding_version: int | null}",
     ),
     NodeSchema(
         NodeLabel.TYPE,
-        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string, is_exported: bool, path: string, absolute_path: string, embedding: list[float] | null, embedding_model: string | null, embedding_version: int | null}",
+        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string | null, is_exported: bool, path: string, absolute_path: string, embedding: list[float] | null, embedding_model: string | null, embedding_version: int | null}",
     ),
     NodeSchema(
         NodeLabel.UNION,
-        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string, is_exported: bool, path: string, absolute_path: string, embedding: list[float] | null, embedding_model: string | null, embedding_version: int | null}",
+        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string | null, is_exported: bool, path: string, absolute_path: string, embedding: list[float] | null, embedding_model: string | null, embedding_version: int | null}",
     ),
     NodeSchema(
         NodeLabel.MODULE_INTERFACE,
@@ -539,11 +538,11 @@ NODE_SCHEMAS: tuple[NodeSchema, ...] = (
     # Solidity-specific node schemas
     NodeSchema(
         NodeLabel.CONTRACT,
-        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string, is_exported: bool, is_abstract: bool, path: string, absolute_path: string, embedding: list[float] | null, embedding_model: string | null, embedding_version: int | null}",
+        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string | null, is_exported: bool, is_abstract: bool, path: string, absolute_path: string, embedding: list[float] | null, embedding_model: string | null, embedding_version: int | null}",
     ),
     NodeSchema(
         NodeLabel.LIBRARY,
-        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string, is_exported: bool, path: string, absolute_path: string, embedding: list[float] | null, embedding_model: string | null, embedding_version: int | null}",
+        "{qualified_name: string, name: string, decorators: list[string], start_line: int, end_line: int, docstring: string | null, is_exported: bool, path: string, absolute_path: string, embedding: list[float] | null, embedding_model: string | null, embedding_version: int | null}",
     ),
     NodeSchema(
         NodeLabel.EVENT,
@@ -577,7 +576,7 @@ NODE_SCHEMAS: tuple[NodeSchema, ...] = (
     # Document GraphRAG concept nodes
     NodeSchema(
         NodeLabel.CONCEPT,
-        "{qualified_name: string, name: string, aliases: list[string] | null, definition: string | null, type: string | null, workspace: string, source_chunk_qn: string | null, source_document: string | null, confidence: float | null, indexed_at: string | null}",
+        "{qualified_name: string, name: string, aliases: list[string] | null, definition: string | null, type: string | null, entity_category: string | null, entity_subtype: string | null, entity_emoji: string | null, workspace: string, source_document: string | null, confidence: float | null, indexed_at: string | null}",
     ),
     NodeSchema(
         NodeLabel.TOPIC,
@@ -586,19 +585,19 @@ NODE_SCHEMAS: tuple[NodeSchema, ...] = (
     # AutoHotkey node schemas
     NodeSchema(
         NodeLabel.HOTKEY,
-        "{qualified_name: string, name: string, key_sequence: string, replacement: string | null, path: string, absolute_path: string, start_line: int, end_line: int}",
+        "{qualified_name: string, name: string, key_sequence: string, replacement: string | null, path: string, absolute_path: string, start_line: int, end_line: int, embedding: list[float] | null, embedding_model: string | null, embedding_version: int | null}",
     ),
     NodeSchema(
         NodeLabel.HOTSTRING,
-        "{qualified_name: string, name: string, trigger: string, replacement: string | null, options: list[string], path: string, absolute_path: string, start_line: int, end_line: int}",
+        "{qualified_name: string, name: string, trigger: string, replacement: string | null, options: list[string], path: string, absolute_path: string, start_line: int, end_line: int, embedding: list[float] | null, embedding_model: string | null, embedding_version: int | null}",
     ),
     NodeSchema(
         NodeLabel.LABEL,
-        "{qualified_name: string, name: string, path: string, absolute_path: string, start_line: int, end_line: int}",
+        "{qualified_name: string, name: string, path: string, absolute_path: string, start_line: int, end_line: int, embedding: list[float] | null, embedding_model: string | null, embedding_version: int | null}",
     ),
     NodeSchema(
         NodeLabel.CLASS_AHK,
-        "{qualified_name: string, name: string, path: string, absolute_path: string, start_line: int, end_line: int, docstring: string | null}",
+        "{qualified_name: string, name: string, path: string, absolute_path: string, start_line: int, end_line: int, docstring: string | null, embedding: list[float] | null, embedding_model: string | null, embedding_version: int | null}",
     ),
     # JSON content node schemas
     # NOTE: `path` on JSON nodes is the relative filesystem path of the source file,

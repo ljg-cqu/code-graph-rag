@@ -1082,7 +1082,7 @@ class GraphUpdater:
         non-pickleable tree_sitter.Node objects.
         """
         if not self._indexed_code_files:
-            logger.warning("No indexed files available for call processing")
+            logger.info("No indexed files available for call processing")
             return
 
         logger.info(f"Processing calls in {len(self._indexed_code_files)} files...")

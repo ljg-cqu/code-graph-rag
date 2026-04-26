@@ -80,6 +80,46 @@ class TestResolveEntityCategory:
         assert category == "CONCRETE_ENTITY"
         assert emoji == "🧱"
 
+    def test_emoji_prefixed_category_stripped(self) -> None:
+        """Step 1: Emoji-prefixed declared category should be stripped and matched."""
+        category, subtype, emoji = resolve_entity_category(
+            "🏗️ SYSTEM_STRUCTURE", "Cognitive System", ""
+        )
+        assert category == "SYSTEM_STRUCTURE"
+        assert subtype == "Cognitive System"
+        assert emoji == "🏗️"
+
+    def test_multiple_emoji_prefixed_categories(self) -> None:
+        """Various emoji-prefixed categories resolve correctly."""
+        test_cases = [
+            ("📏 PROPERTY_ATTRIBUTE", "PROPERTY_ATTRIBUTE", "📏"),
+            ("⏱️ EVENT_PROCESS", "EVENT_PROCESS", "⏱️"),
+            ("📨 INFORMATION_EXPRESSION", "INFORMATION_EXPRESSION", "📨"),
+            ("🎭 AGENT_ROLE", "AGENT_ROLE", "🎭"),
+            ("💡 ABSTRACT_CONCEPT", "ABSTRACT_CONCEPT", "💡"),
+            ("🧱 CONCRETE_ENTITY", "CONCRETE_ENTITY", "🧱"),
+        ]
+        for declared, expected_cat, expected_emoji in test_cases:
+            category, _, emoji = resolve_entity_category(declared, None, "")
+            assert category == expected_cat, f"Failed for {declared}"
+            assert emoji == expected_emoji, f"Failed for {declared}"
+
+    def test_emoji_only_category_resolved(self) -> None:
+        """LLM occasionally puts emoji in entity_category; resolve via reverse map."""
+        test_cases = [
+            ("📏", "PROPERTY_ATTRIBUTE", "📏"),
+            ("🏗️", "SYSTEM_STRUCTURE", "🏗️"),
+            ("📨", "INFORMATION_EXPRESSION", "📨"),
+            ("⏱️", "EVENT_PROCESS", "⏱️"),
+            ("🎭", "AGENT_ROLE", "🎭"),
+            ("🧱", "CONCRETE_ENTITY", "🧱"),
+            ("💡", "ABSTRACT_CONCEPT", "💡"),
+        ]
+        for declared, expected_cat, expected_emoji in test_cases:
+            category, _, emoji = resolve_entity_category(declared, None, "")
+            assert category == expected_cat, f"Failed for emoji {declared}"
+            assert emoji == expected_emoji, f"Failed for emoji {declared}"
+
     def test_all_seven_categories_accepted(self) -> None:
         """All 7 canonical categories are valid."""
         for member in DocConceptEntityCategory:
@@ -360,6 +400,21 @@ class TestBoundaryDisambiguation:
 class TestSubtypeRegistryIntegrity:
     """Tests for ENTITY_SUBTYPE_REGISTRY integrity."""
 
+    def test_unknown_subtype_logs_info(self, caplog):
+        """Unknown entity_subtype should be logged at INFO level for registry expansion."""
+        from loguru import logger
+
+        handler_id = logger.add(
+            lambda msg: None,
+            level="INFO",
+            filter=lambda record: record["function"] == "resolve_entity_category",
+        )
+        try:
+            category, _, _ = resolve_entity_category(None, "TotallyUnknownSubtype", "")
+            assert category == "ABSTRACT_CONCEPT"
+        finally:
+            logger.remove(handler_id)
+
     def test_all_subtypes_map_to_valid_category(self) -> None:
         """Every sub-type in registry maps to a valid entity category."""
         valid = set(c.value for c in DocConceptEntityCategory)
@@ -369,9 +424,9 @@ class TestSubtypeRegistryIntegrity:
             )
 
     def test_registry_has_expected_size(self) -> None:
-        """Registry should have 122 sub-types (49 core + 73 domain)."""
-        assert len(ENTITY_SUBTYPE_REGISTRY) == 122, (
-            f"Expected 122 sub-types, got {len(ENTITY_SUBTYPE_REGISTRY)}"
+        """Registry should have 175 sub-types (49 core + 73 domain + 53 pedagogical/cognitive)."""
+        assert len(ENTITY_SUBTYPE_REGISTRY) == 175, (
+            f"Expected 175 sub-types, got {len(ENTITY_SUBTYPE_REGISTRY)}"
         )
 
     def test_registry_no_duplicate_keys(self) -> None:
@@ -472,6 +527,68 @@ class TestSubtypeRegistryIntegrity:
             assert subtype in ENTITY_SUBTYPE_REGISTRY, f"Missing software sub-type: {subtype}"
             assert ENTITY_SUBTYPE_REGISTRY[subtype] == expected_cat
 
+    def test_pedagogical_cognitive_subtypes_present(self) -> None:
+        """Key pedagogical/cognitive sub-types are present."""
+        pedagogical_cognitive_expected = {
+            # 📏 Property/Attribute
+            "Cognitive Capacity": "PROPERTY_ATTRIBUTE",
+            "Cognitive Condition": "PROPERTY_ATTRIBUTE",
+            "Cognitive Constraint": "PROPERTY_ATTRIBUTE",
+            "Cognitive Limitation": "PROPERTY_ATTRIBUTE",
+            "Cognitive Trait": "PROPERTY_ATTRIBUTE",
+            "Character Traits": "PROPERTY_ATTRIBUTE",
+            "Educational Metric": "PROPERTY_ATTRIBUTE",
+            "Evaluative Criteria": "PROPERTY_ATTRIBUTE",
+            "Evaluative Measure": "PROPERTY_ATTRIBUTE",
+            "Knowledge Classification": "PROPERTY_ATTRIBUTE",
+            "Performance Metric": "PROPERTY_ATTRIBUTE",
+            "Quality Benchmark": "PROPERTY_ATTRIBUTE",
+            "Quantitative Threshold": "PROPERTY_ATTRIBUTE",
+            # 🏗️ System/Structure
+            "AI System": "SYSTEM_STRUCTURE",
+            "Cognitive Architecture": "SYSTEM_STRUCTURE",
+            "Cognitive Framework": "SYSTEM_STRUCTURE",
+            "Cognitive Model": "SYSTEM_STRUCTURE",
+            "Cognitive Subsystem": "SYSTEM_STRUCTURE",
+            "Cognitive System": "SYSTEM_STRUCTURE",
+            "Educational Organization": "SYSTEM_STRUCTURE",
+            "Methodology Framework": "SYSTEM_STRUCTURE",
+            "Pedagogical Framework": "SYSTEM_STRUCTURE",
+            "Research Institution": "SYSTEM_STRUCTURE",
+            "Technological Influence": "SYSTEM_STRUCTURE",
+            # ⏱️ Event/Process
+            "Analytical Process": "EVENT_PROCESS",
+            "Cognitive Process": "EVENT_PROCESS",
+            "Cognitive Strategy": "EVENT_PROCESS",
+            "Decision Process": "EVENT_PROCESS",
+            "Educational Outcome": "EVENT_PROCESS",
+            "Human-Computer Interaction": "EVENT_PROCESS",
+            "Pedagogical Activity": "EVENT_PROCESS",
+            "Teaching Activity": "EVENT_PROCESS",
+            "Teaching Method": "EVENT_PROCESS",
+            # 📨 Information Expression
+            "Assessment Instrument": "INFORMATION_EXPRESSION",
+            "Assessment Tool": "INFORMATION_EXPRESSION",
+            "Evaluation Instrument": "INFORMATION_EXPRESSION",
+            "Instructional Component": "INFORMATION_EXPRESSION",
+            "Publication Type": "INFORMATION_EXPRESSION",
+            "Research Evidence": "INFORMATION_EXPRESSION",
+            "Research Study": "INFORMATION_EXPRESSION",
+            "Tool/Framework": "INFORMATION_EXPRESSION",
+            # 🎭 Agent/Role
+            "Organization": "AGENT_ROLE",
+            "Research Organization": "AGENT_ROLE",
+            "Researcher": "AGENT_ROLE",
+            # 💡 Abstract Concept
+            "Capability": "ABSTRACT_CONCEPT",
+            "Psychological Theory": "ABSTRACT_CONCEPT",
+            # 🧱 Concrete Entity
+            "Software Tool": "CONCRETE_ENTITY",
+        }
+        for subtype, expected_cat in pedagogical_cognitive_expected.items():
+            assert subtype in ENTITY_SUBTYPE_REGISTRY, f"Missing pedagogical/cognitive sub-type: {subtype}"
+            assert ENTITY_SUBTYPE_REGISTRY[subtype] == expected_cat
+
 
 class TestExtractedConceptModel:
     """Tests for the updated ExtractedConcept Pydantic model."""
@@ -482,7 +599,6 @@ class TestExtractedConceptModel:
             name="Docker Image",
             definition="A packaged runtime environment",
             confidence=0.9,
-            source_chunk_qn="doc:chunk1",
             entity_category="CONCRETE_ENTITY",
             entity_subtype="Container Image",
             entity_emoji="🧱",
@@ -497,7 +613,6 @@ class TestExtractedConceptModel:
             name="Test",
             definition="...",
             confidence=0.5,
-            source_chunk_qn="doc:chunk1",
         )
         assert concept.entity_category is None
         assert concept.entity_subtype is None
@@ -509,7 +624,6 @@ class TestExtractedConceptModel:
             name="Test",
             definition="...",
             confidence=0.5,
-            source_chunk_qn="doc:chunk1",
             type="CONCRETE_ENTITY",
         )
         assert concept.type == "CONCRETE_ENTITY"
@@ -521,7 +635,6 @@ class TestExtractedConceptModel:
                 name="Test",
                 definition="...",
                 confidence=1.5,
-                source_chunk_qn="doc:chunk1",
             )
 
     def test_all_entity_categories_accepted(self) -> None:
@@ -531,7 +644,6 @@ class TestExtractedConceptModel:
                 name="Test",
                 definition="...",
                 confidence=0.5,
-                source_chunk_qn="doc:chunk1",
                 entity_category=category.value,
             )
             assert concept.entity_category == category.value
@@ -568,7 +680,6 @@ class TestBackwardCompatibility:
             name="TestConcept",
             definition="A test concept",
             confidence=0.8,
-            source_chunk_qn="doc:chunk1",
             type="CONCRETE_ENTITY",
             entity_category="CONCRETE_ENTITY",
             entity_subtype="Artifact",

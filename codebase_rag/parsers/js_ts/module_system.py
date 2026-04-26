@@ -200,6 +200,7 @@ class JsTsModuleSystemMixin:
         function_name: str,
         module_qn: str,
         export_type: str,
+        file_path: Path | None = None,
     ) -> None:
         ingest_exported_function(
             export_function,
@@ -211,6 +212,8 @@ class JsTsModuleSystemMixin:
             self.simple_name_lookup,
             self._get_docstring,
             self._is_export_inside_function,
+            file_path=file_path,
+            repo_path=self.repo_path,
         )
 
     def _process_exports_pattern(
@@ -219,6 +222,7 @@ class JsTsModuleSystemMixin:
         export_names: list[ASTNode],
         export_functions: list[ASTNode],
         module_qn: str,
+        file_path: Path | None = None,
     ) -> None:
         for exports_obj, export_name, export_function in zip(
             exports_objs, export_names, export_functions
@@ -233,6 +237,7 @@ class JsTsModuleSystemMixin:
                     function_name,
                     module_qn,
                     cs.JS_EXPORT_TYPE_COMMONJS,
+                    file_path=file_path,
                 )
 
     def _process_module_exports_pattern(
@@ -242,6 +247,7 @@ class JsTsModuleSystemMixin:
         export_names: list[ASTNode],
         export_functions: list[ASTNode],
         module_qn: str,
+        file_path: Path | None = None,
     ) -> None:
         for module_obj, exports_prop, export_name, export_function in zip(
             module_objs, exports_props, export_names, export_functions
@@ -258,6 +264,7 @@ class JsTsModuleSystemMixin:
                     function_name,
                     module_qn,
                     cs.JS_EXPORT_TYPE_COMMONJS_MODULE,
+                    file_path=file_path,
                 )
 
     def _ingest_commonjs_exports(
@@ -266,6 +273,7 @@ class JsTsModuleSystemMixin:
         module_qn: str,
         language: cs.SupportedLanguage,
         queries: dict[cs.SupportedLanguage, LanguageQueries],
+        file_path: Path | None = None,
     ) -> None:
         if language not in cs.JS_TS_LANGUAGES:
             return
@@ -289,6 +297,7 @@ class JsTsModuleSystemMixin:
                     captures.get(cs.CAPTURE_EXPORT_NAME, []),
                     captures.get(cs.CAPTURE_EXPORT_FUNCTION, []),
                     module_qn,
+                    file_path=file_path,
                 )
 
                 self._process_module_exports_pattern(
@@ -297,6 +306,7 @@ class JsTsModuleSystemMixin:
                     captures.get(cs.CAPTURE_EXPORT_NAME, []),
                     captures.get(cs.CAPTURE_EXPORT_FUNCTION, []),
                     module_qn,
+                    file_path=file_path,
                 )
 
             except Exception as e:
@@ -308,6 +318,7 @@ class JsTsModuleSystemMixin:
         module_qn: str,
         language: cs.SupportedLanguage,
         queries: dict[cs.SupportedLanguage, LanguageQueries],
+        file_path: Path | None = None,
     ) -> None:
         try:
             lang_query = queries[language][cs.QUERY_LANGUAGE]
@@ -340,6 +351,8 @@ class JsTsModuleSystemMixin:
                                     self.simple_name_lookup,
                                     self._get_docstring,
                                     self._is_export_inside_function,
+                                    file_path=file_path,
+                                    repo_path=self.repo_path,
                                 )
 
                     if not export_names:
@@ -360,6 +373,8 @@ class JsTsModuleSystemMixin:
                                                 self.simple_name_lookup,
                                                 self._get_docstring,
                                                 self._is_export_inside_function,
+                                                file_path=file_path,
+                                                repo_path=self.repo_path,
                                             )
 
                 except Exception as e:

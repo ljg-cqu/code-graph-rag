@@ -158,19 +158,26 @@ def ingest_exported_function(
     simple_name_lookup: SimpleNameLookup,
     get_docstring_func: Callable[[ASTNode], str | None],
     is_export_inside_function_func: Callable[[ASTNode], bool],
+    file_path: Path | None = None,
+    repo_path: Path | None = None,
 ) -> None:
     if is_export_inside_function_func(function_node):
         return
 
     function_qn = f"{module_qn}.{function_name}"
 
-    function_props = {
+    function_props: PropertyDict = {
         cs.KEY_QUALIFIED_NAME: function_qn,
         cs.KEY_NAME: function_name,
         cs.KEY_START_LINE: function_node.start_point[0] + 1,
         cs.KEY_END_LINE: function_node.end_point[0] + 1,
         cs.KEY_DOCSTRING: get_docstring_func(function_node),
+        cs.KEY_DECORATORS: [],
+        cs.KEY_IS_EXPORTED: True,
     }
+    if file_path is not None and repo_path is not None:
+        function_props[cs.KEY_PATH] = file_path.relative_to(repo_path).as_posix()
+        function_props[cs.KEY_ABSOLUTE_PATH] = file_path.resolve().as_posix()
 
     logger.info(
         logs.EXPORT_FOUND.format(

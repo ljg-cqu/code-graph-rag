@@ -163,7 +163,10 @@ Fine-tune LLM-based concept extraction timeouts and circuit breaker behavior:
 | `DOC_CONCEPT_TIMEOUT_PER_CODE_BLOCK` | `5.0` | Additional timeout per code block |
 | `DOC_CONCEPT_EXTRACTION_MAX_RETRIES` | `3` | Max retries per chunk after failures |
 | `DOC_CONCEPT_EXTRACTION_RETRY_DELAY` | `1.0` | Base delay between retries (seconds) |
-| `DOC_CONCEPT_TIMEOUT_RETRY_MULTIPLIER` | `1.5` | Timeout multiplier after a timeout error |
+| `DOC_CONCEPT_TIMEOUT_RETRY_MULTIPLIER` | `1.1` | Timeout multiplier after a timeout error |
+| `DOC_CONCEPT_TIMEOUT_RETRY_CAP_MULTIPLIER` | `1.2` | Cap retry timeout at N× the original adaptive timeout |
+| `DOC_CONCEPT_CONSECUTIVE_TIMEOUT_THRESHOLD` | `3` | Consecutive timeouts before fast-fail mode on first attempt of new chunks |
+| `DOC_CONCEPT_FAST_FAIL_TIMEOUT` | `5.0` | Seconds timeout when in fast-fail mode (applies only to attempt 0) |
 | `DOC_CONCEPT_TIMEOUT_RETRY_DELAY_MULTIPLIER` | `3.0` | Delay multiplier after a timeout error |
 | `CGR_CIRCUIT_BREAKER_ENABLED` | `True` | Enable circuit breaker for LLM calls |
 | `CGR_CIRCUIT_FAILURE_THRESHOLD` | `5` | Failures before opening circuit |

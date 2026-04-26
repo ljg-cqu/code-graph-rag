@@ -78,6 +78,62 @@ class TestAdaptiveTimeout:
         )
         assert timeout == 120.0
 
+    def test_heading_factor(self):
+        content = "# Heading 1\n## Heading 2\n### Heading 3\n" * 5
+        timeout = calculate_adaptive_timeout(
+            content,
+            base_timeout=30.0,
+            timeout_per_heading=2.0,
+        )
+        # heading_count = 30 (1+2+3 per group * 5), heading_factor = min(30*2, 15) = 15
+        # size_factor for 195 chars = min(195/1000 * 10, 30) = 1.95
+        # total = 30 + 1.95 + 0 + 15 + 0 = 46.95
+        assert timeout == pytest.approx(46.95, abs=0.1)
+
+    def test_list_factor(self):
+        content = "\n- Item 1\n- Item 2\n- Item 3\n" * 5
+        timeout = calculate_adaptive_timeout(
+            content,
+            base_timeout=30.0,
+            timeout_per_list_item=0.5,
+        )
+        # list_item_count = 15 (3 per group * 5), list_factor = min(15*0.5, 10) = 7.5
+        # size_factor for ~140 chars = min(140/1000 * 10, 30) = 1.4
+        # total = 30 + 1.4 + 0 + 0 + 7.5 = 38.9
+        assert timeout == pytest.approx(38.9, abs=0.1)
+
+    def test_markdown_factors_capped(self):
+        content = "# " * 50 + "\n- Item\n" * 50
+        timeout = calculate_adaptive_timeout(
+            content,
+            base_timeout=30.0,
+            max_timeout=120.0,
+            max_heading_factor=15.0,
+            max_list_factor=10.0,
+            max_size_factor=100.0,
+            max_complexity_factor=100.0,
+        )
+        # heading_factor capped at 15.0, list_factor capped at 10.0
+        # size_factor = min(len(content)/1000 * 10, 100) ≈ 5.0
+        # total = 30 + 5.0 + 0 + 15 + 10 = 60.0
+        assert timeout == pytest.approx(60.0, abs=0.1)
+
+    def test_combined_markdown_and_code_factors(self):
+        content = "# Heading\n\n```python\nprint('hello')\n```\n\n- Item 1\n- Item 2\n"
+        timeout = calculate_adaptive_timeout(
+            content,
+            base_timeout=30.0,
+            timeout_per_heading=2.0,
+            timeout_per_code_block=5.0,
+            timeout_per_list_item=0.5,
+        )
+        # size_factor for ~59 chars = min(59/1000 * 10, 30) = 0.59
+        # code_block_count = 2 (``` appears twice), complexity = min(2 * 5, 20) = 10
+        # heading_count = 1, heading_factor = min(1 * 2, 15) = 2
+        # list_item_count = 2, list_factor = min(2 * 0.5, 10) = 1
+        # total = 30 + 0.59 + 10 + 2 + 1 = 43.59
+        assert timeout == pytest.approx(43.59, abs=0.1)
+
 
 class TestCircuitBreaker:
     """Tests for CircuitBreaker state machine."""
@@ -227,7 +283,6 @@ class TestLLMConceptExtractorExtract:
             aliases=[],
             definition="def",
             confidence=0.9,
-            source_chunk_qn="",
             entity_category="CONCRETE_ENTITY",
         )
         result = ExtractionResult(concepts=[concept])
@@ -237,7 +292,7 @@ class TestLLMConceptExtractorExtract:
 
         extractor.agent = Mock(run=mock_run)
         output = await extractor.extract("content", "qn")
-        assert output.concepts[0].source_chunk_qn == "qn"
+        assert output.concepts[0].name == "test"
 
     @pytest.mark.asyncio
     async def test_extract_uses_adaptive_timeout(self):
@@ -285,7 +340,6 @@ class TestLLMConceptExtractorExtract:
             aliases=[],
             definition="def",
             confidence=0.9,
-            source_chunk_qn="",
             entity_category="CONCRETE_ENTITY",
         )
         result = ExtractionResult(concepts=[concept])
@@ -325,7 +379,6 @@ class TestLLMConceptExtractorRetry:
                 aliases=[],
                 definition="def",
                 confidence=0.9,
-                source_chunk_qn="",
                 entity_category="CONCRETE_ENTITY",
             )
             return _MockAgentOutput(ExtractionResult(concepts=[concept]))
@@ -442,8 +495,8 @@ class TestLLMConceptExtractorRetry:
         # Capped at 1.2x original (12.084) with new multiplier 1.1
         assert timeouts_passed[1] == pytest.approx(11.077, abs=0.01)
         assert timeouts_passed[2] == pytest.approx(12.084, abs=0.01)
-        # After 3 consecutive timeouts, fast-fail kicks in (5.0s)
-        assert timeouts_passed[3] == pytest.approx(5.0, abs=0.1)
+        # With fix D-1, fast-fail only on attempt 0; attempt 3 stays capped
+        assert timeouts_passed[3] == pytest.approx(12.084, abs=0.01)
 
     @pytest.mark.asyncio
     async def test_retry_timeout_capped_at_max_timeout(self):
@@ -469,8 +522,102 @@ class TestLLMConceptExtractorRetry:
         # Capped at 1.2x original (96.084) with new multiplier 1.1
         assert timeouts_passed[1] == pytest.approx(88.077, abs=0.01)
         assert timeouts_passed[2] == pytest.approx(96.084, abs=0.01)
-        # After 3 consecutive timeouts, fast-fail kicks in (5.0s)
-        assert timeouts_passed[3] == pytest.approx(5.0, abs=0.1)
+        # With fix D-1, fast-fail only on attempt 0; attempt 3 stays capped
+        assert timeouts_passed[3] == pytest.approx(96.084, abs=0.01)
+
+
+class TestRetryFastFailTimeout:
+    """Tests for fast-fail timeout behavior scoped to first attempt only (D-1)."""
+
+    @pytest.mark.asyncio
+    async def test_fast_fail_does_not_collapse_mid_retry(self):
+        """A retry in progress must never have its timeout collapsed to fast-fail."""
+        from unittest.mock import patch
+
+        extractor = LLMConceptExtractor(timeout=10.0, max_timeout=100.0)
+        extractor.agent = Mock(run=Mock(return_value=_MockAgentOutput(ExtractionResult())))
+
+        timeouts_passed: list[float] = []
+
+        async def mock_wait_for(awaitable, timeout):
+            timeouts_passed.append(timeout)
+            raise TimeoutError()
+
+        with patch("asyncio.wait_for", mock_wait_for):
+            with patch(
+                "codebase_rag.document.concept_extraction.LLMConceptExtractor._probe_provider_health",
+                return_value=True,
+            ):
+                await extractor.extract_with_retry("content", "qn")
+
+        # attempt 0: normal timeout (counter 0→1, below threshold)
+        assert timeouts_passed[0] == pytest.approx(10.07, abs=0.01)
+        # attempt 1: normal increase (counter 1→2, below threshold)
+        assert timeouts_passed[1] == pytest.approx(11.077, abs=0.01)
+        # attempt 2: normal increase (counter 2→3, hits threshold but attempt==2, no fast-fail)
+        assert timeouts_passed[2] == pytest.approx(12.084, abs=0.01)
+        # attempt 3: capped, NOT collapsed to 5s (counter 3→4, attempt==3, no fast-fail)
+        assert timeouts_passed[3] == pytest.approx(12.084, abs=0.01)
+
+    @pytest.mark.asyncio
+    async def test_fast_fail_applies_only_on_first_attempt(self):
+        """When consecutive_timeouts >= threshold, only attempt 0 gets fast-fail."""
+        from unittest.mock import patch
+
+        extractor = LLMConceptExtractor(timeout=10.0, max_timeout=100.0)
+        extractor._consecutive_timeouts = 3  # Pre-warm to threshold
+        extractor.agent = Mock(run=Mock(return_value=_MockAgentOutput(ExtractionResult())))
+
+        timeouts_passed: list[float] = []
+
+        async def mock_wait_for(awaitable, timeout):
+            timeouts_passed.append(timeout)
+            raise TimeoutError()
+
+        with patch("asyncio.wait_for", mock_wait_for):
+            with patch(
+                "codebase_rag.document.concept_extraction.LLMConceptExtractor._probe_provider_health",
+                return_value=True,
+            ):
+                await extractor.extract_with_retry("content", "qn")
+
+        assert len(timeouts_passed) == 4
+        # attempt 0: normal adaptive timeout (counter 3→4, attempt==0 → fast-fail for next)
+        assert timeouts_passed[0] == pytest.approx(10.07, abs=0.01)
+        # attempt 1: fast-fail applied (5.0s) because attempt 0 triggered it
+        assert timeouts_passed[1] == pytest.approx(5.0, abs=0.1)
+        # attempt 2: increases from 5.0, not re-fast-failed (attempt==1)
+        assert timeouts_passed[2] == pytest.approx(5.5, abs=0.1)
+        # attempt 3: increases from 5.5, not re-fast-failed (attempt==2)
+        assert timeouts_passed[3] == pytest.approx(6.05, abs=0.1)
+
+    @pytest.mark.asyncio
+    async def test_retry_timeout_monotonically_increases_until_cap(self):
+        """Timeout should never drop during retries of the same chunk."""
+        from unittest.mock import patch
+
+        extractor = LLMConceptExtractor(timeout=10.0, max_timeout=100.0)
+        extractor.agent = Mock(run=Mock(return_value=_MockAgentOutput(ExtractionResult())))
+
+        timeouts_passed: list[float] = []
+
+        async def mock_wait_for(awaitable, timeout):
+            timeouts_passed.append(timeout)
+            raise TimeoutError()
+
+        with patch("asyncio.wait_for", mock_wait_for):
+            with patch(
+                "codebase_rag.document.concept_extraction.LLMConceptExtractor._probe_provider_health",
+                return_value=True,
+            ):
+                await extractor.extract_with_retry("content", "qn")
+
+        assert len(timeouts_passed) == 4
+        for i in range(1, len(timeouts_passed)):
+            assert timeouts_passed[i] >= timeouts_passed[i - 1] - 0.01, (
+                f"Timeout dropped from {timeouts_passed[i - 1]} to {timeouts_passed[i]} "
+                f"at attempt {i}"
+            )
 
 
 class TestAdaptiveTimeoutTuning:
@@ -522,7 +669,8 @@ class TestAdaptiveTimeoutTuning:
         assert call_count == 1  # Only initial attempt, probe fails, skip retry
 
     @pytest.mark.asyncio
-    async def test_consecutive_timeout_fast_fail(self):
+    async def test_consecutive_timeout_fast_fail_on_first_attempt_only(self):
+        """Fast-fail triggered by attempt 0 failure; retries must NOT re-trigger fast-fail."""
         from unittest.mock import patch
 
         extractor = LLMConceptExtractor(timeout=10.0, max_timeout=100.0)
@@ -539,16 +687,28 @@ class TestAdaptiveTimeoutTuning:
                 "codebase_rag.document.concept_extraction.LLMConceptExtractor._probe_provider_health",
                 return_value=True,
             ):
-                await extractor.extract_with_retry("content", "qn")
-        assert len(timeouts_passed) == 4
-        # After 3 consecutive timeouts, 4th should use fast-fail timeout (5s)
-        assert timeouts_passed[3] == pytest.approx(5.0, abs=0.1)
+                # First chunk: 4 attempts, all timeout, counter becomes 4
+                await extractor.extract_with_retry("content", "qn1")
+                # Second chunk: attempt 0 fails (counter=4, attempt==0 → fast-fail for retry)
+                await extractor.extract_with_retry("content", "qn2")
+
+        # First chunk: 4 timeouts
+        # Second chunk: 4 timeouts
+        assert len(timeouts_passed) == 8
+        # Second chunk attempt 0 uses normal adaptive timeout
+        assert timeouts_passed[4] == pytest.approx(10.07, abs=0.01)
+        # Second chunk attempt 1 gets fast-fail (set by attempt 0's failure)
+        assert timeouts_passed[5] == pytest.approx(5.0, abs=0.1)
+        # Second chunk retries should NOT re-trigger fast-fail (monotonically increasing)
+        assert timeouts_passed[6] == pytest.approx(5.5, abs=0.1)
+        assert timeouts_passed[7] == pytest.approx(6.05, abs=0.1)
 
     @pytest.mark.asyncio
     async def test_consecutive_timeouts_reset_on_success(self):
         """Counter resets to 0 after a successful extraction, preventing
         stale timeout counts from carrying over across chunks."""
         extractor = LLMConceptExtractor(timeout=10.0, max_timeout=100.0)
+        extractor.agent = Mock(run=Mock(return_value=_MockAgentOutput(ExtractionResult())))
 
         timeouts_passed: list[float] = []
         call_index = 0
@@ -579,6 +739,7 @@ class TestAdaptiveTimeoutTuning:
         """Interleaved timeout/success across chunks should NOT trigger
         fast-fail mode, since the counter resets after each success."""
         extractor = LLMConceptExtractor(timeout=10.0, max_timeout=100.0)
+        extractor.agent = Mock(run=Mock(return_value=_MockAgentOutput(ExtractionResult())))
 
         timeouts_passed: list[float] = []
 
@@ -620,6 +781,57 @@ class TestAdaptiveTimeoutTuning:
         assert cb.failure_count == 0
 
 
+class TestRetryObservability:
+    """Tests for retry success/failure observability (D-4)."""
+
+    @pytest.mark.asyncio
+    async def test_success_after_retry_emits_debug_log(self):
+        """When extraction succeeds on attempt > 0, a DEBUG log is emitted."""
+        from unittest.mock import patch
+
+        extractor = LLMConceptExtractor(timeout=10.0, max_timeout=100.0)
+        call_count = 0
+
+        async def mock_run(content):
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 2:
+                raise TimeoutError()
+            return _MockAgentOutput(ExtractionResult())
+
+        extractor.agent = Mock(run=mock_run)
+
+        with patch(
+            "codebase_rag.document.concept_extraction.LLMConceptExtractor._probe_provider_health",
+            return_value=True,
+        ):
+            with patch("loguru.logger") as mock_logger:
+                result = await extractor.extract_with_retry("content", "qn")
+
+        assert result == ExtractionResult()
+        assert call_count == 3
+        mock_logger.debug.assert_called_once_with(
+            "Concept extraction succeeded on attempt 3 for qn"
+        )
+
+    @pytest.mark.asyncio
+    async def test_success_on_first_attempt_no_debug_log(self):
+        """When extraction succeeds on attempt 0, no retry-success DEBUG log."""
+        extractor = LLMConceptExtractor()
+        result = ExtractionResult()
+
+        async def mock_run(content):
+            return _MockAgentOutput(result)
+
+        extractor.agent = Mock(run=mock_run)
+
+        with patch("loguru.logger") as mock_logger:
+            output = await extractor.extract_with_retry("content", "qn")
+
+        assert output == result
+        mock_logger.debug.assert_not_called()
+
+
 class TestCircuitBreakerStormMitigation:
     """Tests for circuit breaker storm mitigation."""
 
@@ -646,7 +858,6 @@ class TestCircuitBreakerStormMitigation:
             aliases=[],
             definition="def",
             confidence=0.9,
-            source_chunk_qn="",
             entity_category="CONCRETE_ENTITY",
         )
         result = ExtractionResult(concepts=[concept])
@@ -658,3 +869,39 @@ class TestCircuitBreakerStormMitigation:
 
         output = await extractor.extract_with_retry("content", "qn")
         assert len(output.concepts) == 1
+
+
+class TestRelationshipDiversityCheck:
+    """Tests for D-8 relationship category diversity guardrail."""
+
+    def test_no_warning_when_diverse(self) -> None:
+        from codebase_rag.document.concept_extraction import _check_relationship_diversity
+        from codebase_rag.document.concept_extraction import ConceptRelationship
+
+        rels = [
+            ConceptRelationship(from_concept="A", to_concept="B", verb="is-a", category="HIERARCHICAL", emoji="🌳", strength=0.8),
+            ConceptRelationship(from_concept="A", to_concept="C", verb="contains", category="COMPOSITIONAL", emoji="🧩", strength=0.8),
+            ConceptRelationship(from_concept="A", to_concept="D", verb="causes", category="CAUSAL", emoji="⚡", strength=0.8),
+        ]
+        # Should not raise; no assertion needed for non-logging path
+        _check_relationship_diversity(rels, "chunk:1")
+
+    def test_warning_when_causal_dominant(self) -> None:
+        from unittest.mock import patch
+        from codebase_rag.document.concept_extraction import _check_relationship_diversity
+        from codebase_rag.document.concept_extraction import ConceptRelationship
+
+        rels = [
+            ConceptRelationship(from_concept="A", to_concept="B", verb="causes", category="CAUSAL", emoji="⚡", strength=0.8),
+            ConceptRelationship(from_concept="A", to_concept="C", verb="enables", category="CAUSAL", emoji="⚡", strength=0.8),
+            ConceptRelationship(from_concept="A", to_concept="D", verb="triggers", category="CAUSAL", emoji="⚡", strength=0.8),
+            ConceptRelationship(from_concept="A", to_concept="E", verb="produces", category="CAUSAL", emoji="⚡", strength=0.8),
+        ]
+        with patch("loguru.logger") as mock_logger:
+            _check_relationship_diversity(rels, "chunk:test")
+            mock_logger.debug.assert_called_once()
+            assert "skew detected" in mock_logger.debug.call_args[0][0]
+
+    def test_empty_relationships_noop(self) -> None:
+        from codebase_rag.document.concept_extraction import _check_relationship_diversity
+        _check_relationship_diversity([], "chunk:empty")

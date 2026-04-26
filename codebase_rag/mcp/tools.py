@@ -873,15 +873,13 @@ class MCPToolsRegistry:
             result: CodeSnippetResultDict | None = snippet.model_dump()
             if result is None:
                 return CodeSnippetResultDict(
-                    error=te.MCP_TOOL_RETURNED_NONE,
                     found=False,
-                    error_message=te.MCP_INVALID_RESPONSE,
+                    error_message=te.MCP_TOOL_RETURNED_NONE,
                 )
             return result
         except Exception as e:
             logger.error(lg.MCP_ERROR_CODE_SNIPPET.format(error=e))
             return CodeSnippetResultDict(
-                error=str(e),
                 found=False,
                 error_message=str(e),
             )

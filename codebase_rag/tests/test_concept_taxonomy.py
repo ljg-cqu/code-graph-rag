@@ -131,6 +131,48 @@ class TestResolveCategory:
         assert emoji == "🎯"
 
 
+class TestVerbRegistryLogging:
+    """Tests for verb registry log levels (D-2)."""
+
+    def test_unregistered_verb_with_declared_logged_at_debug(self):
+        """Unregistered verb with valid declared category must log at DEBUG, not INFO."""
+        from unittest.mock import patch
+
+        with patch("loguru.logger") as mock_logger:
+            resolve_category("novel-verb-123", "COMPARATIVE")
+
+        mock_logger.debug.assert_called_once_with(
+            "Verb 'novel-verb-123' not in registry — using declared category 'COMPARATIVE'. "
+            "Consider adding to VERB_REGISTRY for future authoritative resolution."
+        )
+        mock_logger.info.assert_not_called()
+
+    def test_unregistered_verb_fuzzy_match_logged_at_debug(self):
+        """Unregistered verb fuzzy-matched to registry must log at DEBUG, not INFO."""
+        from unittest.mock import patch
+
+        with patch("loguru.logger") as mock_logger:
+            resolve_category("mitigate", None)  # fuzzy-matches to "mitigates"
+
+        mock_logger.debug.assert_called_once_with(
+            "Verb 'mitigate' not in registry — fuzzy-matched to "
+            "'CAUSAL' category via registry verbs."
+        )
+        mock_logger.info.assert_not_called()
+
+    def test_registry_override_logged_at_debug(self):
+        """Registry override mismatch is already DEBUG — ensure no regression."""
+        from unittest.mock import patch
+
+        with patch("loguru.logger") as mock_logger:
+            resolve_category("is-a", "CAUSAL")  # registry says HIERARCHICAL
+
+        mock_logger.debug.assert_called_once_with(
+            "Verb 'is-a' registry override: LLM declared 'CAUSAL', registry says 'HIERARCHICAL'"
+        )
+        mock_logger.info.assert_not_called()
+
+
 class TestFuzzyMatchVerb:
     """Tests for the _fuzzy_match_verb helper."""
 

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Literal, NamedTuple
 from rich.console import Console
 
 from .constants import SupportedLanguage
-from .types_defs import MCPHandlerType, MCPInputSchema, PropertyValue
+from .types_defs import MCPHandlerType, MCPInputSchema, PropertyValue, ResultRow
 
 if TYPE_CHECKING:
     from .compat.pydantic_ai import ModelMessage
@@ -135,7 +135,7 @@ class CodeChunk:
     parent_fqn: str | None = None
     chunk_index: int = 0
     token_count: int = 0
-    metadata: dict = field(default_factory=dict)
+    metadata: dict[str, str | int | float | bool | None] = field(default_factory=dict)
 
 
 @dataclass
@@ -193,9 +193,9 @@ class TruncationResult:
         dropped_rows: List of dropped rows for debugging.
     """
 
-    results: list[dict]
+    results: list[ResultRow]
     tokens_used: int
     was_truncated: bool
     dropped_count: int
     truncation_reason: Literal["token_limit", "row_cap", "none"]
-    dropped_rows: list[dict] = field(default_factory=list)
+    dropped_rows: list[ResultRow] = field(default_factory=list)

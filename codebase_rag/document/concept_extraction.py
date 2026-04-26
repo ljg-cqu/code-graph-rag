@@ -40,7 +40,6 @@ class ExtractedConcept(BaseModel):
         le=1.0,
         description="Extraction confidence",
     )
-    source_chunk_qn: str = Field(..., description="Source chunk qualified name")
     context: str = Field(default="", description="Surrounding context")
     entity_category: str | None = Field(
         default=None,
@@ -168,12 +167,27 @@ def calculate_adaptive_timeout(
     timeout_per_code_block: float = 5.0,
     max_size_factor: float = 30.0,
     max_complexity_factor: float = 20.0,
+    # Markdown-specific complexity factors for document-heavy chunks
+    timeout_per_heading: float = 2.0,
+    max_heading_factor: float = 15.0,
+    timeout_per_list_item: float = 0.5,
+    max_list_factor: float = 10.0,
 ) -> float:
     chunk_length = len(chunk_content)
     size_factor = min(chunk_length / 1000 * timeout_per_1k_chars, max_size_factor)
     code_block_count = chunk_content.count("```")
     complexity_factor = min(code_block_count * timeout_per_code_block, max_complexity_factor)
-    timeout = base_timeout + size_factor + complexity_factor
+
+    # Markdown-specific heuristics for dense conceptual documents
+    heading_count = chunk_content.count("#")
+    heading_factor = min(heading_count * timeout_per_heading, max_heading_factor)
+
+    list_item_count = (
+        chunk_content.count("\n-") + chunk_content.count("\n*") + chunk_content.count("\n1.")
+    )
+    list_factor = min(list_item_count * timeout_per_list_item, max_list_factor)
+
+    timeout = base_timeout + size_factor + complexity_factor + heading_factor + list_factor
     return min(timeout, max_timeout)
 
 
@@ -229,9 +243,20 @@ Entity categories (7 MECE categories — every concept fits exactly one):
 💡 ABSTRACT_CONCEPT — Is it a pure idea with no physical form?
   Domain/Discipline, Theory/Model, Principle/Rule, Value/Ideal, Category/Class, Relation/Connection
   Software-specific: Design Pattern, Algorithm, Protocol Spec, Paradigm, SLA
+  Academic/Cognitive-specific: Mental Model, Psychological Theory, Capability
 
 💡 ABSTRACT_CONCEPT is the LAST RESORT — confirm the entity doesn't fit any of the
 first 6 categories before using it. This mirrors RELATED_TO in the relationship taxonomy.
+
+Examples by domain:
+- "Critical Thinking" → EVENT_PROCESS (cognitive activity unfolding over time)
+- "Intellectual Humility" → PROPERTY_ATTRIBUTE (characteristic of a person)
+- "Educational Framework" → SYSTEM_STRUCTURE (organized pedagogical system)
+- "Case Studies" → INFORMATION_EXPRESSION (representation of knowledge)
+- "Active Learning Methods" → EVENT_PROCESS (teaching activity over time)
+- "Cognitive Bias" → PROPERTY_ATTRIBUTE (characteristic of thinking)
+- "Working Memory" → SYSTEM_STRUCTURE (cognitive subsystem)
+- "Debate" → EVENT_PROCESS (structured discursive activity)
 
 Relationships use an 8-category canonical taxonomy. Choose the most specific verb
 that accurately describes how two concepts relate. The verb must belong to exactly
@@ -263,6 +288,10 @@ one of these categories:
 
 🔗 RELATED_TO — Use ONLY as a last resort when no other category fits.
 
+Relationship diversity guidance: Diversify relationship categories. Aim for no single
+category to exceed 30% of relationships in a chunk. If you find yourself using CAUSAL
+repeatedly, pause and consider if COMPOSITIONAL, ATTRIBUTIVE, or COMPARATIVE might fit.
+
 Respond with JSON matching this structure:
 {
   "concepts": [
@@ -292,7 +321,8 @@ Respond with JSON matching this structure:
 Rules:
 - Only extract concepts that are clearly defined or important in the text
 - Every concept must have an entity_category from the 7 canonical categories
-- entity_subtype is optional but recommended for software-domain concepts
+- entity_category must be the canonical NAME (e.g., "EVENT_PROCESS"), NEVER an emoji
+- entity_subtype is optional but recommended; use domain-specific subtypes when available
 - entity_emoji must match the category: 🧱⏱️📨📏🏗️🎭💡
 - ABSTRACT_CONCEPT is a last resort, not a default
 - The old type field should equal entity_category for backward compatibility
@@ -412,7 +442,6 @@ Rules:
                 timeout=timeout,
             )
             for concept in result.output.concepts:
-                concept.source_chunk_qn = chunk_qn
                 (
                     concept.entity_category,
                     concept.entity_subtype,
@@ -426,6 +455,9 @@ Rules:
                 concept.type = concept.entity_category
             for rel in result.output.relationships:
                 rel.category, rel.emoji = resolve_category(rel.verb, rel.category)
+            # D-8: Relationship category diversity check
+            if result.output.relationships:
+                _check_relationship_diversity(result.output.relationships, chunk_qn)
             if self._circuit_breaker is not None:
                 self._circuit_breaker.record_success()
             return result.output
@@ -468,6 +500,10 @@ Rules:
                 result = await self.extract(chunk_content, chunk_qn, timeout=current_timeout)
                 async with self._consecutive_timeouts_lock:
                     self._consecutive_timeouts = 0
+                if attempt > 0:
+                    logger.debug(
+                        f"Concept extraction succeeded on attempt {attempt + 1} for {chunk_qn}"
+                    )
                 return result
             except Exception as e:
                 error = classify_concept_extraction_error(e, chunk_content, chunk_qn)
@@ -491,7 +527,10 @@ Rules:
                     if error.error_type == ErrorType.CONCEPT_TIMEOUT:
                         async with self._consecutive_timeouts_lock:
                             self._consecutive_timeouts += 1
-                            if self._consecutive_timeouts >= settings.DOC_CONCEPT_CONSECUTIVE_TIMEOUT_THRESHOLD:
+                            if (
+                                self._consecutive_timeouts >= settings.DOC_CONCEPT_CONSECUTIVE_TIMEOUT_THRESHOLD
+                                and attempt == 0
+                            ):
                                 current_timeout = min(settings.DOC_CONCEPT_FAST_FAIL_TIMEOUT, current_timeout)
                             else:
                                 current_timeout = min(
@@ -557,6 +596,7 @@ VERB_REGISTRY: dict[str, str] = {
     "is-parent-of": "HIERARCHICAL",
     "falls-under": "HIERARCHICAL",
     "derives-from": "HIERARCHICAL",
+    "derived-from": "HIERARCHICAL",  # Variant of derives-from
     # Compositional (🧩)
     "part-of": "COMPOSITIONAL",
     "comprises": "COMPOSITIONAL",
@@ -571,6 +611,7 @@ VERB_REGISTRY: dict[str, str] = {
     "is-built-from": "COMPOSITIONAL",
     "aggregates": "COMPOSITIONAL",
     "is-formed-from": "COMPOSITIONAL",
+    "incorporated-into": "COMPOSITIONAL",
     # Contextual (🎯)
     "located-in": "CONTEXTUAL",
     "situated-in": "CONTEXTUAL",
@@ -586,6 +627,9 @@ VERB_REGISTRY: dict[str, str] = {
     "takes-place-in": "CONTEXTUAL",
     "is-bound-by": "CONTEXTUAL",
     "is-hosted-in": "CONTEXTUAL",
+    "belongs-to": "CONTEXTUAL",
+    "resolves-to": "CONTEXTUAL",
+    "presented-as": "CONTEXTUAL",
     # Attributive (💭)
     "has-property": "ATTRIBUTIVE",
     "characterized-by": "ATTRIBUTIVE",
@@ -598,6 +642,8 @@ VERB_REGISTRY: dict[str, str] = {
     "expresses": "ATTRIBUTIVE",
     "has-characteristic": "ATTRIBUTIVE",
     "bears": "ATTRIBUTIVE",
+    "remains-lazy-for": "ATTRIBUTIVE",
+    "characterizes": "ATTRIBUTIVE",
     # Comparative (⚖️)
     "compares-to": "COMPARATIVE",
     "contrasts-with": "COMPARATIVE",
@@ -612,6 +658,7 @@ VERB_REGISTRY: dict[str, str] = {
     "antonym-of": "COMPARATIVE",
     "same-as": "COMPARATIVE",
     "related-to": "COMPARATIVE",
+    "relates-to": "COMPARATIVE",  # Variant of related-to
     # Sequential (⏩)
     "precedes": "SEQUENTIAL",
     "follows": "SEQUENTIAL",
@@ -671,6 +718,22 @@ VERB_REGISTRY: dict[str, str] = {
     "builds": "CAUSAL",
     "detects": "CAUSAL",
     "corrects": "CAUSAL",
+    "draws-from": "CAUSAL",
+    "constrained-by": "CAUSAL",
+    "demonstrated-by": "CAUSAL",
+    "via": "CAUSAL",
+    "reduces-load-on": "CAUSAL",
+    "engages-in": "CAUSAL",
+    "applied-to": "CAUSAL",
+    "initiates-evaluation-with": "CAUSAL",
+    "checks-for-bias-in": "CAUSAL",
+    "requests-evidence-from": "CAUSAL",
+    "provides-data-to": "CAUSAL",
+    "proposes-judgment-to": "CAUSAL",
+    "delivers-input-to": "CAUSAL",
+    "confirms-or-flags": "CAUSAL",
+    "re-evaluation-triggered": "CAUSAL",
+    "structures": "CAUSAL",
     # Analogical (🌉)
     "analogous-to": "ANALOGICAL",
     "corresponds-to": "ANALOGICAL",
@@ -779,14 +842,14 @@ def resolve_category(verb: str, declared_category: str | None) -> tuple[str, str
             category = registry_category
     elif declared_category and declared_category.upper() in DOC_CONCEPT_CATEGORIES:
         category = declared_category.upper()
-        logger.info(
+        logger.debug(
             f"Verb '{verb}' not in registry — using declared category '{category}'. "
             f"Consider adding to VERB_REGISTRY for future authoritative resolution."
         )
     else:
         category = _fuzzy_match_verb(verb_lower)
         if category:
-            logger.info(
+            logger.debug(
                 f"Verb '{verb}' not in registry — fuzzy-matched to "
                 f"'{category}' category via registry verbs."
             )
@@ -948,6 +1011,79 @@ ENTITY_SUBTYPE_REGISTRY: dict[str, str] = {
     "KPI": "ABSTRACT_CONCEPT",
     "Brand": "ABSTRACT_CONCEPT",
     "Moat": "ABSTRACT_CONCEPT",
+
+    # 📏 Property/Attribute — Pedagogical & Cognitive (13)
+    "Cognitive Capacity": "PROPERTY_ATTRIBUTE",
+    "Cognitive Condition": "PROPERTY_ATTRIBUTE",
+    "Cognitive Constraint": "PROPERTY_ATTRIBUTE",
+    "Cognitive Limitation": "PROPERTY_ATTRIBUTE",
+    "Cognitive Trait": "PROPERTY_ATTRIBUTE",
+    "Character Traits": "PROPERTY_ATTRIBUTE",
+    "Educational Metric": "PROPERTY_ATTRIBUTE",
+    "Evaluative Criteria": "PROPERTY_ATTRIBUTE",
+    "Evaluative Measure": "PROPERTY_ATTRIBUTE",
+    "Knowledge Classification": "PROPERTY_ATTRIBUTE",
+    "Performance Metric": "PROPERTY_ATTRIBUTE",
+    "Quality Benchmark": "PROPERTY_ATTRIBUTE",
+    "Quantitative Threshold": "PROPERTY_ATTRIBUTE",
+
+    # 🏗️ System/Structure — Pedagogical & Cognitive (11)
+    "AI System": "SYSTEM_STRUCTURE",
+    "Cognitive Architecture": "SYSTEM_STRUCTURE",
+    "Cognitive Framework": "SYSTEM_STRUCTURE",
+    "Cognitive Model": "SYSTEM_STRUCTURE",
+    "Cognitive Subsystem": "SYSTEM_STRUCTURE",
+    "Cognitive System": "SYSTEM_STRUCTURE",
+    "Educational Organization": "SYSTEM_STRUCTURE",
+    "Methodology Framework": "SYSTEM_STRUCTURE",
+    "Pedagogical Framework": "SYSTEM_STRUCTURE",
+    "Research Institution": "SYSTEM_STRUCTURE",
+    "Technological Influence": "SYSTEM_STRUCTURE",
+
+    # ⏱️ Event/Process — Pedagogical & Cognitive (9)
+    "Analytical Process": "EVENT_PROCESS",
+    "Cognitive Process": "EVENT_PROCESS",
+    "Cognitive Strategy": "EVENT_PROCESS",
+    "Decision Process": "EVENT_PROCESS",
+    "Educational Outcome": "EVENT_PROCESS",
+    "Human-Computer Interaction": "EVENT_PROCESS",
+    "Pedagogical Activity": "EVENT_PROCESS",
+    "Teaching Activity": "EVENT_PROCESS",
+    "Teaching Method": "EVENT_PROCESS",
+
+    # 📨 Information Expression — Pedagogical & Cognitive (8)
+    "Assessment Instrument": "INFORMATION_EXPRESSION",
+    "Assessment Tool": "INFORMATION_EXPRESSION",
+    "Evaluation Instrument": "INFORMATION_EXPRESSION",
+    "Instructional Component": "INFORMATION_EXPRESSION",
+    "Publication Type": "INFORMATION_EXPRESSION",
+    "Research Evidence": "INFORMATION_EXPRESSION",
+    "Research Study": "INFORMATION_EXPRESSION",
+    "Tool/Framework": "INFORMATION_EXPRESSION",
+
+    # 🎭 Agent/Role — Pedagogical & Cognitive (3)
+    "Organization": "AGENT_ROLE",
+    "Research Organization": "AGENT_ROLE",
+    "Researcher": "AGENT_ROLE",
+
+    # 💡 Abstract Concept — Pedagogical & Cognitive (4)
+    "Capability": "ABSTRACT_CONCEPT",
+    "Psychological Theory": "ABSTRACT_CONCEPT",
+    "Mental Model": "ABSTRACT_CONCEPT",
+
+    # 🧱 Concrete Entity — Pedagogical & Cognitive (1)
+    "Software Tool": "CONCRETE_ENTITY",
+
+    # ⏱️ Event/Process — Pedagogical & Cognitive (11)
+    "Cognitive Skill": "EVENT_PROCESS",
+    "Cognitive Activity": "EVENT_PROCESS",
+
+    # 📏 Property/Attribute — Pedagogical & Cognitive (15)
+    "Cognitive State": "PROPERTY_ATTRIBUTE",
+
+    # 🏗️ System/Structure — Pedagogical & Cognitive (13)
+    "Framework Component": "SYSTEM_STRUCTURE",
+    "Educational Framework": "SYSTEM_STRUCTURE",
 }
 
 
@@ -958,11 +1094,10 @@ def resolve_entity_category(
 ) -> tuple[str, str | None, str]:
     """Resolve an entity to its canonical category, sub-type, and emoji.
 
-    4-step resolution:
+    3-step resolution:
     1. Valid declared_category → use it
     2. Invalid/None category + subtype in ENTITY_SUBTYPE_REGISTRY → use registry
-    3. Invalid/None category + no subtype match → ABSTRACT_CONCEPT (last resort)
-    4. ABSTRACT_CONCEPT as result → log debug
+    3. Invalid/None category + no subtype match → ABSTRACT_CONCEPT (fallback with logging)
 
     Emoji is ALWAYS server-derived from ENTITY_CATEGORY_EMOJI_MAP.
     LLM-provided emoji is ignored.
@@ -985,33 +1120,79 @@ def resolve_entity_category(
     category: str | None = None
     subtype: str | None = declared_subtype
 
-    # Step 1: Valid declared category
-    if declared_category and declared_category.upper() in DOC_ENTITY_CATEGORIES:
-        category = declared_category.upper()
-    # Step 2: Sub-type registry lookup
-    elif declared_subtype and declared_subtype in ENTITY_SUBTYPE_REGISTRY:
-        category = ENTITY_SUBTYPE_REGISTRY[declared_subtype]
-        logger.debug(
-            f"Entity category resolved from sub-type registry: "
-            f"'{declared_subtype}' → '{category}'"
-        )
-    # Step 3: Fallback to ABSTRACT_CONCEPT
-    else:
-        category = "ABSTRACT_CONCEPT"
-        logger.warning(
-            f"Entity category not determined — falling back to ABSTRACT_CONCEPT. "
-            f"Declared category: '{declared_category}', subtype: '{declared_subtype}'"
-        )
+    # Step 0: Emoji-only category (LLM occasionally puts emoji in entity_category field)
+    _EMOJI_TO_ENTITY_CATEGORY: dict[str, str] = {
+        v: k for k, v in ENTITY_CATEGORY_EMOJI_MAP.items()
+    }
+    if declared_category and declared_category in _EMOJI_TO_ENTITY_CATEGORY:
+        category = _EMOJI_TO_ENTITY_CATEGORY[declared_category]
 
-    # Step 4: Debug-log if ABSTRACT_CONCEPT is the result (routine classification)
-    if category == "ABSTRACT_CONCEPT":
-        logger.debug(
-            f"Entity classified as ABSTRACT_CONCEPT (last resort). "
-            f"Verify other 6 categories were ruled out."
-        )
+    # Step 1: Valid declared category (strip emoji/prefix characters first)
+    if category is None and declared_category:
+        normalized_category = declared_category
+        # Strip leading non-alphanumeric characters (e.g., emoji prefixes like "🏗️ ")
+        while normalized_category and not normalized_category[0].isalnum():
+            normalized_category = normalized_category[1:]
+        normalized_category = normalized_category.strip()
+        if normalized_category.upper() in DOC_ENTITY_CATEGORIES:
+            category = normalized_category.upper()
+
+    # Step 2: Sub-type registry lookup
+    if category is None and declared_subtype:
+        if declared_subtype in ENTITY_SUBTYPE_REGISTRY:
+            category = ENTITY_SUBTYPE_REGISTRY[declared_subtype]
+            logger.debug(
+                f"Entity category resolved from sub-type registry: "
+                f"'{declared_subtype}' → '{category}'"
+            )
+        else:
+            logger.info(
+                f"Unknown entity_subtype '{declared_subtype}' — "
+                f"consider adding to ENTITY_SUBTYPE_REGISTRY"
+            )
+
+    # Step 3: Fallback to ABSTRACT_CONCEPT
+    if category is None:
+        category = "ABSTRACT_CONCEPT"
+        if declared_category:
+            logger.debug(
+                f"Entity category not determined — falling back to ABSTRACT_CONCEPT. "
+                f"Declared category: '{declared_category}', subtype: '{declared_subtype}'"
+            )
+        else:
+            logger.warning(
+                f"Entity category not determined — falling back to ABSTRACT_CONCEPT. "
+                f"Declared category: '{declared_category}', subtype: '{declared_subtype}'"
+            )
 
     emoji = ENTITY_CATEGORY_EMOJI_MAP.get(category, "💡")
     return category, subtype, emoji
+
+
+def _check_relationship_diversity(
+    relationships: list[ConceptRelationship],
+    chunk_qn: str,
+    causal_threshold: float = 0.60,
+) -> None:
+    """Warn if relationship categories are overly skewed toward CAUSAL.
+
+    D-8 guardrail: CAUSAL dominance indicates prompt bias or lazy LLM
+    categorization. Logs at DEBUG level to avoid noise; intended for
+    periodic prompt-engineering review via log aggregation.
+    """
+    from loguru import logger
+
+    if not relationships:
+        return
+    total = len(relationships)
+    causal_count = sum(1 for r in relationships if r.category == "CAUSAL")
+    causal_ratio = causal_count / total
+    if causal_ratio > causal_threshold:
+        logger.debug(
+            f"Relationship category skew detected for {chunk_qn}: "
+            f"{causal_ratio:.0%} CAUSAL ({causal_count}/{total}). "
+            f"Consider prompt diversity emphasis."
+        )
 
 
 def _parse_quota_reset_time(message: str) -> datetime | None:

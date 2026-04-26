@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-from typing import Any
-
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from .types_defs import ResultRow
+from .types_defs import PropertyDict, ResultRow, ResultValue
 
 
-def _normalize_value(val: Any) -> Any:
+def _normalize_value(val: object) -> ResultValue:
     """Recursively normalize a value to ensure Pydantic compatibility.
 
     Converts any non-standard types to strings while preserving the
@@ -20,7 +18,7 @@ def _normalize_value(val: Any) -> Any:
     if isinstance(val, list):
         return [_normalize_value(item) for item in val]
     if isinstance(val, dict):
-        return {k: _normalize_value(v) for k, v in val.items()}
+        return {str(k): _normalize_value(v) for k, v in val.items()}
     # Convert any other type to string
     return str(val)
 
@@ -34,12 +32,12 @@ class QueryGraphData(BaseModel):
     @classmethod
     def _format_results(cls, v: list[ResultRow] | None) -> list[ResultRow]:
         if not isinstance(v, list):
-            return []
+            raise ValueError("results must be a list")
 
         clean_results: list[ResultRow] = []
         for row in v:
             if not isinstance(row, dict):
-                continue
+                raise ValueError("each result row must be a dict")
             clean_row: ResultRow = {k: _normalize_value(val) for k, val in row.items()}
             clean_results.append(clean_row)
         return clean_results
@@ -71,7 +69,7 @@ class EditResult(BaseModel):
 
     @model_validator(mode="after")
     def _set_success_on_error(self) -> EditResult:
-        if self.error_message is not None:
+        if self.error_message is not None and self.error_message.strip():
             self.success = False
         return self
 
@@ -89,7 +87,7 @@ class FileCreationResult(BaseModel):
 
     @model_validator(mode="after")
     def _set_success_on_error(self) -> FileCreationResult:
-        if self.error_message is not None:
+        if self.error_message is not None and self.error_message.strip():
             self.success = False
         return self
 
@@ -108,7 +106,7 @@ class JSONEntity(BaseModel):
     labels: list[str] | None = None
     operation: str | None = None
     last_updated: str | None = None
-    properties: dict[str, Any] = Field(default_factory=dict)
+    properties: PropertyDict = Field(default_factory=dict)
 
 
 class JSONRelationship(BaseModel):
@@ -121,7 +119,7 @@ class JSONRelationship(BaseModel):
     confidence: float | None = None
     explanation: str | None = None
     isInferred: bool | None = None
-    properties: dict[str, Any] = Field(default_factory=dict)
+    properties: PropertyDict = Field(default_factory=dict)
 
 
 class JSONMetadata(BaseModel):
@@ -183,10 +181,10 @@ class PythonObjectInfo(BaseModel):
     members: list[str] | None = None
     is_builtin: bool = False
     error_message: str | None = None
+    success: bool = True
 
     @model_validator(mode="after")
     def _set_success_on_error(self) -> PythonObjectInfo:
-        if self.error_message is not None:
-            # error_message presence signals failure (follows EditResult/FileCreationResult pattern)
-            pass
+        if self.error_message is not None and self.error_message.strip():
+            self.success = False
         return self

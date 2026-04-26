@@ -57,7 +57,8 @@ def _migrate_orphaned_builtins(cursor: mgclient.Cursor, dry_run: bool) -> int:
         MERGE (b:Module {
             qualified_name: 'builtin',
             name: '__builtins__',
-            is_virtual: true
+            is_virtual: true,
+            absolute_path: null
         })
     """)
 
