@@ -130,6 +130,7 @@ class ExtractionError:
     chunk_qn: str | None = None  # For concept extraction failures
     chunk_length: int | None = None
     chunk_preview: str | None = None  # First 200 chars of chunk content
+    chunk_content: str | None = None  # Full content for concept extraction retries
     exception_type: str | None = None
 
     def __post_init__(self) -> None:
@@ -184,6 +185,7 @@ class ExtractionError:
             "chunk_qn": self.chunk_qn,
             "chunk_length": self.chunk_length,
             "chunk_preview": self.chunk_preview,
+            "chunk_content": self.chunk_content,
             "exception_type": self.exception_type,
         }
 
@@ -203,6 +205,7 @@ class ExtractionError:
             chunk_qn=data.get("chunk_qn"),
             chunk_length=data.get("chunk_length"),
             chunk_preview=data.get("chunk_preview"),
+            chunk_content=data.get("chunk_content"),
             exception_type=data.get("exception_type"),
         )
 

@@ -32,6 +32,7 @@ from ..types_defs import ResultRow
 from ..utils.path_utils import should_skip_path
 from . import logs as doc_ls
 from .chunking import DocumentChunk, SemanticDocumentChunker
+from .concept_consolidator import ConceptConsolidator
 from .concept_extraction import ConceptExtractor, ExtractionResult, LLMConceptExtractor
 from .error_handling import (
     DeadLetterQueue,
@@ -1983,19 +1984,22 @@ class DocumentGraphUpdater:
             )
             return ([fallback_chunk], [doc_embedding])
 
-        # Filter out empty and tiny chunks to avoid API errors and meaningless embeddings
-        # Tiny chunks (<10 tokens) like "```" or "```python" provide no semantic value
-        MIN_CHUNK_TOKENS = 10
+        # Filter out empty chunks. Tiny chunk filtering is handled by chunking.py
+        # when DOC_CHUNK_MERGE_ENABLED is True; this serves as a fallback guard.
+        min_tokens = settings.DOC_CHUNK_MIN_TOKENS
         non_empty_chunks = [
             (i, c)
             for i, c in enumerate(chunks)
-            if c.content.strip() and c.token_count >= MIN_CHUNK_TOKENS
+            if c.content.strip() and (
+                not settings.DOC_CHUNK_MERGE_ENABLED
+                or c.token_count >= min_tokens
+            )
         ]
         if not non_empty_chunks:
             logger.warning(
                 ls.DOC_EMBEDDING_NO_VALID_CHUNKS.format(
                     path=doc.path,
-                    min_tokens=MIN_CHUNK_TOKENS,
+                    min_tokens=min_tokens,
                 )
             )
             return ([], [])
@@ -2112,10 +2116,13 @@ class DocumentGraphUpdater:
         Returns:
             Filtered list of chunks with meaningful content.
         """
-        MIN_CHUNK_TOKENS = 10
+        min_tokens = settings.DOC_CHUNK_MIN_TOKENS
         return [
             c for c in chunks
-            if c.content.strip() and getattr(c, 'token_count', 0) >= MIN_CHUNK_TOKENS
+            if c.content.strip() and (
+                not settings.DOC_CHUNK_MERGE_ENABLED
+                or getattr(c, 'token_count', 0) >= min_tokens
+            )
         ]
 
     def _prepare_embeddings_with_fallback(
@@ -2767,6 +2774,7 @@ class DocumentGraphUpdater:
         concept_relationships: list[tuple[str, str, str, str, str, float]] = []
         failed_count = 0
 
+        skewed_count = 0
         for idx, result in enumerate(extraction_results):
             chunk = chunks[idx]
             if isinstance(result, Exception):
@@ -2775,6 +2783,9 @@ class DocumentGraphUpdater:
                     f"Concept extraction failed for {chunk.qualified_name}: {result}"
                 )
                 continue
+
+            if getattr(result, "was_rebalanced", False):
+                skewed_count += 1
 
             for concept in result.concepts:
                 concept_qn = f"{workspace}:{concept.name}"
@@ -2789,6 +2800,8 @@ class DocumentGraphUpdater:
                     "entity_category": concept.entity_category,
                     "entity_subtype": concept.entity_subtype,
                     "entity_emoji": concept.entity_emoji,
+                    "context": concept.context,
+                    "_chunk_qn": chunk.qualified_name,
                 })
                 frequency = chunk.content.lower().count(concept.name.lower())
                 if not frequency:
@@ -2822,8 +2835,25 @@ class DocumentGraphUpdater:
             doc_ls.DOC_CONCEPT_EXTRACT_DONE.format(concept_count=len(concept_nodes))
         )
 
+        if stats is not None:
+            stats["skewed_chunks_count"] = stats.get("skewed_chunks_count", 0) + skewed_count
+
         if concept_nodes:
-            deduped_nodes = self._deduplicate_concept_nodes(concept_nodes)
+            consolidator = ConceptConsolidator()
+            for node in concept_nodes:
+                chunk_qn = str(node.get("_chunk_qn", ""))
+                consolidator.add(node, chunk_qn)
+
+            # Load existing concepts for cross-document merge
+            qns = [str(n["qualified_name"]) for n in concept_nodes]
+            existing = self._load_existing_concepts(concept_ingestor, qns, workspace)
+            for node in existing:
+                raw_conf = node.get("confidence")
+                base_conf = float(raw_conf) if raw_conf is not None else 0.5
+                node["confidence"] = base_conf * 0.9
+                consolidator.add(node, "__existing__")
+
+            deduped_nodes = consolidator.consolidate()
             if len(deduped_nodes) < len(concept_nodes):
                 logger.info(
                     f"Deduplicated {len(concept_nodes)} concepts to "
@@ -2835,35 +2865,31 @@ class DocumentGraphUpdater:
         if concept_relationships:
             self._store_concept_relationships_batch(concept_ingestor, concept_relationships, workspace)
 
-    def _deduplicate_concept_nodes(
+    def _load_existing_concepts(
         self,
-        concept_nodes: list[dict[str, object]],
-    ) -> list[dict[str, object]]:
-        """Deduplicate concepts by qualified_name, keeping highest-confidence instance.
+        ingestor: MemgraphIngestor,
+        qualified_names: list[str],
+        workspace: str,
+    ) -> list[dict]:
+        """Query concept graph for existing concepts that match the given QNs.
 
-        Merges aliases across duplicate extractions and sorts by qualified_name
-        for reproducible MERGE behavior.
+        Args:
+            ingestor: Concept graph connection.
+            qualified_names: List of concept qualified names.
+            workspace: Workspace identifier.
+
+        Returns:
+            List of concept node dicts from the graph.
         """
-        seen: dict[str, dict[str, object]] = {}
-        for node in concept_nodes:
-            qn = str(node["qualified_name"])
-            if qn not in seen:
-                seen[qn] = dict(node)
-            else:
-                existing = seen[qn]
-                # Merge aliases
-                existing_aliases = set(existing.get("aliases") or [])
-                new_aliases = set(node.get("aliases") or [])
-                merged_aliases = sorted(existing_aliases | new_aliases)
-                existing["aliases"] = merged_aliases
-                # Keep highest-confidence instance
-                existing_conf = float(existing.get("confidence") or 0.0)
-                new_conf = float(node.get("confidence") or 0.0)
-                if new_conf > existing_conf:
-                    seen[qn] = dict(node)
-                    seen[qn]["aliases"] = merged_aliases
-        # Sort by qualified_name for reproducible batch ordering
-        return sorted(seen.values(), key=lambda n: str(n["qualified_name"]))
+        if not qualified_names:
+            return []
+        cypher = """
+        UNWIND $qns AS qn
+        MATCH (c:Concept {qualified_name: qn, workspace: $workspace})
+        RETURN c {.*} AS node
+        """
+        results = ingestor.fetch_all(cypher, {"qns": qualified_names, "workspace": workspace})
+        return [r["node"] for r in results]
 
     def _merge_concept_nodes_batch(
         self,
@@ -2936,39 +2962,39 @@ class DocumentGraphUpdater:
             MATCH (b:Concept {qualified_name: rel.to_qn, workspace: $workspace})
             FOREACH (_ IN CASE WHEN rel.category = 'HIERARCHICAL' THEN [1] ELSE [] END |
                 MERGE (a)-[r:HIERARCHICAL]->(b)
-                SET r.verb = rel.verb, r.emoji = rel.emoji, r.strength = rel.strength
+                SET r.verb = rel.verb, r.category = rel.category, r.emoji = rel.emoji, r.strength = rel.strength
             )
             FOREACH (_ IN CASE WHEN rel.category = 'COMPOSITIONAL' THEN [1] ELSE [] END |
                 MERGE (a)-[r:COMPOSITIONAL]->(b)
-                SET r.verb = rel.verb, r.emoji = rel.emoji, r.strength = rel.strength
+                SET r.verb = rel.verb, r.category = rel.category, r.emoji = rel.emoji, r.strength = rel.strength
             )
             FOREACH (_ IN CASE WHEN rel.category = 'CONTEXTUAL' THEN [1] ELSE [] END |
                 MERGE (a)-[r:CONTEXTUAL]->(b)
-                SET r.verb = rel.verb, r.emoji = rel.emoji, r.strength = rel.strength
+                SET r.verb = rel.verb, r.category = rel.category, r.emoji = rel.emoji, r.strength = rel.strength
             )
             FOREACH (_ IN CASE WHEN rel.category = 'ATTRIBUTIVE' THEN [1] ELSE [] END |
                 MERGE (a)-[r:ATTRIBUTIVE]->(b)
-                SET r.verb = rel.verb, r.emoji = rel.emoji, r.strength = rel.strength
+                SET r.verb = rel.verb, r.category = rel.category, r.emoji = rel.emoji, r.strength = rel.strength
             )
             FOREACH (_ IN CASE WHEN rel.category = 'COMPARATIVE' THEN [1] ELSE [] END |
                 MERGE (a)-[r:COMPARATIVE]->(b)
-                SET r.verb = rel.verb, r.emoji = rel.emoji, r.strength = rel.strength
+                SET r.verb = rel.verb, r.category = rel.category, r.emoji = rel.emoji, r.strength = rel.strength
             )
             FOREACH (_ IN CASE WHEN rel.category = 'SEQUENTIAL' THEN [1] ELSE [] END |
                 MERGE (a)-[r:SEQUENTIAL]->(b)
-                SET r.verb = rel.verb, r.emoji = rel.emoji, r.strength = rel.strength
+                SET r.verb = rel.verb, r.category = rel.category, r.emoji = rel.emoji, r.strength = rel.strength
             )
             FOREACH (_ IN CASE WHEN rel.category = 'CAUSAL' THEN [1] ELSE [] END |
                 MERGE (a)-[r:CAUSAL]->(b)
-                SET r.verb = rel.verb, r.emoji = rel.emoji, r.strength = rel.strength
+                SET r.verb = rel.verb, r.category = rel.category, r.emoji = rel.emoji, r.strength = rel.strength
             )
             FOREACH (_ IN CASE WHEN rel.category = 'ANALOGICAL' THEN [1] ELSE [] END |
                 MERGE (a)-[r:ANALOGICAL]->(b)
-                SET r.verb = rel.verb, r.emoji = rel.emoji, r.strength = rel.strength
+                SET r.verb = rel.verb, r.category = rel.category, r.emoji = rel.emoji, r.strength = rel.strength
             )
             FOREACH (_ IN CASE WHEN rel.category = 'RELATED_TO' THEN [1] ELSE [] END |
                 MERGE (a)-[r:RELATED_TO]->(b)
-                SET r.verb = rel.verb, r.emoji = rel.emoji, r.strength = rel.strength
+                SET r.verb = rel.verb, r.category = rel.category, r.emoji = rel.emoji, r.strength = rel.strength
             )
             """
             ingestor.fetch_all(cypher, {"rels": list(batch), "workspace": workspace})
@@ -3004,7 +3030,7 @@ class DocumentGraphUpdater:
         if concept_ingestor is None or not settings.CONCEPT_MEMGRAPH_ENABLED:
             return
 
-        logger.info(doc_ls.DOC_CONCEPT_CLEANUP_START.format(doc_path=document_path))
+        logger.info(doc_ls.DOC_ORPHANED_CONCEPTS_CLEANUP_START.format(doc_path=document_path))
 
         # Step 1: Get chunk QNs from doc instance
         chunk_qns = self._get_chunk_qns_for_document(document_path, doc_ingestor)
@@ -3034,7 +3060,7 @@ class DocumentGraphUpdater:
         )
 
         removed_count = result[0].get("removed_count", 0) if result else 0
-        logger.info(doc_ls.DOC_CONCEPT_CLEANUP_DONE.format(count=removed_count))
+        logger.info(doc_ls.DOC_ORPHANED_CONCEPTS_CLEANUP_DONE.format(count=removed_count))
 
 
 def migrate_section_count_property(

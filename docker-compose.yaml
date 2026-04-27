@@ -16,7 +16,7 @@ services:
     volumes:
       - memgraph_code_data:/var/lib/memgraph
     healthcheck:
-      test: ["CMD-SHELL", "echo 'RETURN 1;' | mgconsole"]
+      test: ["CMD-SHELL", "echo 'RETURN 1 as result;' | mgconsole"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -46,7 +46,7 @@ services:
     volumes:
       - memgraph_doc_data:/var/lib/memgraph
     healthcheck:
-      test: ["CMD-SHELL", "echo 'RETURN 1;' | mgconsole"]
+      test: ["CMD-SHELL", "echo 'RETURN 1 as result;' | mgconsole"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -76,7 +76,7 @@ services:
     volumes:
       - memgraph_json_data:/var/lib/memgraph
     healthcheck:
-      test: ["CMD-SHELL", "echo 'RETURN 1;' | mgconsole"]
+      test: ["CMD-SHELL", "echo 'RETURN 1 as result;' | mgconsole"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -106,7 +106,7 @@ services:
     volumes:
       - memgraph_concept_data:/var/lib/memgraph
     healthcheck:
-      test: ["CMD-SHELL", "echo 'RETURN 1;' | mgconsole"]
+      test: ["CMD-SHELL", "echo 'RETURN 1 as result;' | mgconsole"]
       interval: 30s
       timeout: 10s
       retries: 3

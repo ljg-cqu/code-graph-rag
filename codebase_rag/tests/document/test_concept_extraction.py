@@ -287,7 +287,7 @@ class TestLLMConceptExtractorExtract:
         )
         result = ExtractionResult(concepts=[concept])
 
-        async def mock_run(content):
+        async def mock_run(content, **kwargs):
             return _MockAgentOutput(result)
 
         extractor.agent = Mock(run=mock_run)
@@ -299,7 +299,7 @@ class TestLLMConceptExtractorExtract:
         extractor = LLMConceptExtractor()
         call_log = []
 
-        async def mock_run(content):
+        async def mock_run(content, **kwargs):
             call_log.append(content)
             return _MockAgentOutput(ExtractionResult())
 
@@ -312,7 +312,7 @@ class TestLLMConceptExtractorExtract:
         extractor = LLMConceptExtractor()
         call_log = []
 
-        async def mock_run(content):
+        async def mock_run(content, **kwargs):
             call_log.append(content)
             return _MockAgentOutput(ExtractionResult())
 
@@ -344,7 +344,7 @@ class TestLLMConceptExtractorExtract:
         )
         result = ExtractionResult(concepts=[concept])
 
-        async def mock_run(content):
+        async def mock_run(content, **kwargs):
             return _MockAgentOutput(result)
 
         extractor.agent = Mock(run=mock_run)
@@ -369,7 +369,7 @@ class TestLLMConceptExtractorRetry:
         extractor = LLMConceptExtractor()
         call_count = 0
 
-        async def mock_run(content):
+        async def mock_run(content, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count < 3:
@@ -397,7 +397,7 @@ class TestLLMConceptExtractorRetry:
         extractor = LLMConceptExtractor()
         call_count = 0
 
-        async def mock_run(content):
+        async def mock_run(content, **kwargs):
             nonlocal call_count
             call_count += 1
             raise RuntimeError("api key invalid")
@@ -412,7 +412,7 @@ class TestLLMConceptExtractorRetry:
         extractor = LLMConceptExtractor()
         call_count = 0
 
-        async def mock_run(content):
+        async def mock_run(content, **kwargs):
             nonlocal call_count
             call_count += 1
             raise TimeoutError()
@@ -453,7 +453,7 @@ class TestLLMConceptExtractorRetry:
         extractor = LLMConceptExtractor(circuit_breaker=cb)
         call_count = 0
 
-        async def mock_run(content):
+        async def mock_run(content, **kwargs):
             nonlocal call_count
             call_count += 1
             raise RuntimeError("service down")
@@ -654,7 +654,7 @@ class TestAdaptiveTimeoutTuning:
         extractor = LLMConceptExtractor()
         call_count = 0
 
-        async def mock_run(content):
+        async def mock_run(content, **kwargs):
             nonlocal call_count
             call_count += 1
             raise TimeoutError()
@@ -792,7 +792,7 @@ class TestRetryObservability:
         extractor = LLMConceptExtractor(timeout=10.0, max_timeout=100.0)
         call_count = 0
 
-        async def mock_run(content):
+        async def mock_run(content, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count <= 2:
@@ -820,7 +820,7 @@ class TestRetryObservability:
         extractor = LLMConceptExtractor()
         result = ExtractionResult()
 
-        async def mock_run(content):
+        async def mock_run(content, **kwargs):
             return _MockAgentOutput(result)
 
         extractor.agent = Mock(run=mock_run)
@@ -862,7 +862,7 @@ class TestCircuitBreakerStormMitigation:
         )
         result = ExtractionResult(concepts=[concept])
 
-        async def mock_run(content):
+        async def mock_run(content, **kwargs):
             return _MockAgentOutput(result)
 
         extractor.agent = Mock(run=mock_run)
@@ -898,10 +898,215 @@ class TestRelationshipDiversityCheck:
             ConceptRelationship(from_concept="A", to_concept="E", verb="produces", category="CAUSAL", emoji="⚡", strength=0.8),
         ]
         with patch("loguru.logger") as mock_logger:
-            _check_relationship_diversity(rels, "chunk:test")
-            mock_logger.debug.assert_called_once()
-            assert "skew detected" in mock_logger.debug.call_args[0][0]
+            is_skewed = _check_relationship_diversity(rels, "chunk:test")
+            assert is_skewed is True
+            mock_logger.warning.assert_called_once()
+            assert "skew detected" in mock_logger.warning.call_args[0][0]
 
     def test_empty_relationships_noop(self) -> None:
         from codebase_rag.document.concept_extraction import _check_relationship_diversity
-        _check_relationship_diversity([], "chunk:empty")
+        is_skewed = _check_relationship_diversity([], "chunk:empty")
+        assert is_skewed is False
+
+
+class TestMaxTokensConfiguration:
+    """Tests for DOC_CONCEPT_EXTRACTION_MAX_TOKENS configuration."""
+
+    def test_max_tokens_configuration_exists(self):
+        from codebase_rag.config import settings
+
+        assert hasattr(settings, "DOC_CONCEPT_EXTRACTION_MAX_TOKENS")
+        assert settings.DOC_CONCEPT_EXTRACTION_MAX_TOKENS >= 256
+        assert settings.DOC_CONCEPT_EXTRACTION_MAX_TOKENS <= 32768
+
+    def test_max_tokens_default_value(self):
+        from codebase_rag.config import settings
+
+        # Default should be 4096
+        assert settings.DOC_CONCEPT_EXTRACTION_MAX_TOKENS == 4096
+
+
+class TestSplitExtraction:
+    """Tests for chunk splitting recovery from context overflow."""
+
+    @pytest.mark.asyncio
+    async def test_split_extraction_with_mocked_agent(self):
+        """Test that split extraction works by mocking the agent directly."""
+        extractor = LLMConceptExtractor()
+
+        # Track which chunks are processed
+        processed_qns = []
+
+        async def mock_run(content, **kwargs):
+            # This will be called for each part after splitting
+            # We can detect which part by the content size
+            processed_qns.append(len(content))
+            concept = ExtractedConcept(
+                name=f"Concept-{len(processed_qns)}",
+                aliases=[],
+                definition="Test concept",
+                confidence=0.9,
+                entity_category="ABSTRACT_CONCEPT",
+            )
+            return _MockAgentOutput(ExtractionResult(concepts=[concept]))
+
+        extractor.agent = Mock(run=mock_run)
+
+        # Create content that will be split into paragraphs
+        large_chunk = "paragraph one.\n\nparagraph two.\n\nparagraph three."
+
+        result = await extractor._extract_with_splitting(
+            large_chunk, "test_chunk", 30.0
+        )
+
+        # Should have extracted concepts from the split parts
+        assert isinstance(result, ExtractionResult)
+        # The paragraph split should create 2 parts (mid-point of 3 paragraphs)
+        assert len(processed_qns) >= 1
+
+    def test_merge_extraction_results_deduplicates(self):
+        from codebase_rag.document.concept_extraction import (
+            ConceptRelationship,
+        )
+
+        extractor = LLMConceptExtractor()
+
+        r1 = ExtractionResult(
+            concepts=[ExtractedConcept(
+                name="Alpha",
+                aliases=[],
+                type="entity",
+                definition="First concept",
+                confidence=0.9,
+                entity_category="ABSTRACT_CONCEPT",
+            )],
+            relationships=[ConceptRelationship(
+                from_concept="A",
+                to_concept="B",
+                verb="relates-to",
+                category="RELATED_TO",
+                emoji="🔗",
+                strength=0.8,
+            )],
+        )
+        r2 = ExtractionResult(
+            concepts=[ExtractedConcept(
+                name="Alpha",
+                aliases=[],
+                type="entity",
+                definition="First concept",
+                confidence=0.9,
+                entity_category="ABSTRACT_CONCEPT",
+            )],
+            relationships=[ConceptRelationship(
+                from_concept="A",
+                to_concept="B",
+                verb="relates-to",
+                category="RELATED_TO",
+                emoji="🔗",
+                strength=0.8,
+            )],
+        )
+
+        merged = extractor._merge_extraction_results([r1, r2])
+
+        assert len(merged.concepts) == 1
+        assert len(merged.relationships) == 1
+
+    def test_merge_preserves_different_concepts(self):
+        extractor = LLMConceptExtractor()
+
+        r1 = ExtractionResult(
+            concepts=[ExtractedConcept(
+                name="Alpha",
+                aliases=[],
+                type="entity",
+                definition="First concept",
+                confidence=0.9,
+                entity_category="ABSTRACT_CONCEPT",
+            )],
+            relationships=[],
+        )
+        r2 = ExtractionResult(
+            concepts=[ExtractedConcept(
+                name="Beta",
+                aliases=[],
+                type="entity",
+                definition="Second concept",
+                confidence=0.9,
+                entity_category="ABSTRACT_CONCEPT",
+            )],
+            relationships=[],
+        )
+
+        merged = extractor._merge_extraction_results([r1, r2])
+
+        assert len(merged.concepts) == 2
+        assert {c.name for c in merged.concepts} == {"Alpha", "Beta"}
+
+    def test_merge_deduplicates_relationships(self):
+        from codebase_rag.document.concept_extraction import (
+            ConceptRelationship,
+        )
+
+        extractor = LLMConceptExtractor()
+
+        r1 = ExtractionResult(
+            concepts=[],
+            relationships=[
+                ConceptRelationship(
+                    from_concept="A", to_concept="B", verb="causes",
+                    category="CAUSAL", emoji="⚡", strength=0.8,
+                ),
+                ConceptRelationship(
+                    from_concept="A", to_concept="C", verb="enables",
+                    category="CAUSAL", emoji="⚡", strength=0.7,
+                ),
+            ],
+        )
+        r2 = ExtractionResult(
+            concepts=[],
+            relationships=[
+                ConceptRelationship(
+                    from_concept="A", to_concept="B", verb="causes",
+                    category="CAUSAL", emoji="⚡", strength=0.8,
+                ),
+                ConceptRelationship(
+                    from_concept="B", to_concept="D", verb="triggers",
+                    category="CAUSAL", emoji="⚡", strength=0.6,
+                ),
+            ],
+        )
+
+        merged = extractor._merge_extraction_results([r1, r2])
+
+        # Should have 3 unique relationships (A->B is duplicated)
+        assert len(merged.relationships) == 3
+        keys = {(r.from_concept, r.to_concept, r.verb) for r in merged.relationships}
+        assert keys == {
+            ("A", "B", "causes"),
+            ("A", "C", "enables"),
+            ("B", "D", "triggers"),
+        }
+
+    def test_merge_empty_results(self):
+        """Merging empty results should return empty ExtractionResult."""
+        extractor = LLMConceptExtractor()
+
+        merged = extractor._merge_extraction_results([])
+
+        assert merged == ExtractionResult()
+
+    def test_split_single_paragraph_uses_sentence_split(self):
+        """When there's only one paragraph, use sentence splitting."""
+        from codebase_rag.document.concept_extraction import _SENTENCE_SPLIT_RE
+
+        # Content with multiple sentences but no paragraph breaks
+        content = "First sentence. Second sentence! Third sentence?"
+        paragraphs = content.split("\n\n")
+
+        assert len(paragraphs) == 1  # Single paragraph
+
+        # The sentence split should work
+        sentences = _SENTENCE_SPLIT_RE.split(content)
+        assert len(sentences) == 3

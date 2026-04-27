@@ -230,6 +230,7 @@ if _HAS_PYDANTIC_AI:
         UserPromptPart as _UserPromptPart,
     )
     from pydantic_ai.models import Model as _Model
+    from pydantic_ai.settings import ModelSettings as _ModelSettings
     from pydantic_ai.usage import UsageLimits as _UsageLimits
 
 else:
@@ -290,20 +291,22 @@ else:
             *,
             system_prompt: str | Sequence[str] = (),
             name: str | None = None,
-            result_type: Any = None,
+            output_type: Any = None,
             tools: Sequence[Any] = (),
             retries: int = 1,
             result_tool_name: str = "final_result",
             result_tool_description: str | None = None,
             defer_model_check: bool = False,
             end_strategy: str = "early",
+            model_settings: Any = None,
         ) -> None:
             self.model = model
             self.system_prompt = system_prompt
             self.name = name
-            self.result_type = result_type
+            self.output_type = output_type
             self.tools = list(tools)
             self.retries = retries
+            self.model_settings = model_settings
             self._unavailable = True
 
         async def run(
@@ -314,6 +317,7 @@ else:
             model: Any = None,
             usage_limits: Any = None,
             usage: Any = None,
+            model_settings: Any = None,
         ) -> _RunResult:
             raise RuntimeError(
                 "pydantic_ai is required for agent execution. "
@@ -328,6 +332,7 @@ else:
             model: Any = None,
             usage_limits: Any = None,
             usage: Any = None,
+            model_settings: Any = None,
         ) -> _RunResult:
             raise RuntimeError(
                 "pydantic_ai is required for agent execution. "
@@ -339,6 +344,14 @@ else:
         """Stub ModelHTTPError when pydantic_ai is unavailable."""
 
         pass
+
+    # Stub ModelSettings class
+    class _ModelSettings:
+        """Stub ModelSettings when pydantic_ai is unavailable."""
+
+        def __init__(self, **kwargs: object) -> None:
+            for k, v in kwargs.items():
+                setattr(self, k, v)
 
     # Stub message classes
     class _ModelMessage:
@@ -462,6 +475,7 @@ ModelHTTPError = _ModelHTTPError
 ModelMessage = _ModelMessage
 ModelRequest = _ModelRequest
 ModelResponse = _ModelResponse
+ModelSettings = _ModelSettings
 UserPromptPart = _UserPromptPart
 ToolCallPart = _ToolCallPart
 ToolReturnPart = _ToolReturnPart
@@ -480,6 +494,7 @@ __all__ = [
     "ModelMessage",
     "ModelRequest",
     "ModelResponse",
+    "ModelSettings",
     "RunContext",
     "Tool",
     "ToolCallPart",

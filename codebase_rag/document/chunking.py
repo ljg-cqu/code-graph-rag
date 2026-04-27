@@ -209,6 +209,7 @@ class SemanticDocumentChunker:
             Stops yielding after MAX_CHUNKS_PER_DOCUMENT to prevent memory exhaustion.
             Handles preamble (content before first section) by chunking it separately.
             Adjusts chunk size dynamically for large documents to avoid truncation.
+            Merges tiny chunks if DOC_CHUNK_MERGE_ENABLED is True.
         """
         # Use a mutable counter to track chunk index across recursive calls
         chunk_counter = [0]  # Use list for mutable reference
@@ -222,6 +223,8 @@ class SemanticDocumentChunker:
                 f"Large document detected ({word_count} words), adjusted max chunk size to {self.max_tokens} tokens"
             )
 
+        chunks: list[DocumentChunk] = []
+
         if not doc.sections:
             # No sections - chunk by paragraphs
             for chunk in self._chunk_plain_text(doc.content, doc.path, chunk_counter):
@@ -230,47 +233,65 @@ class SemanticDocumentChunker:
                         f"Document {doc.path} reached MAX_CHUNKS_PER_DOCUMENT ({self.MAX_CHUNKS_PER_DOCUMENT}) "
                         "limit. Some content may not be indexed."
                     )
+                    self.max_tokens = original_max_tokens
                     return
-                yield chunk
-            return
+                chunks.append(chunk)
+        else:
+            # Handle preamble content (content before first section)
+            first_section_start = doc.sections[0].start_line
+            if first_section_start > 0:
+                # Extract preamble content
+                lines = doc.content.split("\n")
+                preamble_lines = lines[:first_section_start]
+                preamble_content = "\n".join(preamble_lines)
+                if preamble_content.strip():
+                    logger.debug(
+                        f"Chunking preamble content ({first_section_start} lines) for {doc.path}"
+                    )
+                    for chunk in self._chunk_plain_text(
+                        preamble_content, doc.path, chunk_counter, section_title="Preamble"
+                    ):
+                        if chunk_counter[0] >= self.MAX_CHUNKS_PER_DOCUMENT:
+                            logger.warning(
+                                f"Document {doc.path} reached MAX_CHUNKS_PER_DOCUMENT ({self.MAX_CHUNKS_PER_DOCUMENT}) "
+                                "limit. Some content may not be indexed."
+                            )
+                            self.max_tokens = original_max_tokens
+                            return
+                        chunks.append(chunk)
 
-        # Handle preamble content (content before first section)
-        first_section_start = doc.sections[0].start_line
-        if first_section_start > 0:
-            # Extract preamble content
-            lines = doc.content.split("\n")
-            preamble_lines = lines[:first_section_start]
-            preamble_content = "\n".join(preamble_lines)
-            if preamble_content.strip():
-                logger.debug(
-                    f"Chunking preamble content ({first_section_start} lines) for {doc.path}"
-                )
-                for chunk in self._chunk_plain_text(
-                    preamble_content, doc.path, chunk_counter, section_title="Preamble"
+            for section in doc.sections:
+                for chunk in self._chunk_section_recursive(
+                    section, doc.path, chunk_counter
                 ):
                     if chunk_counter[0] >= self.MAX_CHUNKS_PER_DOCUMENT:
                         logger.warning(
                             f"Document {doc.path} reached MAX_CHUNKS_PER_DOCUMENT ({self.MAX_CHUNKS_PER_DOCUMENT}) "
                             "limit. Some content may not be indexed."
                         )
+                        self.max_tokens = original_max_tokens
                         return
-                    yield chunk
-
-        for section in doc.sections:
-            for chunk in self._chunk_section_recursive(
-                section, doc.path, chunk_counter
-            ):
-                if chunk_counter[0] >= self.MAX_CHUNKS_PER_DOCUMENT:
-                    logger.warning(
-                        f"Document {doc.path} reached MAX_CHUNKS_PER_DOCUMENT ({self.MAX_CHUNKS_PER_DOCUMENT}) "
-                        "limit. Some content may not be indexed."
-                    )
-                    self.max_tokens = original_max_tokens
-                    return
-                yield chunk
+                    chunks.append(chunk)
 
         # Restore original chunk size for subsequent documents
         self.max_tokens = original_max_tokens
+
+        if settings.DOC_CHUNK_MERGE_ENABLED:
+            original_count = len(chunks)
+            chunks = merge_tiny_chunks(chunks, settings.DOC_CHUNK_MIN_TOKENS)
+            merged_count = original_count - len(chunks)
+            if merged_count > 0:
+                from . import logs as doc_ls
+
+                logger.debug(
+                    doc_ls.DOC_CHUNK_MERGED.format(
+                        count=merged_count,
+                        min_tokens=settings.DOC_CHUNK_MIN_TOKENS,
+                        doc_path=doc.path,
+                    )
+                )
+
+        yield from chunks
 
     def _chunk_section_recursive(
         self, section: ExtractedSection, doc_path: str, chunk_counter: list[int]
@@ -1313,4 +1334,74 @@ class SemanticDocumentChunker:
                 chunk_counter[0] += 1
 
 
-__all__ = ["DocumentChunk", "SemanticDocumentChunker"]
+def merge_tiny_chunks(
+    chunks: list[DocumentChunk],
+    min_tokens: int = 10,
+) -> list[DocumentChunk]:
+    """Merge chunks below minimum token threshold with adjacent chunks.
+
+    Strategy:
+    1. Tiny chunk at start -> merge with next (same section only)
+    2. Tiny chunk in middle -> merge with previous (same section only)
+    3. Tiny chunk at end -> merge with previous (same section only)
+
+    Section boundaries are preserved: a tiny chunk is never merged across
+    a different section_title. This ensures semantic section metadata is not
+    lost during merge.
+
+    Post-conditions:
+    - All returned chunks have token_count >= min_tokens OR are standalone.
+    - chunk_index is renumbered sequentially.
+    - start_line / end_line cover the full merged range.
+    - token_count is recalculated via count_tokens() for accuracy.
+    - section_title is never changed to a different section.
+    """
+    if not chunks:
+        return chunks
+
+    merged: list[DocumentChunk] = []
+    i = 0
+
+    while i < len(chunks):
+        chunk = chunks[i]
+
+        if chunk.token_count < min_tokens:
+            if merged and merged[-1].section_title == chunk.section_title:
+                prev = merged[-1]
+                merged_content = prev.content + "\n\n" + chunk.content
+                merged[-1] = DocumentChunk(
+                    content=merged_content,
+                    section_title=prev.section_title,
+                    start_line=min(prev.start_line, chunk.start_line),
+                    end_line=max(prev.end_line, chunk.end_line),
+                    token_count=count_tokens(merged_content),
+                    document_path=prev.document_path,
+                    chunk_index=prev.chunk_index,
+                )
+            elif i + 1 < len(chunks) and chunks[i + 1].section_title == chunk.section_title:
+                next_chunk = chunks[i + 1]
+                merged_content = chunk.content + "\n\n" + next_chunk.content
+                chunks[i + 1] = DocumentChunk(
+                    content=merged_content,
+                    section_title=next_chunk.section_title,
+                    start_line=min(chunk.start_line, next_chunk.start_line),
+                    end_line=max(chunk.end_line, next_chunk.end_line),
+                    token_count=count_tokens(merged_content),
+                    document_path=next_chunk.document_path,
+                    chunk_index=next_chunk.chunk_index,
+                )
+            else:
+                # Standalone tiny chunk at end with no same-section neighbor
+                merged.append(chunk)
+            i += 1
+        else:
+            merged.append(chunk)
+            i += 1
+
+    for idx, chunk in enumerate(merged):
+        chunk.chunk_index = idx
+
+    return merged
+
+
+__all__ = ["DocumentChunk", "SemanticDocumentChunker", "merge_tiny_chunks"]

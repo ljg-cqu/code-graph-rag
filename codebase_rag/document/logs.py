@@ -11,6 +11,18 @@ DOC_CONCEPT_PROVIDER_UNHEALTHY = "Provider unhealthy after timeout, skipping ret
 DOC_CONCEPT_BREAKER_SKIP_DOC = "Concept extraction circuit breaker is OPEN ({remaining:.0f}s remaining), skipping concept extraction for document {doc}"
 DOC_CONCEPT_RETRY_ATTEMPT = "Concept extraction retry {attempt}/{max_retries} for {chunk_qn} after {delay:.1f}s ({error_type}, timeout={timeout:.1f}s)"
 DOC_CONCEPT_RETRY_EXHAUSTED = "Concept extraction exhausted retries for {chunk_qn}, queued to DLQ"
+DOC_CONCEPT_PROACTIVE_SPLIT = "Proactive split for {chunk_qn}: {tokens} tokens > {limit} limit"
+DOC_CONCEPT_RECURSIVE_SPLIT = "Recursive split depth {depth} for {chunk_qn}"
+DOC_CONCEPT_SPLIT_ATTEMPT = "Attempting split extraction for {chunk_qn}"
+DOC_CONCEPT_SPLIT_SUCCESS = "Split extraction succeeded for {chunk_qn}"
+DOC_CONCEPT_SPLIT_FAILED = "Split extraction failed for {chunk_qn}: {error}"
+DOC_CONCEPT_ADAPTIVE_RETRY = "Retrying {chunk_qn} with increased max_tokens: {max_tokens}"
+DOC_CONCEPT_RETRY_SUCCESS = "Concept extraction succeeded on attempt {attempt} for {chunk_qn}"
+DOC_CONCEPT_QUOTA_EXCEEDED = "LLM quota exceeded. Reset at: {retry_after}. Stopping all retries to preserve remaining quota."
+DOC_CONCEPT_NON_RECOVERABLE = "Non-recoverable error: {error_type}"
+
+# Chunk merging
+DOC_CHUNK_MERGED = "Merged {count} tiny chunks (< {min_tokens} tokens) during chunking for {doc_path}"
 
 # Graph algorithms
 DOC_SHORTEST_PATH_QUERY = "Finding shortest path: {source} -> {target}"
@@ -21,8 +33,8 @@ DOC_NEIGHBORS_QUERY = "Finding neighbors of: {concept} at depth {depth}"
 DOC_GRAPH_ALGO_ERROR = "Document graph algorithm failed: {error}"
 
 # Real-time updates
-DOC_CONCEPT_CLEANUP_START = "Cleaning up orphaned concepts for document: {doc_path}"
-DOC_CONCEPT_CLEANUP_DONE = "Removed {count} orphaned concepts"
+DOC_ORPHANED_CONCEPTS_CLEANUP_START = "Cleaning up orphaned concepts for document: {doc_path}"
+DOC_ORPHANED_CONCEPTS_CLEANUP_DONE = "Removed {count} orphaned concepts"
 
 # Document updater resilience
 DOC_GRAPH_CONNECT_FAILED = "Document graph connection failed: {error}"
@@ -48,4 +60,34 @@ DOC_PREFLIGHT_MISSING = "Document disappeared between scan and extraction: {path
 DOC_PRE_VERIFICATION_FILTERED = "Filtered {count} documents that no longer exist (likely temporary/generated files)"
 DOC_DLQ_CLEANUP = "Cleaned up {count} stale error files from {path}"
 DOC_DLQ_SIZE_WARNING = "DLQ has accumulated {count} errors — consider investigating root cause"
+DOC_DLQ_NO_OVERFLOW_ERRORS = "No CONCEPT_CONTEXT_OVERFLOW errors to retry"
+DOC_DLQ_RETRY_START = "Retrying {count} context-overflow chunks from DLQ"
+DOC_DLQ_NO_CONTENT = "No content available for DLQ retry: {chunk_qn}"
+DOC_DLQ_UNAVAILABLE = "No dead letter queue available for retry"
+DOC_DLQ_ADAPTIVE_FAILED = "Adaptive retry failed for {chunk_qn}: {reason}. Falling back to split retry."
+DOC_DLQ_ADAPTIVE_MISSING_CONTENT = "No chunk content in DLQ entry"
 DOC_CACHE_PRUNE = "Pruned stale version cache entry: {path}"
+
+# Concept runner — dual-graph connection
+CONCEPT_GRAPH_DISABLED = "Concept graph disabled, concept extraction unavailable"
+CONCEPT_GRAPH_CONNECT_FAILED = "Concept graph connection failed: {error}"
+CONCEPT_GRAPH_CLOSE_FAILED = "Error closing concept ingestor: {error}"
+DOC_GRAPH_CLOSE_FAILED = "Error closing document ingestor: {error}"
+DUAL_GRAPH_CONNECT_FAILED = "Failed to connect to required graphs"
+
+# Concept runner — initialization and control flow
+DOC_CONCEPT_EXTRACTION_DISABLED = "Concept extraction disabled via DOC_CONCEPT_EXTRACTION_ENABLED"
+DOC_CONCEPT_INIT_FAILED = "Failed to initialize concept extractor: {error}"
+DOC_CONCEPT_NO_CHUNKS = "No chunks found needing concept extraction"
+DOC_CONCEPT_ALL_EXISTING = "{count} chunks already have concepts. Use --force to re-extract."
+DOC_CONCEPT_LIMIT_APPLIED = "Processing limited to {limit} chunks"
+DOC_CONCEPT_DRY_RUN = "DRY RUN: Would process {count} chunks"
+DOC_CONCEPT_INDEX_STATUS = "Index status: {status}"
+DOC_CONCEPT_CLEANUP_START = "Cleaning up existing concepts for {count} chunks before re-extraction"
+
+# Concept runner — per-chunk extraction
+DOC_CONCEPT_EXTRACT_FAILED = "Concept extraction failed for {chunk_qn}: {error}"
+
+# Concept runner — index management
+DOC_CONCEPT_INDEX_EXISTS = "Index on :{label}({prop}) already exists"
+DOC_CONCEPT_INDEX_FAILED = "Failed to create index on :{label}({prop}): {error}"

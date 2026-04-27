@@ -25,6 +25,10 @@ from .concept_extraction import (
     resolve_category,
     resolve_entity_category,
 )
+from .concept_runner import (
+    ConceptExtractionRunner,
+    StandaloneExtractionStats,
+)
 from .document_updater import (
     DocumentGraphUnavailableError,
     DocumentGraphUpdater,
@@ -62,6 +66,9 @@ __all__ = [
     "resolve_entity_category",
     "VERB_REGISTRY",
     "ENTITY_SUBTYPE_REGISTRY",
+    # Standalone concept extraction
+    "ConceptExtractionRunner",
+    "StandaloneExtractionStats",
     # Circuit breaker
     "CircuitBreaker",
     "CircuitBreakerConfig",

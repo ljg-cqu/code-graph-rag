@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
 
 
 class MockTool:
@@ -50,18 +49,20 @@ class MockAgent:
         *,
         system_prompt: str | None = None,
         name: str | None = None,
-        result_type: Any = None,
+        output_type: Any = None,
         tools: list[Any] | None = None,
         retries: int = 1,
+        model_settings: Any = None,
         response_data: Any = "mock response",
         **kwargs: object,
     ) -> None:
         self.model = model
         self.system_prompt = system_prompt
         self.name = name
-        self.result_type = result_type
+        self.output_type = output_type
         self.tools = tools or []
         self.retries = retries
+        self.model_settings = model_settings
         self.response_data = response_data
         self.run_count = 0
         self.last_prompt: str | None = None
@@ -75,11 +76,13 @@ class MockAgent:
         model: Any = None,
         usage_limits: Any = None,
         usage: Any = None,
+        model_settings: Any = None,
     ) -> MockRunResult:
         """Mock async run that returns a preset result."""
         self.run_count += 1
         self.last_prompt = user_prompt
         self.last_message_history = message_history
+        self.last_model_settings = model_settings
 
         result = MockRunResult(data=self.response_data)
         return result
@@ -92,11 +95,13 @@ class MockAgent:
         model: Any = None,
         usage_limits: Any = None,
         usage: Any = None,
+        model_settings: Any = None,
     ) -> MockRunResult:
         """Mock sync run that returns a preset result."""
         self.run_count += 1
         self.last_prompt = user_prompt
         self.last_message_history = message_history
+        self.last_model_settings = model_settings
 
         return MockRunResult(data=self.response_data)
 

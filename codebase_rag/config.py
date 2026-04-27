@@ -622,6 +622,14 @@ class AppConfig(BaseSettings):
     # Document concept extraction
     DOC_CONCEPT_EXTRACTION_ENABLED: bool = True
     DOC_CONCEPT_MIN_CONFIDENCE: float = Field(default=0.7, ge=0.0, le=1.0)
+    DOC_CONCEPT_MIN_RELATIONSHIP_STRENGTH: float = Field(
+        default=0.6, ge=0.0, le=1.0,
+        description="Minimum relationship strength to write to graph",
+    )
+    DOC_CONCEPT_FLUSH_INTERVAL: int = Field(
+        default=100, ge=10, le=1000,
+        description="Number of chunks to accumulate before intermediate flush in runner",
+    )
     DOC_CONCEPT_EXTRACTION_CONCURRENCY: int = Field(default=10, ge=1, le=50)
     DOC_CONCEPT_EXTRACTION_MAX_RETRIES: int = Field(default=3, ge=0, le=10)
     DOC_CONCEPT_EXTRACTION_RETRY_DELAY: float = Field(default=1.0, ge=0.1, le=60.0)
@@ -686,6 +694,90 @@ class AppConfig(BaseSettings):
         ge=0.0,
         le=15.0,
         description="Additional timeout per code block (seconds)",
+    )
+    DOC_CONCEPT_EXTRACTION_MAX_TOKENS: int = Field(
+        default=4096,
+        ge=256,
+        le=32768,
+        description="Maximum output tokens for concept extraction. Increase if seeing context overflow errors.",
+    )
+    DOC_CONCEPT_TOKENS_PER_CHAR: float = Field(
+        default=0.5,
+        ge=0.1,
+        le=2.0,
+        description="Output tokens per input character for adaptive max_tokens calculation",
+    )
+    DOC_CONCEPT_MIN_OUTPUT_TOKENS: int = Field(
+        default=1024,
+        ge=256,
+        le=4096,
+        description="Minimum max_tokens for concept extraction",
+    )
+    DOC_CONCEPT_MAX_OUTPUT_TOKENS: int = Field(
+        default=16384,
+        ge=4096,
+        le=32768,
+        description="Maximum max_tokens for concept extraction",
+    )
+    DOC_CONCEPT_TABLE_DENSITY_MULTIPLIER: float = Field(
+        default=2.0,
+        ge=1.0,
+        le=4.0,
+        description="Output token multiplier for table-dense content",
+    )
+    DOC_CONCEPT_LIST_DENSITY_MULTIPLIER: float = Field(
+        default=1.5,
+        ge=1.0,
+        le=3.0,
+        description="Output token multiplier for list-dense content",
+    )
+    DOC_CONCEPT_DLQ_TOKEN_MULTIPLIER: float = Field(
+        default=4.0,
+        ge=1.0,
+        le=10.0,
+        description="Token multiplier for DLQ retries (higher = more likely to succeed)",
+    )
+    DOC_CONCEPT_MODEL_CONTEXT_WINDOW: int = Field(
+        default=128000,
+        ge=4096,
+        le=200000,
+        description="Model context window in tokens for concept extraction input budgeting",
+    )
+    DOC_CONCEPT_INPUT_TOKEN_LIMIT: int = Field(
+        default=96000,
+        ge=2048,
+        le=160000,
+        description="Maximum input tokens before proactive chunk splitting",
+    )
+    DOC_CONCEPT_MIN_CHUNK_SIZE: int = Field(
+        default=500,
+        ge=100,
+        le=2000,
+        description="Minimum chunk size in characters for recursive splitting guard",
+    )
+    DOC_CONCEPT_MAX_SPLIT_DEPTH: int = Field(
+        default=5,
+        ge=1,
+        le=10,
+        description="Maximum recursion depth for proactive chunk splitting",
+    )
+    DOC_CHUNK_SIZE: int = Field(
+        default=4000,
+        ge=1000,
+        le=10000,
+        description="Target chunk size in characters for semantic splitting heuristics",
+    )
+
+    # Document chunk filtering
+    DOC_CHUNK_MIN_TOKENS: int = Field(
+        default=10,
+        ge=5,
+        le=100,
+        description="Minimum tokens for a chunk. Smaller chunks are merged with adjacent chunks.",
+    )
+    DOC_CHUNK_MERGE_ENABLED: bool = Field(
+        default=True,
+        description="Enable merging of tiny chunks. If False, tiny chunks are filtered out during embedding.",
     )
 
     # Circuit breaker for concept extraction

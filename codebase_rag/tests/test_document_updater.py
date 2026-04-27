@@ -104,7 +104,7 @@ def test_delete_stale_documents_removes_ignored_paths(tmp_path: Path) -> None:
         removed = updater._delete_stale_documents([included], ingestor)
 
     assert removed == 1
-    delete_document_nodes.assert_called_once_with(str(ignored), ingestor)
+    delete_document_nodes.assert_called_once_with(str(ignored), ingestor, concept_ingestor=None)
     remove_version_cache.assert_called_once_with(str(ignored))
 
 

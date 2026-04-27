@@ -978,7 +978,7 @@ def start(
     # === Handle --clean alone (no indexing) ===
     # Preserves backward compatibility: clean database and return immediately
     # without model validation, freshness check, or chat session
-    if clean and not (index_code or index_docs or index_all):
+    if clean and not (index_code or index_docs or index_all or ingest_json):
         effective_batch_size = settings.resolve_batch_size(batch_size)
         _info(style(cs.CLI_MSG_CLEANING_DB, cs.Color.YELLOW))
         # Clean main code database
@@ -2074,6 +2074,139 @@ def clean_docs(
         # Actual cleanup
         removed = updater.cleanup_excluded_documents()
         _success(f"Removed {removed} excluded documents from graph.")
+
+
+@app.command(name=ch.CLICommandName.EXTRACT_CONCEPTS, help=ch.CMD_EXTRACT_CONCEPTS)
+def extract_concepts(
+    repo_path: str | None = typer.Option(
+        None, "-r", "--repo-path", help=ch.HELP_EXTRACT_CONCEPTS_REPO_PATH
+    ),
+    workspace: str = typer.Option(
+        "default", "--workspace", help=ch.HELP_EXTRACT_CONCEPTS_WORKSPACE
+    ),
+    force: bool = typer.Option(
+        False, "--force", help=ch.HELP_EXTRACT_CONCEPTS_FORCE
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help=ch.HELP_EXTRACT_CONCEPTS_DRY_RUN
+    ),
+    batch_size: int | None = typer.Option(
+        None, "--batch-size", min=10, max=500, help=ch.HELP_EXTRACT_CONCEPTS_BATCH_SIZE
+    ),
+    limit: int | None = typer.Option(
+        None, "--limit", min=1, help=ch.HELP_EXTRACT_CONCEPTS_LIMIT
+    ),
+    concurrency: int | None = typer.Option(
+        None, "--concurrency", min=1, max=50, help=ch.HELP_EXTRACT_CONCEPTS_CONCURRENCY
+    ),
+    retry_dlq: bool = typer.Option(
+        False, "--retry-dlq", help="Retry failed context-overflow chunks from DLQ"
+    ),
+    promote_learned_verbs: bool = typer.Option(
+        False, "--promote-learned-verbs", help="Print learned verbs ready for VERB_REGISTRY"
+    ),
+) -> None:
+    """Extract concepts from already-ingested document chunks.
+
+    Operates on chunks stored in the document graph and stores concepts
+    in the concept graph. Requires both Memgraph instances to be running.
+
+    Examples:
+        cgr extract-concepts                    # Extract concepts from unprocessed chunks
+        cgr extract-concepts --force            # Re-extract all chunks
+        cgr extract-concepts --dry-run          # Preview what would be processed
+        cgr extract-concepts --limit 10         # Process only 10 chunks (testing)
+        cgr extract-concepts --workspace myproj # Use specific workspace
+        cgr extract-concepts --retry-dlq        # Retry DLQ context-overflow chunks
+    """
+    from .document.concept_extraction import _load_learned_verbs
+    from .document.concept_runner import ConceptExtractionRunner
+
+    target_repo_path = repo_path or settings.TARGET_REPO_PATH
+    if not Path(target_repo_path).exists():
+        typer.echo(
+            f"ERROR: Repository path '{target_repo_path}' does not exist.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    if promote_learned_verbs:
+        import json
+        from pathlib import Path
+
+        from codebase_rag.document.concept_extraction import _learned_verbs_path
+
+        path = _learned_verbs_path()
+        if not path or not path.exists():
+            app_context.console.print(
+                style("No learned verbs found.", cs.Color.YELLOW)
+            )
+            return
+        with open(path) as f:
+            data = json.load(f)
+        high_confidence = {
+            verb: entry["category"]
+            for verb, entry in data.items()
+            if entry.get("count", 0) >= 5
+        }
+        if not high_confidence:
+            app_context.console.print(
+                style("No high-confidence learned verbs (count >= 5) found.", cs.Color.YELLOW)
+            )
+            return
+        lines = ["# Learned verbs ready for VERB_REGISTRY promotion (count >= 5):"]
+        for verb, category in sorted(high_confidence.items()):
+            lines.append(f'    "{verb}": "{category}",')
+        app_context.console.print("\n".join(lines))
+        return
+
+    runner = ConceptExtractionRunner(
+        repo_path=Path(target_repo_path),
+        workspace=workspace,
+        batch_size=batch_size,
+        concurrency=concurrency,
+    )
+
+    try:
+        if retry_dlq:
+            stats = runner.retry_dlq(force=force)
+        else:
+            stats = runner.run(force=force, dry_run=dry_run, limit=limit)
+    except KeyboardInterrupt:
+        app_context.console.print(style(cs.CLI_MSG_APP_TERMINATED, cs.Color.RED))
+        raise typer.Exit(1) from None
+
+    if dry_run and not retry_dlq:
+        app_context.console.print(
+            style(f"DRY RUN: Would process {stats.processed_chunks} chunks", cs.Color.YELLOW)
+        )
+        if stats.skipped_existing > 0:
+            app_context.console.print(
+                style(f"{stats.skipped_existing} chunks already have concepts", cs.StyleModifier.DIM)
+            )
+    else:
+        app_context.console.print(
+            style(f"Processed: {stats.processed_chunks}/{stats.total_chunks} chunks", cs.Color.GREEN)
+        )
+        app_context.console.print(
+            style(f"Concepts created: {stats.concepts_created}", cs.Color.GREEN)
+        )
+        app_context.console.print(
+            style(f"Relationships created: {stats.relationships_created}", cs.Color.GREEN)
+        )
+        if getattr(stats, "skipped_existing", 0) > 0:
+            app_context.console.print(
+                style(f"Skipped (existing): {stats.skipped_existing}", cs.StyleModifier.DIM)
+            )
+        if stats.failed_extractions > 0:
+            app_context.console.print(
+                style(f"Failed: {stats.failed_extractions}", cs.Color.RED)
+            )
+            if stats.errors_by_type:
+                for error_type, count in stats.errors_by_type.items():
+                    app_context.console.print(
+                        style(f"  {error_type}: {count}", cs.Color.RED)
+                    )
 
 
 @app.command(

@@ -161,6 +161,15 @@ Fine-tune LLM-based concept extraction timeouts and circuit breaker behavior:
 | `DOC_CONCEPT_MAX_TIMEOUT` | `120.0` | Maximum adaptive timeout cap (seconds) |
 | `DOC_CONCEPT_TIMEOUT_PER_1K_CHARS` | `10.0` | Additional timeout per 1000 characters |
 | `DOC_CONCEPT_TIMEOUT_PER_CODE_BLOCK` | `5.0` | Additional timeout per code block |
+| `DOC_CONCEPT_EXTRACTION_MAX_TOKENS` | `4096` | Maximum output tokens for concept extraction. Prevents output reservation from consuming input context space. |
+| `DOC_CONCEPT_TOKENS_PER_CHAR` | `0.5` | Output tokens per input character for adaptive max_tokens calculation |
+| `DOC_CONCEPT_MIN_OUTPUT_TOKENS` | `1024` | Minimum max_tokens for concept extraction |
+| `DOC_CONCEPT_MAX_OUTPUT_TOKENS` | `16384` | Maximum max_tokens for concept extraction |
+| `DOC_CONCEPT_TABLE_DENSITY_MULTIPLIER` | `2.0` | Output token multiplier for table-dense content |
+| `DOC_CONCEPT_LIST_DENSITY_MULTIPLIER` | `1.5` | Output token multiplier for list-dense content |
+| `DOC_CONCEPT_DLQ_TOKEN_MULTIPLIER` | `4.0` | Token multiplier for DLQ retries (higher = more likely to succeed) |
+| `DOC_CHUNK_MIN_TOKENS` | `10` | Minimum tokens for a document chunk. Smaller chunks are merged with adjacent chunks. |
+| `DOC_CHUNK_MERGE_ENABLED` | `true` | Enable merging of tiny chunks during chunking. When disabled, tiny chunks are filtered out during embedding. |
 | `DOC_CONCEPT_EXTRACTION_MAX_RETRIES` | `3` | Max retries per chunk after failures |
 | `DOC_CONCEPT_EXTRACTION_RETRY_DELAY` | `1.0` | Base delay between retries (seconds) |
 | `DOC_CONCEPT_TIMEOUT_RETRY_MULTIPLIER` | `1.1` | Timeout multiplier after a timeout error |

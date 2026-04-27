@@ -19,6 +19,7 @@ class CLICommandName(StrEnum):
     VALIDATE_DOC = "validate-doc"
     INDEX_DOCS = "index-docs"
     CLEAN_DOCS = "clean-docs"
+    EXTRACT_CONCEPTS = "extract-concepts"
     # JSON Data Ingestion commands
     INGEST_JSON = "ingest-json"
     DELETE_DATASET = "delete-dataset"
@@ -55,6 +56,11 @@ CMD_VALIDATE_SPEC = "Validate code against a specification document"
 CMD_VALIDATE_DOC = "Validate documentation against actual code"
 CMD_INDEX_DOCS = "Index documents into the document graph"
 CMD_CLEAN_DOCS = "Remove documents from graph that match .cgrignore patterns"
+CMD_EXTRACT_CONCEPTS = (
+    "Extract concepts from already-ingested document chunks. "
+    "Operates on existing chunks without re-indexing documents. "
+    "Requires document graph (port 7688) and concept graph (port 7690) to be running."
+)
 # JSON Data Ingestion commands
 CMD_INGEST_JSON = "Ingest pre-extracted JSON data containing entities/relationships into graph and vector databases"
 CMD_DELETE_DATASET = (
@@ -203,6 +209,30 @@ HELP_SCHEDULING_STRATEGY = (
     "Task scheduling strategy for parallel workers: 'fifo' or 'round-robin'"
 )
 
+# Standalone concept extraction help text
+HELP_EXTRACT_CONCEPTS_REPO_PATH = (
+    "Repository path containing the document chunks to process"
+)
+HELP_EXTRACT_CONCEPTS_WORKSPACE = (
+    "Workspace to process (default: 'default'). "
+    "Must match the workspace used during document indexing."
+)
+HELP_EXTRACT_CONCEPTS_FORCE = (
+    "Re-extract concepts for all chunks, even if already extracted"
+)
+HELP_EXTRACT_CONCEPTS_DRY_RUN = (
+    "Preview mode: show what would be processed without making LLM calls"
+)
+HELP_EXTRACT_CONCEPTS_BATCH_SIZE = (
+    "Graph flush batch size (default: from CONCEPT_MEMGRAPH_BATCH_SIZE config, 1000)"
+)
+HELP_EXTRACT_CONCEPTS_LIMIT = (
+    "Maximum number of chunks to process (useful for testing/preview)"
+)
+HELP_EXTRACT_CONCEPTS_CONCURRENCY = (
+    "Parallel LLM calls for concept extraction (default: from DOC_CONCEPT_EXTRACTION_CONCURRENCY config, 10)"
+)
+
 CLI_COMMANDS: dict[CLICommandName, str] = {
     CLICommandName.START: CMD_START,
     CLICommandName.INDEX: CMD_INDEX,
@@ -213,6 +243,7 @@ CLI_COMMANDS: dict[CLICommandName, str] = {
     CLICommandName.LANGUAGE: CMD_LANGUAGE,
     CLICommandName.DOCTOR: CMD_DOCTOR,
     CLICommandName.STATS: CMD_STATS,
+    CLICommandName.QUOTA: CMD_QUOTA,
     # Document GraphRAG commands
     CLICommandName.QUERY_DOCS: CMD_QUERY_DOCS,
     CLICommandName.QUERY_ALL: CMD_QUERY_ALL,
@@ -220,6 +251,7 @@ CLI_COMMANDS: dict[CLICommandName, str] = {
     CLICommandName.VALIDATE_DOC: CMD_VALIDATE_DOC,
     CLICommandName.INDEX_DOCS: CMD_INDEX_DOCS,
     CLICommandName.CLEAN_DOCS: CMD_CLEAN_DOCS,
+    CLICommandName.EXTRACT_CONCEPTS: CMD_EXTRACT_CONCEPTS,
     # JSON Data Ingestion commands
     CLICommandName.INGEST_JSON: CMD_INGEST_JSON,
     CLICommandName.DELETE_DATASET: CMD_DELETE_DATASET,

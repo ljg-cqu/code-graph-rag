@@ -1,18 +1,27 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import json
 import random
+import re
+from collections import Counter
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, NamedTuple, Protocol
 
 from pydantic import BaseModel, Field
+
+from codebase_rag.document.error_handling import FATAL_ERRORS
+from codebase_rag.utils.token_utils import count_tokens
 
 if TYPE_CHECKING:
     from codebase_rag.document.circuit_breaker import CircuitBreaker
     from codebase_rag.document.error_handling import DeadLetterQueue, ExtractionError
+
+
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
 
 class ExtractedConcept(BaseModel):
@@ -91,17 +100,27 @@ class ExtractionResult(BaseModel):
 
     concepts: list[ExtractedConcept] = Field(default_factory=list)
     relationships: list[ConceptRelationship] = Field(default_factory=list)
+    was_rebalanced: bool = Field(
+        default=False,
+        description="True if relationship diversity rebalancing was triggered",
+    )
 
 
 class ConceptExtractor(Protocol):
     """Protocol for concept extraction strategies."""
 
-    async def extract(self, chunk_content: str, chunk_qn: str) -> ExtractionResult:
+    async def extract(
+        self,
+        chunk_content: str,
+        chunk_qn: str,
+        max_tokens: int | None = None,
+    ) -> ExtractionResult:
         """Extract concepts and relationships from a text chunk.
 
         Args:
             chunk_content: The text content of the chunk.
             chunk_qn: Qualified name of the chunk for attribution.
+            max_tokens: Optional override for output token budget.
 
         Returns:
             ExtractionResult with concepts and relationships.
@@ -123,6 +142,7 @@ class ConceptExtractionStats:
     total_relationships_extracted: int = 0
     errors_by_type: dict = field(default_factory=dict)
     dead_letter_queue_size: int = 0
+    skewed_chunks_count: int = 0
 
     def record_success(self, result: ExtractionResult) -> None:
         self.successful_extractions += 1
@@ -154,6 +174,7 @@ class ConceptExtractionStats:
             f"  Failed: {self.failed_extractions}\n"
             f"  Concepts extracted: {self.total_concepts_extracted}\n"
             f"  Relationships extracted: {self.total_relationships_extracted}\n"
+            f"  Skewed chunks: {self.skewed_chunks_count}\n"
             f"  Errors by type: {concept_errors}\n"
             f"  Queued for retry: {self.dead_letter_queue_size}"
         )
@@ -189,6 +210,70 @@ def calculate_adaptive_timeout(
 
     timeout = base_timeout + size_factor + complexity_factor + heading_factor + list_factor
     return min(timeout, max_timeout)
+
+
+class DensityResult(NamedTuple):
+    """Content density classification for adaptive token calculation."""
+
+    category: str
+    multiplier: float
+
+
+DENSITY_PLAIN = "plain"
+DENSITY_CODE = "code"
+DENSITY_LIST = "list"
+DENSITY_TABLE = "table"
+
+
+def _estimate_content_density(content: str) -> DensityResult:
+    """Estimate content density based on structural markers."""
+    lines = content.split("\n")
+    total_lines = len(lines)
+    if total_lines == 0:
+        return DensityResult(DENSITY_PLAIN, 1.0)
+
+    table_lines = sum(
+        1 for line in lines if "|" in line and line.strip().startswith("|")
+    )
+    list_lines = sum(
+        1
+        for line in lines
+        if line.strip().startswith(("- ", "* ", "1. ", "2. "))
+    )
+    code_fence_lines = sum(
+        1 for line in lines if line.strip().startswith("```")
+    )
+
+    table_ratio = table_lines / total_lines
+    list_ratio = list_lines / total_lines
+
+    if table_ratio > 0.3:
+        return DensityResult(DENSITY_TABLE, 2.0)
+    if list_ratio > 0.3:
+        return DensityResult(DENSITY_LIST, 1.5)
+    if code_fence_lines > 0:
+        return DensityResult(DENSITY_CODE, 1.2)
+    return DensityResult(DENSITY_PLAIN, 1.0)
+
+
+def calculate_adaptive_max_tokens(
+    chunk_content: str,
+    base_tokens: int = 4096,
+    min_tokens: int = 1024,
+    max_tokens: int = 16384,
+    tokens_per_char: float = 0.5,
+) -> int:
+    """Calculate adaptive max_tokens based on chunk characteristics."""
+    char_count = len(chunk_content)
+    estimated_tokens = int(char_count * tokens_per_char)
+    density = _estimate_content_density(chunk_content)
+    adaptive_tokens = int(estimated_tokens * density.multiplier)
+    return max(min_tokens, min(max_tokens, adaptive_tokens))
+
+
+def estimate_input_tokens(content: str) -> int:
+    """Estimate input token count for concept extraction."""
+    return count_tokens(content)
 
 
 class LLMConceptExtractor:
@@ -389,18 +474,21 @@ Rules:
             return False
 
         try:
-            from codebase_rag.compat.pydantic_ai import Agent
+            from codebase_rag.compat.pydantic_ai import Agent, ModelSettings
             from codebase_rag.config import settings
             from codebase_rag.services.llm import _create_chat_model
 
             config = settings.active_orchestrator_config
             llm = _create_chat_model(config)
 
+            max_tokens = settings.DOC_CONCEPT_EXTRACTION_MAX_TOKENS
+
             self.agent = Agent(
                 model=llm,
                 system_prompt=self.SYSTEM_PROMPT,
                 output_type=ExtractionResult,
                 retries=1,
+                model_settings=ModelSettings(max_tokens=max_tokens),
             )
             return True
         except Exception as e:
@@ -415,13 +503,14 @@ Rules:
         chunk_content: str,
         chunk_qn: str,
         timeout: float | None = None,
+        max_tokens: int | None = None,
     ) -> ExtractionResult:
+        from loguru import logger
+
         if not self._initialize_agent():
             return ExtractionResult()
 
         if self._circuit_breaker is not None and not self._circuit_breaker.can_execute():
-            from loguru import logger
-
             from codebase_rag.document import logs as doc_ls
 
             logger.debug(
@@ -436,9 +525,24 @@ Rules:
                 max_timeout=self.max_timeout,
             )
 
+        if max_tokens is None:
+            from codebase_rag.config import settings
+
+            max_tokens = calculate_adaptive_max_tokens(
+                chunk_content,
+                base_tokens=settings.DOC_CONCEPT_EXTRACTION_MAX_TOKENS,
+                min_tokens=settings.DOC_CONCEPT_MIN_OUTPUT_TOKENS,
+                max_tokens=settings.DOC_CONCEPT_MAX_OUTPUT_TOKENS,
+                tokens_per_char=settings.DOC_CONCEPT_TOKENS_PER_CHAR,
+            )
+
+        from codebase_rag.compat.pydantic_ai import ModelSettings
+
+        model_settings = ModelSettings(max_tokens=max_tokens)
+
         try:
             result = await asyncio.wait_for(
-                self.agent.run(chunk_content),
+                self.agent.run(chunk_content, model_settings=model_settings),
                 timeout=timeout,
             )
             for concept in result.output.concepts:
@@ -455,17 +559,64 @@ Rules:
                 concept.type = concept.entity_category
             for rel in result.output.relationships:
                 rel.category, rel.emoji = resolve_category(rel.verb, rel.category)
-            # D-8: Relationship category diversity check
+
+            # D-8: Relationship category diversity check + rebalancing
             if result.output.relationships:
-                _check_relationship_diversity(result.output.relationships, chunk_qn)
+                is_skewed = _check_relationship_diversity(
+                    result.output.relationships, chunk_qn
+                )
+                if is_skewed:
+                    result.output.was_rebalanced = True
+                    result.output.relationships = await _rebalance_relationships(
+                        result.output.relationships,
+                        chunk_content,
+                        chunk_qn,
+                    )
+                    # Apply hard cap as deterministic fallback
+                    result.output.relationships = _apply_category_caps(
+                        result.output.relationships
+                    )
+
+            # Confidence / strength filtering
+            from codebase_rag.config import settings
+
+            min_confidence = settings.DOC_CONCEPT_MIN_CONFIDENCE
+            min_strength = getattr(settings, "DOC_CONCEPT_MIN_RELATIONSHIP_STRENGTH", 0.6)
+
+            filtered_concepts = [
+                c for c in result.output.concepts
+                if c.confidence >= min_confidence
+            ]
+            if len(filtered_concepts) < len(result.output.concepts):
+                logger.debug(
+                    f"Filtered {len(result.output.concepts) - len(filtered_concepts)} "
+                    f"low-confidence concepts for {chunk_qn}"
+                )
+            result.output.concepts = filtered_concepts
+
+            filtered_rels = [
+                r for r in result.output.relationships
+                if r.strength >= min_strength
+            ]
+            if len(filtered_rels) < len(result.output.relationships):
+                logger.debug(
+                    f"Filtered {len(result.output.relationships) - len(filtered_rels)} "
+                    f"low-strength relationships for {chunk_qn}"
+                )
+            result.output.relationships = filtered_rels
+
             if self._circuit_breaker is not None:
                 self._circuit_breaker.record_success()
             return result.output
         except TimeoutError:
-            raise
-        except Exception:
             if self._circuit_breaker is not None:
                 self._circuit_breaker.record_failure()
+            raise
+        except Exception as e:
+            error = classify_concept_extraction_error(e, chunk_content, chunk_qn)
+            if error.error_type not in FATAL_ERRORS:
+                if self._circuit_breaker is not None:
+                    self._circuit_breaker.record_failure()
             raise
 
     async def extract_with_retry(
@@ -492,17 +643,51 @@ Rules:
             max_timeout=self.max_timeout,
         )
         current_timeout = original_timeout
+        current_max_tokens = calculate_adaptive_max_tokens(
+            chunk_content,
+            base_tokens=settings.DOC_CONCEPT_EXTRACTION_MAX_TOKENS,
+            min_tokens=settings.DOC_CONCEPT_MIN_OUTPUT_TOKENS,
+            max_tokens=settings.DOC_CONCEPT_MAX_OUTPUT_TOKENS,
+            tokens_per_char=settings.DOC_CONCEPT_TOKENS_PER_CHAR,
+        )
 
         last_error = None
 
+        # Proactive split: avoid initial failure for predictable overflow cases
+        estimated_tokens = estimate_input_tokens(chunk_content)
+        input_limit = settings.DOC_CONCEPT_INPUT_TOKEN_LIMIT
+        if estimated_tokens > input_limit:
+            logger.info(
+                doc_ls.DOC_CONCEPT_PROACTIVE_SPLIT.format(
+                    chunk_qn=chunk_qn, tokens=estimated_tokens, limit=input_limit
+                )
+            )
+            try:
+                split_result = await self._recursive_split(
+                    chunk_content, chunk_qn, current_timeout
+                )
+                if split_result.concepts or split_result.relationships:
+                    logger.info(doc_ls.DOC_CONCEPT_SPLIT_SUCCESS.format(chunk_qn=chunk_qn))
+                    return split_result
+            except Exception as split_error:
+                logger.warning(
+                    doc_ls.DOC_CONCEPT_SPLIT_FAILED.format(
+                        chunk_qn=chunk_qn, error=split_error
+                    )
+                )
+
         for attempt in range(max_retries + 1):
             try:
-                result = await self.extract(chunk_content, chunk_qn, timeout=current_timeout)
+                result = await self.extract(
+                    chunk_content, chunk_qn, timeout=current_timeout, max_tokens=current_max_tokens
+                )
                 async with self._consecutive_timeouts_lock:
                     self._consecutive_timeouts = 0
                 if attempt > 0:
                     logger.debug(
-                        f"Concept extraction succeeded on attempt {attempt + 1} for {chunk_qn}"
+                        doc_ls.DOC_CONCEPT_RETRY_SUCCESS.format(
+                            attempt=attempt + 1, chunk_qn=chunk_qn
+                        )
                     )
                 return result
             except Exception as e:
@@ -510,15 +695,46 @@ Rules:
                 error.retry_count = attempt
                 last_error = error
 
+                if error.error_type == ErrorType.CONCEPT_CONTEXT_OVERFLOW:
+                    logger.info(doc_ls.DOC_CONCEPT_SPLIT_ATTEMPT.format(chunk_qn=chunk_qn))
+                    try:
+                        split_result = await self._extract_with_splitting(
+                            chunk_content, chunk_qn, current_timeout
+                        )
+                        if split_result.concepts or split_result.relationships:
+                            logger.info(doc_ls.DOC_CONCEPT_SPLIT_SUCCESS.format(chunk_qn=chunk_qn))
+                            return split_result
+                    except Exception as split_error:
+                        logger.warning(
+                            doc_ls.DOC_CONCEPT_SPLIT_FAILED.format(
+                                chunk_qn=chunk_qn, error=split_error
+                            )
+                        )
+
+                    model_max = settings.DOC_CONCEPT_MAX_OUTPUT_TOKENS
+                    if current_max_tokens < model_max and attempt < max_retries:
+                        current_max_tokens = min(current_max_tokens * 2, model_max)
+                        logger.info(
+                            doc_ls.DOC_CONCEPT_ADAPTIVE_RETRY.format(
+                                chunk_qn=chunk_qn, max_tokens=current_max_tokens
+                            )
+                        )
+                        continue
+
                 if error.error_type == ErrorType.CONCEPT_QUOTA_EXCEEDED:
                     logger.error(
-                        f"LLM quota exceeded. Reset at: {error.retry_after or 'unknown'}. "
-                        f"Stopping all retries to preserve remaining quota."
+                        doc_ls.DOC_CONCEPT_QUOTA_EXCEEDED.format(
+                            retry_after=error.retry_after or "unknown"
+                        )
                     )
                     break
 
                 if not error.recoverable:
-                    logger.error(f"Non-recoverable error: {error.error_type.value}")
+                    logger.error(
+                        doc_ls.DOC_CONCEPT_NON_RECOVERABLE.format(
+                            error_type=error.error_type.value
+                        )
+                    )
                     break
 
                 if attempt < max_retries:
@@ -579,6 +795,117 @@ Rules:
             )
 
         return ExtractionResult()
+
+    async def _extract_with_splitting(
+        self,
+        chunk_content: str,
+        chunk_qn: str,
+        timeout: float,
+    ) -> ExtractionResult:
+        paragraphs = chunk_content.split("\n\n")
+
+        if len(paragraphs) == 1:
+            sentences = _SENTENCE_SPLIT_RE.split(chunk_content)
+            if len(sentences) > 1:
+                mid = len(sentences) // 2
+                parts = [" ".join(sentences[:mid]), " ".join(sentences[mid:])]
+            else:
+                return ExtractionResult()
+        else:
+            mid = len(paragraphs) // 2
+            parts = ["\n\n".join(paragraphs[:mid]), "\n\n".join(paragraphs[mid:])]
+
+        results = []
+        for i, part in enumerate(parts):
+            if not part.strip():
+                continue
+            try:
+                result = await self.extract(part, f"{chunk_qn}_part{i}", timeout=timeout)
+                results.append(result)
+            except Exception:
+                continue
+
+        return self._merge_extraction_results(results)
+
+    async def _recursive_split(
+        self,
+        content: str,
+        chunk_qn: str,
+        timeout: float,
+        depth: int = 0,
+    ) -> ExtractionResult:
+        from loguru import logger
+
+        from codebase_rag.config import settings
+        from codebase_rag.document.chunk_splitting import _split_chunk
+        from codebase_rag.document import logs as doc_ls
+
+        max_depth = settings.DOC_CONCEPT_MAX_SPLIT_DEPTH
+        input_limit = settings.DOC_CONCEPT_INPUT_TOKEN_LIMIT
+        min_size = settings.DOC_CONCEPT_MIN_CHUNK_SIZE
+
+        if depth > 0:
+            logger.info(
+                doc_ls.DOC_CONCEPT_RECURSIVE_SPLIT.format(
+                    depth=depth, chunk_qn=chunk_qn
+                )
+            )
+
+        parts = _split_chunk(content)
+        results: list[ExtractionResult] = []
+
+        for i, part in enumerate(parts):
+            if not part.strip():
+                continue
+            part_tokens = estimate_input_tokens(part)
+            if part_tokens > input_limit and len(part) > min_size and depth < max_depth:
+                sub_result = await self._recursive_split(
+                    part, f"{chunk_qn}_part{i}", timeout, depth + 1
+                )
+                results.append(sub_result)
+            else:
+                try:
+                    part_max_tokens = calculate_adaptive_max_tokens(
+                        part,
+                        base_tokens=settings.DOC_CONCEPT_EXTRACTION_MAX_TOKENS,
+                        min_tokens=settings.DOC_CONCEPT_MIN_OUTPUT_TOKENS,
+                        max_tokens=settings.DOC_CONCEPT_MAX_OUTPUT_TOKENS,
+                        tokens_per_char=settings.DOC_CONCEPT_TOKENS_PER_CHAR,
+                    )
+                    result = await self.extract(
+                        part,
+                        f"{chunk_qn}_part{i}",
+                        timeout=timeout,
+                        max_tokens=part_max_tokens,
+                    )
+                    results.append(result)
+                except Exception:
+                    continue
+
+        return self._merge_extraction_results(results)
+
+    def _merge_extraction_results(self, results: list[ExtractionResult]) -> ExtractionResult:
+        all_concepts = {}
+        all_relationships = []
+
+        for result in results:
+            for concept in result.concepts:
+                if concept.name not in all_concepts:
+                    all_concepts[concept.name] = concept
+            all_relationships.extend(result.relationships)
+
+        seen_rels = set()
+        unique_relationships = []
+        for rel in all_relationships:
+            key = (rel.from_concept, rel.to_concept, rel.verb)
+            if key not in seen_rels:
+                seen_rels.add(key)
+                unique_relationships.append(rel)
+
+        return ExtractionResult(
+            concepts=list(all_concepts.values()),
+            relationships=unique_relationships,
+        )
 
 
 VERB_REGISTRY: dict[str, str] = {
@@ -756,19 +1083,19 @@ VERB_REGISTRY: dict[str, str] = {
     "connects-to": "CONTEXTUAL",
     "interfaces-with": "CONTEXTUAL",
     "consumes": "CONTEXTUAL",
-    "provides": "CAUSAL",
+    "provides": "CONTEXTUAL",
     "configured-with": "ATTRIBUTIVE",
     "secured-by": "ATTRIBUTIVE",
     "versioned-as": "ATTRIBUTIVE",
     "requires": "ATTRIBUTIVE",
     "exposes": "ATTRIBUTIVE",
-    "supports": "CAUSAL",
-    "implements": "COMPOSITIONAL",
+    "supports": "ATTRIBUTIVE",
+    "implements": "ATTRIBUTIVE",
     "integrates-with": "COMPOSITIONAL",
+    "layer-in": "COMPOSITIONAL",
     "bundles": "COMPOSITIONAL",
     "encapsulates": "COMPOSITIONAL",
     "decomposes-into": "COMPOSITIONAL",
-    "layer-in": "COMPOSITIONAL",
     "alternative-to": "COMPARATIVE",
     "predecessor-of": "COMPARATIVE",
     "successor-of": "COMPARATIVE",
@@ -804,14 +1131,75 @@ def _fuzzy_match_verb(verb: str, cutoff: float = 0.8) -> str | None:
     return None
 
 
+_LEARNED_VERBS: dict[str, str] | None = None
+
+
+def _learned_verbs_path() -> Path | None:
+    from codebase_rag.config import settings
+
+    repo = getattr(settings, "TARGET_REPO_PATH", None)
+    if repo:
+        return Path(repo) / ".cgr" / "learned_verbs.json"
+    return None
+
+
+def _load_learned_verbs() -> dict[str, str]:
+    global _LEARNED_VERBS
+    if _LEARNED_VERBS is not None:
+        return _LEARNED_VERBS
+    path = _learned_verbs_path()
+    if path and path.exists():
+        with open(path) as f:
+            data = json.load(f)
+        _LEARNED_VERBS = {
+            verb: entry["category"]
+            for verb, entry in data.items()
+            if entry.get("count", 0) >= 3
+        }
+    else:
+        _LEARNED_VERBS = {}
+    return _LEARNED_VERBS
+
+
+def _learn_verb(verb: str, category: str) -> None:
+    path = _learned_verbs_path()
+    if not path:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    data: dict[str, dict] = {}
+    if path.exists():
+        with open(path) as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                data = json.load(f)
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+    entry = data.get(
+        verb,
+        {"category": category, "count": 0, "first_seen": datetime.now(UTC).isoformat()},
+    )
+    entry["count"] += 1
+    data[verb] = entry
+
+    with open(path, "w") as f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        try:
+            json.dump(data, f, indent=2)
+        finally:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+
 def resolve_category(verb: str, declared_category: str | None) -> tuple[str, str]:
     """Resolve a verb to its canonical category and emoji.
 
-    4-step resolution:
-    1. Verb in registry AND matches declared → use declared
-    2. Verb in registry AND mismatches declared → use registry (authoritative)
-    3. Verb NOT in registry → use declared_category, log for registry expansion
-    4. Verb NOT in registry AND no declared → fuzzy match, fallback to RELATED_TO
+    5-step resolution:
+    1. Learned registry (persistent, repo-scoped)
+    2. Hardcoded VERB_REGISTRY
+    3. Valid declared_category
+    4. Fuzzy match
+    5. Fallback to RELATED_TO
 
     Emoji is ALWAYS derived server-side from the resolved category via
     CATEGORY_EMOJI_MAP. LLM-provided emoji is ignored.
@@ -828,9 +1216,13 @@ def resolve_category(verb: str, declared_category: str | None) -> tuple[str, str
     from codebase_rag.constants import CATEGORY_EMOJI_MAP, DOC_CONCEPT_CATEGORIES
 
     verb_lower = verb.lower().strip()
+    learned = _load_learned_verbs()
+    learned_category = learned.get(verb_lower)
     registry_category = VERB_REGISTRY.get(verb_lower)
 
-    if registry_category is not None:
+    if learned_category is not None:
+        category = learned_category
+    elif registry_category is not None:
         if declared_category and registry_category == declared_category.upper():
             category = declared_category.upper()
         else:
@@ -842,9 +1234,10 @@ def resolve_category(verb: str, declared_category: str | None) -> tuple[str, str
             category = registry_category
     elif declared_category and declared_category.upper() in DOC_CONCEPT_CATEGORIES:
         category = declared_category.upper()
+        _learn_verb(verb_lower, category)
         logger.debug(
             f"Verb '{verb}' not in registry — using declared category '{category}'. "
-            f"Consider adding to VERB_REGISTRY for future authoritative resolution."
+            f"Learned for future authoritative resolution."
         )
     else:
         category = _fuzzy_match_verb(verb_lower)
@@ -1012,11 +1405,12 @@ ENTITY_SUBTYPE_REGISTRY: dict[str, str] = {
     "Brand": "ABSTRACT_CONCEPT",
     "Moat": "ABSTRACT_CONCEPT",
 
-    # 📏 Property/Attribute — Pedagogical & Cognitive (13)
+    # 📏 Property/Attribute — Pedagogical & Cognitive (14)
     "Cognitive Capacity": "PROPERTY_ATTRIBUTE",
     "Cognitive Condition": "PROPERTY_ATTRIBUTE",
     "Cognitive Constraint": "PROPERTY_ATTRIBUTE",
     "Cognitive Limitation": "PROPERTY_ATTRIBUTE",
+    "Cognitive State": "PROPERTY_ATTRIBUTE",
     "Cognitive Trait": "PROPERTY_ATTRIBUTE",
     "Character Traits": "PROPERTY_ATTRIBUTE",
     "Educational Metric": "PROPERTY_ATTRIBUTE",
@@ -1027,37 +1421,51 @@ ENTITY_SUBTYPE_REGISTRY: dict[str, str] = {
     "Quality Benchmark": "PROPERTY_ATTRIBUTE",
     "Quantitative Threshold": "PROPERTY_ATTRIBUTE",
 
-    # 🏗️ System/Structure — Pedagogical & Cognitive (11)
+    # 🏗️ System/Structure — Pedagogical & Cognitive (17)
     "AI System": "SYSTEM_STRUCTURE",
     "Cognitive Architecture": "SYSTEM_STRUCTURE",
     "Cognitive Framework": "SYSTEM_STRUCTURE",
+    "Cognitive Mechanism": "SYSTEM_STRUCTURE",
     "Cognitive Model": "SYSTEM_STRUCTURE",
     "Cognitive Subsystem": "SYSTEM_STRUCTURE",
     "Cognitive System": "SYSTEM_STRUCTURE",
+    "Conceptual Framework": "SYSTEM_STRUCTURE",
+    "Decision Framework": "SYSTEM_STRUCTURE",
+    "Educational Framework": "SYSTEM_STRUCTURE",
     "Educational Organization": "SYSTEM_STRUCTURE",
+    "Framework Component": "SYSTEM_STRUCTURE",
     "Methodology Framework": "SYSTEM_STRUCTURE",
     "Pedagogical Framework": "SYSTEM_STRUCTURE",
+    "Research Framework": "SYSTEM_STRUCTURE",
     "Research Institution": "SYSTEM_STRUCTURE",
     "Technological Influence": "SYSTEM_STRUCTURE",
 
-    # ⏱️ Event/Process — Pedagogical & Cognitive (9)
+    # ⏱️ Event/Process — Pedagogical & Cognitive (15)
+    "AI Practice": "EVENT_PROCESS",
     "Analytical Process": "EVENT_PROCESS",
+    "Behavioral Phenomenon": "EVENT_PROCESS",
+    "Cognitive Activity": "EVENT_PROCESS",
+    "Cognitive Phenomenon": "EVENT_PROCESS",
     "Cognitive Process": "EVENT_PROCESS",
+    "Cognitive Skill": "EVENT_PROCESS",
     "Cognitive Strategy": "EVENT_PROCESS",
     "Decision Process": "EVENT_PROCESS",
     "Educational Outcome": "EVENT_PROCESS",
     "Human-Computer Interaction": "EVENT_PROCESS",
     "Pedagogical Activity": "EVENT_PROCESS",
+    "Reasoning Method": "EVENT_PROCESS",
     "Teaching Activity": "EVENT_PROCESS",
     "Teaching Method": "EVENT_PROCESS",
 
-    # 📨 Information Expression — Pedagogical & Cognitive (8)
+    # 📨 Information Expression — Pedagogical & Cognitive (10)
     "Assessment Instrument": "INFORMATION_EXPRESSION",
     "Assessment Tool": "INFORMATION_EXPRESSION",
+    "Decision Tool": "INFORMATION_EXPRESSION",
     "Evaluation Instrument": "INFORMATION_EXPRESSION",
     "Instructional Component": "INFORMATION_EXPRESSION",
     "Publication Type": "INFORMATION_EXPRESSION",
     "Research Evidence": "INFORMATION_EXPRESSION",
+    "Research Finding": "INFORMATION_EXPRESSION",
     "Research Study": "INFORMATION_EXPRESSION",
     "Tool/Framework": "INFORMATION_EXPRESSION",
 
@@ -1068,22 +1476,13 @@ ENTITY_SUBTYPE_REGISTRY: dict[str, str] = {
 
     # 💡 Abstract Concept — Pedagogical & Cognitive (4)
     "Capability": "ABSTRACT_CONCEPT",
+    "Foundational Concept": "ABSTRACT_CONCEPT",
     "Psychological Theory": "ABSTRACT_CONCEPT",
     "Mental Model": "ABSTRACT_CONCEPT",
 
-    # 🧱 Concrete Entity — Pedagogical & Cognitive (1)
+    # 🧱 Concrete Entity — Pedagogical & Cognitive (2)
     "Software Tool": "CONCRETE_ENTITY",
-
-    # ⏱️ Event/Process — Pedagogical & Cognitive (11)
-    "Cognitive Skill": "EVENT_PROCESS",
-    "Cognitive Activity": "EVENT_PROCESS",
-
-    # 📏 Property/Attribute — Pedagogical & Cognitive (15)
-    "Cognitive State": "PROPERTY_ATTRIBUTE",
-
-    # 🏗️ System/Structure — Pedagogical & Cognitive (13)
-    "Framework Component": "SYSTEM_STRUCTURE",
-    "Educational Framework": "SYSTEM_STRUCTURE",
+    "Technology Tool": "CONCRETE_ENTITY",
 
     # ═══════════════════════════════════════════════════════════════
     # JSON Entity Types — CTO Competency Framework & General
@@ -1200,30 +1599,119 @@ def resolve_entity_category(
     return category, subtype, emoji
 
 
+REBALANCE_PROMPT = """You are re-categorizing relationships extracted from a document chunk.
+The relationships are too heavily weighted toward one category.
+
+Re-assign each relationship to a more diverse category from:
+HIERARCHICAL, COMPOSITIONAL, CONTEXTUAL, ATTRIBUTIVE, COMPARATIVE, SEQUENTIAL, CAUSAL, ANALOGICAL.
+
+Rules:
+- Keep from_concept, to_concept, and verb exactly the same.
+- Only change category and emoji.
+- Do not add or remove relationships.
+- Do not invent new concepts.
+"""
+
+
+async def _rebalance_relationships(
+    relationships: list[ConceptRelationship],
+    chunk_content: str,
+    chunk_qn: str,
+) -> list[ConceptRelationship]:
+    """If category skew detected, ask LLM to re-categorize relationships."""
+    from loguru import logger
+
+    from codebase_rag.compat.pydantic_ai import Agent
+    from codebase_rag.config import settings
+    from codebase_rag.services.llm import _create_chat_model
+
+    try:
+        llm = _create_chat_model(settings.active_orchestrator_config)
+        rebalance_agent = Agent(
+            model=llm,
+            system_prompt=REBALANCE_PROMPT,
+            output_type=list[ConceptRelationship],
+            retries=1,
+        )
+        result = await rebalance_agent.run(
+            f"Chunk context:\n{chunk_content[:2000]}\n\n"
+            f"Relationships to rebalance:\n"
+            f"{json.dumps([r.model_dump() for r in relationships])}"
+        )
+        rebalanced = result.output
+        validated = []
+        for orig, reb in zip(relationships, rebalanced):
+            if (
+                reb.from_concept == orig.from_concept
+                and reb.to_concept == orig.to_concept
+                and reb.verb == orig.verb
+            ):
+                from codebase_rag.constants import CATEGORY_EMOJI_MAP
+
+                reb.emoji = CATEGORY_EMOJI_MAP.get(reb.category, "🔗")
+                validated.append(reb)
+            else:
+                validated.append(orig)
+        logger.info(
+            f"Rebalanced {len(relationships)} relationships for {chunk_qn}"
+        )
+        return validated
+    except Exception as e:
+        logger.warning(
+            f"Rebalancing failed for {chunk_qn}: {e}. Keeping original relationships."
+        )
+        return relationships
+
+
+def _apply_category_caps(
+    relationships: list[ConceptRelationship],
+    max_ratio: float = 0.50,
+) -> list[ConceptRelationship]:
+    """Apply hard cap to ensure no single category exceeds max_ratio."""
+    if not relationships:
+        return []
+    total = len(relationships)
+    counts = Counter(r.category for r in relationships)
+    capped = []
+    for cat in counts:
+        cat_rels = [r for r in relationships if r.category == cat]
+        max_allowed = int(total * max_ratio)
+        if len(cat_rels) > max_allowed:
+            cat_rels = sorted(cat_rels, key=lambda r: r.strength, reverse=True)[:max_allowed]
+        capped.extend(cat_rels)
+    return sorted(capped, key=lambda r: (r.from_concept, r.to_concept, r.verb))
+
+
 def _check_relationship_diversity(
     relationships: list[ConceptRelationship],
     chunk_qn: str,
     causal_threshold: float = 0.60,
-) -> None:
+) -> bool:
     """Warn if relationship categories are overly skewed toward CAUSAL.
 
     D-8 guardrail: CAUSAL dominance indicates prompt bias or lazy LLM
-    categorization. Logs at DEBUG level to avoid noise; intended for
-    periodic prompt-engineering review via log aggregation.
+    categorization. Logs at WARNING level when skew exceeds threshold.
+
+    Returns:
+        True if skew detected and rebalancing should run.
     """
     from loguru import logger
 
     if not relationships:
-        return
+        return False
     total = len(relationships)
-    causal_count = sum(1 for r in relationships if r.category == "CAUSAL")
-    causal_ratio = causal_count / total
-    if causal_ratio > causal_threshold:
-        logger.debug(
+    counts = Counter(r.category for r in relationships)
+    max_count = max(counts.values())
+    max_ratio = max_count / total
+    if max_ratio > causal_threshold:
+        dominant = max(counts.keys(), key=lambda c: counts[c])
+        logger.warning(
             f"Relationship category skew detected for {chunk_qn}: "
-            f"{causal_ratio:.0%} CAUSAL ({causal_count}/{total}). "
-            f"Consider prompt diversity emphasis."
+            f"{max_ratio:.0%} {dominant} ({max_count}/{total}). "
+            f"Triggering rebalancing."
         )
+        return True
+    return False
 
 
 def _parse_quota_reset_time(message: str) -> datetime | None:
@@ -1351,6 +1839,7 @@ def classify_concept_extraction_error(
         chunk_qn=chunk_qn,
         chunk_length=len(chunk_content),
         chunk_preview=chunk_content[:200] if len(chunk_content) > 200 else chunk_content,
+        chunk_content=chunk_content,
         exception_type=exc_type,
     )
 
@@ -1387,8 +1876,10 @@ def get_user_facing_message(error: ExtractionError) -> str:
             "Set the correct key via environment variable or config file."
         ),
         ErrorType.CONCEPT_CONTEXT_OVERFLOW: (
-            "Document chunk is too large for the LLM context window. "
-            "Consider reducing DOC_CHUNK_SIZE in configuration."
+            "Document chunk exceeded LLM context window. "
+            "Automatic chunk splitting was attempted. "
+            "If this persists, consider reducing chunk size or increasing "
+            "DOC_CONCEPT_EXTRACTION_MAX_TOKENS in configuration."
         ),
     }
 

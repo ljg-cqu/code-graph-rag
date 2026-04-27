@@ -138,12 +138,15 @@ class TestVerbRegistryLogging:
         """Unregistered verb with valid declared category must log at DEBUG, not INFO."""
         from unittest.mock import patch
 
-        with patch("loguru.logger") as mock_logger:
+        with (
+            patch("codebase_rag.document.concept_extraction._load_learned_verbs", return_value={}),
+            patch("loguru.logger") as mock_logger,
+        ):
             resolve_category("novel-verb-123", "COMPARATIVE")
 
         mock_logger.debug.assert_called_once_with(
             "Verb 'novel-verb-123' not in registry — using declared category 'COMPARATIVE'. "
-            "Consider adding to VERB_REGISTRY for future authoritative resolution."
+            "Learned for future authoritative resolution."
         )
         mock_logger.info.assert_not_called()
 
@@ -384,8 +387,9 @@ class TestBackwardCompatibility:
         Old labels (IS_A, PART_OF, CAUSES, RELATED_TO) must remain in
         traversal patterns for backward compatibility with existing data.
         """
-        from codebase_rag.document.graph_algorithms import DocumentGraphAlgorithms
         import inspect
+
+        from codebase_rag.document.graph_algorithms import DocumentGraphAlgorithms
 
         source = inspect.getsource(DocumentGraphAlgorithms.find_shortest_path)
         assert "IS_A" in source
@@ -395,8 +399,9 @@ class TestBackwardCompatibility:
 
     def test_graph_algorithms_include_new_labels(self) -> None:
         """Verify graph algorithm patterns reference new category labels."""
-        from codebase_rag.document.graph_algorithms import DocumentGraphAlgorithms
         import inspect
+
+        from codebase_rag.document.graph_algorithms import DocumentGraphAlgorithms
 
         source = inspect.getsource(DocumentGraphAlgorithms.find_shortest_path)
         assert "HIERARCHICAL" in source

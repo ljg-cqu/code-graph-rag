@@ -1147,3 +1147,66 @@ class TestChunkIndexUniqueness:
         assert indices == list(range(len(chunks))), (
             f"Oversized split indices not sequential: {indices}"
         )
+
+
+class TestMergeTinyChunks:
+    """Tests for merge_tiny_chunks boundary preservation."""
+
+    def test_section_boundary_not_crossed(self):
+        """Tiny chunks from different sections are not merged."""
+        from codebase_rag.document.chunking import merge_tiny_chunks
+
+        chunks = [
+            DocumentChunk(
+                content="Section A content",
+                section_title="Section A",
+                start_line=0,
+                end_line=0,
+                token_count=5,
+                document_path="test.md",
+                chunk_index=0,
+            ),
+            DocumentChunk(
+                content="Section B content",
+                section_title="Section B",
+                start_line=1,
+                end_line=1,
+                token_count=5,
+                document_path="test.md",
+                chunk_index=1,
+            ),
+        ]
+        result = merge_tiny_chunks(chunks, min_tokens=10)
+        assert len(result) == 2
+        assert result[0].section_title == "Section A"
+        assert result[1].section_title == "Section B"
+
+    def test_same_section_tiny_chunks_merge(self):
+        """Tiny chunks within the same section are merged."""
+        from codebase_rag.document.chunking import merge_tiny_chunks
+
+        chunks = [
+            DocumentChunk(
+                content="Part one",
+                section_title="Section A",
+                start_line=0,
+                end_line=0,
+                token_count=5,
+                document_path="test.md",
+                chunk_index=0,
+            ),
+            DocumentChunk(
+                content="Part two",
+                section_title="Section A",
+                start_line=1,
+                end_line=1,
+                token_count=5,
+                document_path="test.md",
+                chunk_index=1,
+            ),
+        ]
+        result = merge_tiny_chunks(chunks, min_tokens=10)
+        assert len(result) == 1
+        assert result[0].section_title == "Section A"
+        assert "Part one" in result[0].content
+        assert "Part two" in result[0].content

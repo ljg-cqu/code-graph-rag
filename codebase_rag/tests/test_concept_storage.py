@@ -281,37 +281,6 @@ class TestChunkRefMentionsBatch:
         assert "m.context = rel.context" in cypher
 
 
-class TestConceptDeduplication:
-    """Tests for _deduplicate_concept_nodes in DocumentUpdater."""
-
-    def test_deduplicate_keeps_highest_confidence(self) -> None:
-        updater = _make_dummy_updater()
-        nodes = [
-            {"qualified_name": "ws:A", "name": "A", "confidence": 0.7, "aliases": ["a1"], "definition": "def1"},
-            {"qualified_name": "ws:A", "name": "A", "confidence": 0.9, "aliases": ["a2"], "definition": "def2"},
-            {"qualified_name": "ws:B", "name": "B", "confidence": 0.8, "aliases": [], "definition": "def3"},
-        ]
-        result = updater._deduplicate_concept_nodes(nodes)
-        assert len(result) == 2
-        a_node = next(n for n in result if n["qualified_name"] == "ws:A")
-        assert a_node["confidence"] == 0.9  # highest wins
-        assert sorted(a_node["aliases"]) == ["a1", "a2"]  # merged
-
-    def test_deduplicate_sorts_by_qualified_name(self) -> None:
-        updater = _make_dummy_updater()
-        nodes = [
-            {"qualified_name": "ws:C", "name": "C", "confidence": 0.5},
-            {"qualified_name": "ws:A", "name": "A", "confidence": 0.5},
-            {"qualified_name": "ws:B", "name": "B", "confidence": 0.5},
-        ]
-        result = updater._deduplicate_concept_nodes(nodes)
-        assert [n["qualified_name"] for n in result] == ["ws:A", "ws:B", "ws:C"]
-
-    def test_deduplicate_empty_list(self) -> None:
-        updater = _make_dummy_updater()
-        assert updater._deduplicate_concept_nodes([]) == []
-
-
 class TestGetChunkQnsForDocument:
     """Tests for _get_chunk_qns_for_document cross-instance query."""
 
