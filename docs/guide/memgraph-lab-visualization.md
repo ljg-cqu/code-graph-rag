@@ -86,12 +86,14 @@ MATCH (n:JsonEntity)
 RETURN n
 LIMIT 50
 
-// View specific relationships with verbs
-MATCH (a:JsonEntity)-[r:CAUSAL]->(b:JsonEntity)
+// View specific relationships by category property
+MATCH (a:JsonEntity)-[r]->(b:JsonEntity)
+WHERE r.category = 'CAUSAL'
 RETURN a, r, b
 
 // Explore entity hierarchy
-MATCH path = (root:JsonEntity)-[:HIERARCHICAL*1..3]->(descendant:JsonEntity)
+MATCH path = (root:JsonEntity)-[*1..3]->(descendant:JsonEntity)
+WHERE ALL(r IN relationships(path) WHERE r.category IN ['HIERARCHICAL', 'COMPOSITIONAL'])
 RETURN path
 ```
 

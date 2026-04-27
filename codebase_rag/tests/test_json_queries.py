@@ -129,8 +129,8 @@ class TestFindRelationships:
         records = [
             {
                 "relationship_type": "CAUSAL",
-                "relationship_category": "CAUSAL",
-                "relationship_emoji": "⚡",
+                "category": "CAUSAL",
+                "emoji": "⚡",
                 "verb": "enables",
                 "strength": 0.95,
                 "from_name": "Strategic Thinking",
@@ -143,16 +143,16 @@ class TestFindRelationships:
         results = engine.find_relationships("Strategic Thinking")
         assert len(results) == 1
         assert results[0].verb == "enables"
-        assert results[0].relationship_category == "CAUSAL"
-        assert results[0].relationship_emoji == "⚡"
+        assert results[0].category == "CAUSAL"
+        assert results[0].emoji == "⚡"
         assert results[0].strength == 0.95
 
     def test_filter_by_category(self) -> None:
         records = [
             {
                 "relationship_type": "CAUSAL",
-                "relationship_category": "CAUSAL",
-                "relationship_emoji": "⚡",
+                "category": "CAUSAL",
+                "emoji": "⚡",
                 "verb": "enables",
                 "strength": 0.9,
                 "from_name": "A",
@@ -169,8 +169,8 @@ class TestFindRelationships:
         records = [
             {
                 "relationship_type": "CAUSAL",
-                "relationship_category": "CAUSAL",
-                "relationship_emoji": "⚡",
+                "category": "CAUSAL",
+                "emoji": "⚡",
                 "verb": "enables",
                 "strength": 0.9,
                 "from_name": "A",
@@ -196,8 +196,8 @@ class TestFindRelationships:
         engine = JsonGraphQueryEngine(executor=MockExecutor(records))
         results = engine.find_relationships("A")
         assert len(results) == 1
-        assert results[0].relationship_category == "RELATED_TO"
-        assert results[0].relationship_emoji == "🔗"
+        assert results[0].category == "RELATED_TO"
+        assert results[0].emoji == "🔗"
         assert results[0].verb == "related-to"
 
     def test_backward_compatible_category_filter(self) -> None:
@@ -216,7 +216,7 @@ class TestFindRelationships:
         # Query should still work - uses defaults
         results = engine.find_relationships("A")
         assert len(results) == 1
-        assert results[0].relationship_category == "RELATED_TO"  # Default
+        assert results[0].category == "RELATED_TO"  # Default
         assert results[0].relationship_type == "CAUSAL"  # From type(r)
 
 

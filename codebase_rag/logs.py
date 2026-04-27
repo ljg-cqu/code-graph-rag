@@ -862,6 +862,25 @@ MIGRATION_METHOD_EXPORTED_DONE = "Set is_exported=false for {count} Method nodes
 MIGRATION_DRY_RUN_ENTITY_LABELS = "[DRY RUN] Would rename labels to entity_labels for {count} JsonEntity nodes"
 MIGRATION_ENTITY_LABELS_DONE = "Renamed labels to entity_labels for {count} JsonEntity nodes"
 
+# (H) JSON graph quality migrations (REL-001, LABEL-001, PROP-001)
+MIGRATION_DRY_RUN_REL_TYPES = "[DRY RUN] Would migrate {count} relationships from '{old_type}' to '{new_type}'"
+MIGRATION_REL_TYPES_DONE = "Migrated {count} relationships from '{old_type}' to '{new_type}'"
+MIGRATION_DRY_RUN_LABELS = "[DRY RUN] Would remove space-containing label '{old_label}' from {count} nodes"
+MIGRATION_LABELS_DONE = "Removed space-containing label '{old_label}' from {count} nodes"
+MIGRATION_DRY_RUN_PROPS = "[DRY RUN] Would consolidate properties for {count} relationships"
+MIGRATION_PROPS_DONE = "Consolidated properties for {count} relationships"
+
+# (H) JSON ingestion warnings
+JSON_UNKNOWN_CATEGORY = (
+    "Unknown relationship category '{category}' - defaulting to RELATED_TO. "
+    "Expected one of: {expected}"
+)
+JSON_MISSING_CATEGORY = (
+    "Relationship '{relationship}' between '{source}' and '{target}' "
+    "missing 'category' field. Using verb as category fallback. "
+    "Add explicit 'category' field to silence this warning."
+)
+
 # (H) Task splitter logs
 NO_RELEVANT_FILES = (
     "No relevant files found for query mode {mode}. "

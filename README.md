@@ -822,6 +822,31 @@ cgr query-docs "How do I use the authentication API?" --repo-path /path/to/your/
 cgr query-all "Tell me everything about authentication" --repo-path /path/to/your/repo
 ```
 
+**Extract concepts from already-ingested documents:**
+```bash
+# Extract concepts from chunks without existing concepts
+cgr extract-concepts --repo-path /path/to/your/repo
+
+# Re-extract concepts for all chunks (e.g., after LLM model upgrade)
+cgr extract-concepts --repo-path /path/to/your/repo --force
+
+# Preview what would be processed
+cgr extract-concepts --repo-path /path/to/your/repo --dry-run
+
+# Process only 10 chunks (for testing)
+cgr extract-concepts --repo-path /path/to/your/repo --limit 10
+```
+
+**Concept extraction options:**
+- `--force`: Re-extract concepts for all chunks, even if already extracted
+- `--dry-run`: Preview mode without LLM calls
+- `--limit <n>`: Maximum chunks to process (useful for testing)
+- `--workspace <name>`: Workspace to process (default: "default")
+- `--concurrency <n>`: Parallel LLM calls (default: 10, max: 50)
+- `--batch-size <n>`: Chunks per batch (default: 50)
+
+> **Note**: Concept extraction requires both the document graph (port 7688) and concept graph (port 7690) to be running. Concepts are extracted from chunk content in the document graph and stored as `Concept` nodes with `MENTIONS` relationships in the concept graph.
+
 **Validate code against specification documents:**
 ```bash
 # Check if code implements all endpoints in OpenAPI spec
@@ -925,6 +950,41 @@ cgr delete-dataset business_rules
 cgr delete-dataset business_rules --dry-run
 ```
 *Operation is idempotent: deleting a non-existent dataset returns a success with 0 items deleted.*
+
+<a id="data-modeling-quality-migrations"></a>
+#### Data Modeling Quality Migrations
+
+After ingesting JSON data, you may want to run quality migrations to normalize relationship types, entity labels, and consolidate redundant properties. These migrations improve queryability and cross-system compatibility.
+
+##### 🔹 Migrate JSON Graph Schema
+
+```bash
+# Preview changes (recommended first step)
+python scripts/migrate_json_graph.py --dry-run
+
+# Apply migrations to JSON graph (port 7689)
+python scripts/migrate_json_graph.py
+
+# Run on specific port
+python scripts/migrate_json_graph.py --port 7689
+```
+
+**What it does:**
+1. **Relationship Type Normalization**: Migrates emoji-prefixed relationship types (e.g., `"🌳 is a"`) to canonical labels (e.g., `HIERARCHICAL`)
+2. **Entity Label Normalization**: Removes space-containing labels (e.g., `"Dynamic Construct"`) and keeps PascalCase versions (e.g., `DynamicConstruct`)
+3. **Property Consolidation**: Removes redundant relationship properties (`relationship_category`, `category_with_emoji`, `relationship_emoji`)
+
+**Canonical Relationship Categories:**
+| Category | Emoji | Example Verbs |
+|----------|-------|---------------|
+| `HIERARCHICAL` | 🌳 | is-a, subtype-of, classifies-as |
+| `COMPOSITIONAL` | 🧩 | part-of, comprises, contains |
+| `CAUSAL` | ⚡ | enables, causes, prevents |
+| `CONTEXTUAL` | 🎯 | interacts-with, informs, situated-in |
+| `ATTRIBUTIVE` | 💭 | exhibits, characterized-by |
+| `COMPARATIVE` | ⚖️ | differs-from, similar-to |
+| `SEQUENTIAL` | ⏩ | precedes, follows |
+| `ANALOGICAL` | 🌉 | maps-to, analogous-to |
 
 ### YOLO Mode
 

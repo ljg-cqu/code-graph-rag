@@ -70,8 +70,8 @@ class JsonRelationshipResult:
     to_entity: str
     relationship_type: str
     verb: str
-    relationship_category: str = "RELATED_TO"
-    relationship_emoji: str = "🔗"
+    category: str = "RELATED_TO"
+    emoji: str = "🔗"
     strength: float = 0.5
     from_type: str = ""
     to_type: str = ""
@@ -81,8 +81,11 @@ class JsonRelationshipResult:
             "from": self.from_entity,
             "to": self.to_entity,
             "relationship_type": self.relationship_type,
-            "relationship_category": self.relationship_category,
-            "relationship_emoji": self.relationship_emoji,
+            "category": self.category,
+            "emoji": self.emoji,
+            # Legacy aliases for backward compatibility
+            "relationship_category": self.category,
+            "relationship_emoji": self.emoji,
             "verb": self.verb,
             "strength": self.strength,
             "from_type": self.from_type,
@@ -391,7 +394,8 @@ class JsonGraphQueryEngine:
         params: dict[str, Any] = {"identifier": entity_identifier}
 
         if relationship_category:
-            category_filter = "AND COALESCE(r.relationship_category, type(r)) = $category"
+            # Support both new 'category' and legacy 'relationship_category' properties
+            category_filter = "AND COALESCE(r.category, r.relationship_category, type(r)) = $category"
             params["category"] = relationship_category
 
         if verb:
@@ -416,8 +420,8 @@ class JsonGraphQueryEngine:
         WHERE (start.name CONTAINS $identifier OR start.unique_id CONTAINS $identifier)
         {category_filter} {verb_filter}
         RETURN type(r) AS relationship_type,
-               r.relationship_category AS relationship_category,
-               r.relationship_emoji AS relationship_emoji,
+               COALESCE(r.category, r.relationship_category, "RELATED_TO") AS category,
+               COALESCE(r.emoji, r.relationship_emoji, "🔗") AS emoji,
                r.verb AS verb,
                r.strength AS strength,
                {return_start}.name AS from_name,
@@ -433,8 +437,8 @@ class JsonGraphQueryEngine:
                 from_entity=r.get("from_name", ""),
                 to_entity=r.get("to_name", ""),
                 relationship_type=r.get("relationship_type", "RELATED_TO"),
-                relationship_category=r.get("relationship_category", "RELATED_TO"),
-                relationship_emoji=r.get("relationship_emoji", "🔗"),
+                category=r.get("category", "RELATED_TO"),
+                emoji=r.get("emoji", "🔗"),
                 verb=r.get("verb", "related-to"),
                 strength=r.get("strength", 0.5),
                 from_type=r.get("from_type", ""),
@@ -569,26 +573,31 @@ class JsonGraphQueryEngine:
         """
         if root_entity:
             cypher = f"""
-            MATCH path = (root:JsonEntity)-[:HIERARCHICAL|COMPOSITIONAL*1..{max_depth}]->(descendant:JsonEntity)
+            MATCH path = (root:JsonEntity)-[*1..{max_depth}]->(descendant:JsonEntity)
             WHERE root.name CONTAINS $identifier OR root.unique_id CONTAINS $identifier
+              AND ALL(r IN relationships(path) WHERE r.category IN ['HIERARCHICAL', 'COMPOSITIONAL'])
             RETURN root.name AS root_name,
                    descendant.name AS descendant_name,
                    descendant.unique_id AS descendant_id,
                    descendant.type AS descendant_type,
-                   type(relationships(path)[-1]) AS relationship_type,
+                   COALESCE(relationships(path)[-1].category, type(relationships(path)[-1])) AS relationship_type,
                    length(path) AS depth
             ORDER BY depth
             """
             records = self._fetch_records(cypher, {"identifier": root_entity})
         else:
             cypher = f"""
-            MATCH path = (root:JsonEntity)-[:HIERARCHICAL|COMPOSITIONAL*1..{max_depth}]->(descendant:JsonEntity)
-            WHERE NOT (()-[:HIERARCHICAL|COMPOSITIONAL]->(root))
+            MATCH path = (root:JsonEntity)-[*1..{max_depth}]->(descendant:JsonEntity)
+            WHERE ALL(r IN relationships(path) WHERE r.category IN ['HIERARCHICAL', 'COMPOSITIONAL'])
+              AND NOT EXISTS {{
+                MATCH (parent:JsonEntity)-[pr]->(root)
+                WHERE pr.category IN ['HIERARCHICAL', 'COMPOSITIONAL']
+              }}
             RETURN root.name AS root_name,
                    descendant.name AS descendant_name,
                    descendant.unique_id AS descendant_id,
                    descendant.type AS descendant_type,
-                   type(relationships(path)[-1]) AS relationship_type,
+                   COALESCE(relationships(path)[-1].category, type(relationships(path)[-1])) AS relationship_type,
                    length(path) AS depth
             ORDER BY root_name, depth
             """

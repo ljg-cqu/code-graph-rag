@@ -7,7 +7,6 @@ from codebase_rag.compat.pydantic_ai import Tool
 
 from .. import constants as cs
 from ..config import settings
-from ..json_ingestion import _create_json_ingestor
 from ..json_queries import JsonGraphQueryEngine
 from . import tool_descriptions as td
 
@@ -47,6 +46,8 @@ def create_query_json_graph_tool() -> Tool:
             embedding_provider = None
 
         try:
+            from ..json_ingestion import _create_json_ingestor
+
             with _create_json_ingestor(
                 settings.JSON_MEMGRAPH_BATCH_SIZE
             ) as executor:

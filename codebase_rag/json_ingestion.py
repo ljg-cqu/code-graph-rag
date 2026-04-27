@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import copy
+import hashlib
 import json
 import os
 import re
@@ -17,6 +18,7 @@ import jsonschema
 from loguru import logger
 
 from . import constants as cs
+from . import logs as ls
 from .config import settings
 from .document.concept_extraction import resolve_entity_category
 from .embedder import EmbeddingCache, get_embedding_provider_instance
@@ -132,12 +134,60 @@ def _canonical_entity_id(name: str) -> str:
     return slug or "entity"
 
 
+def _canonical_entity_id_with_collision_avoidance(
+    name: str, seen_ids: set[str]
+) -> str:
+    base_id = _canonical_entity_id(name)
+    if base_id not in seen_ids:
+        return base_id
+    name_hash = hashlib.md5(name.encode("utf-8")).hexdigest()[:6]
+    candidate = f"{base_id}_{name_hash}"
+    suffix = 1
+    while candidate in seen_ids:
+        candidate = f"{base_id}_{name_hash}_{suffix}"
+        suffix += 1
+    return candidate
+
+
 def _build_unique_id(dataset_id: str, entity_id: str) -> str:
     return f"{dataset_id}::{entity_id}"
 
 
 def _escape_identifier(identifier: str) -> str:
     return identifier.replace("`", "``")
+
+
+def sanitize_edge_label(label: str) -> str:
+    """Sanitize string for use as a Cypher edge label.
+
+    Cypher edge labels cannot contain spaces or most special characters,
+    and cannot start with a digit.
+
+    Args:
+        label: Raw relationship type string.
+
+    Returns:
+        Sanitized label safe for use as edge type.
+
+    Raises:
+        ValueError: If label is empty or reduces to empty after sanitization.
+    """
+    if not label:
+        raise ValueError("Empty relationship type cannot be sanitized")
+
+    sanitized = re.sub(r"[^a-zA-Z0-9_]+", "_", label.strip())
+    sanitized = sanitized.strip("_")
+    sanitized = re.sub(r"_+", "_", sanitized)
+
+    if sanitized and sanitized[0].isdigit():
+        sanitized = f"R_{sanitized}"
+
+    if not sanitized:
+        raise ValueError(
+            f"Relationship type '{label}' reduces to empty after sanitization"
+        )
+
+    return sanitized
 
 
 def _split_relationship_targets(target: str) -> list[str]:
@@ -151,7 +201,8 @@ def _split_relationship_targets(target: str) -> list[str]:
 def _extract_emoji_prefix(name: str) -> tuple[str, str | None]:
     """Extract leading emoji prefix from entity name.
 
-    Handles multi-codepoint emoji including variation selectors (U+FE0F).
+    Handles multi-codepoint emoji including variation selectors (U+FE0F),
+    zero-width joiner sequences (U+200D), and skin tone modifiers (U+1F3FB-U+1F3FF).
 
     Args:
         name: Entity name possibly containing emoji prefix.
@@ -169,9 +220,8 @@ def _extract_emoji_prefix(name: str) -> tuple[str, str | None]:
     idx = 0
     chars = list(name)
 
-    while idx < len(chars):
-        cp = ord(chars[idx])
-        is_emoji = (
+    def _is_emoji_char(cp: int) -> bool:
+        return (
             (0x2300 <= cp <= 0x23FF)
             or (0x2600 <= cp <= 0x26FF)
             or (0x2700 <= cp <= 0x27BF)
@@ -180,11 +230,27 @@ def _extract_emoji_prefix(name: str) -> tuple[str, str | None]:
             or (0x1FA00 <= cp <= 0x1FA6F)
             or (0x1FA70 <= cp <= 0x1FAFF)
         )
-        if not is_emoji:
+
+    while idx < len(chars):
+        cp = ord(chars[idx])
+
+        if not _is_emoji_char(cp):
             break
+
         idx += 1
+
         if idx < len(chars) and ord(chars[idx]) == 0xFE0F:
             idx += 1
+
+        if idx < len(chars) and 0x1F3FB <= ord(chars[idx]) <= 0x1F3FF:
+            idx += 1
+
+        if idx < len(chars) and ord(chars[idx]) == 0x200D:
+            peek = idx + 1
+            if peek < len(chars) and _is_emoji_char(ord(chars[peek])):
+                idx += 1
+            else:
+                break
 
     if idx == 0:
         return name, None
@@ -213,16 +279,33 @@ def _normalize_relationship_category(category: str) -> str:
     category = category.upper().strip()
     mapping = {
         "ATTRIBUTE": "ATTRIBUTIVE",
+        "ATTRIBUTES": "ATTRIBUTIVE",
         "INFERRED": "RELATED_TO",
+        "INFERENCE": "RELATED_TO",
+        "CAUSES": "CAUSAL",
+        "CAUSE": "CAUSAL",
+        "PART_OF": "COMPOSITIONAL",
+        "PARTOF": "COMPOSITIONAL",
+        "IS_A": "HIERARCHICAL",
+        "ISA": "HIERARCHICAL",
+        "INSTANCEOF": "HIERARCHICAL",
+        "SIMILAR": "COMPARATIVE",
+        "COMPARABLE": "COMPARATIVE",
+        "PRECEDES": "SEQUENTIAL",
+        "FOLLOWS": "SEQUENTIAL",
+        "ENABLES": "CAUSAL",
+        "TRIGGERS": "CAUSAL",
+        "INFLUENCES": "CAUSAL",
     }
     result = mapping.get(category, category)
 
-    # Validate against known categories
-    valid_categories = {
-        "CAUSAL", "HIERARCHICAL", "COMPOSITIONAL", "CONTEXTUAL",
-        "ATTRIBUTIVE", "SEQUENTIAL", "COMPARATIVE", "ANALOGICAL", "RELATED_TO",
-    }
-    if result not in valid_categories:
+    if result not in cs.DOC_CONCEPT_CATEGORIES:
+        logger.warning(
+            ls.JSON_UNKNOWN_CATEGORY.format(
+                category=category,
+                expected=", ".join(sorted(cs.DOC_CONCEPT_CATEGORIES)),
+            )
+        )
         return "RELATED_TO"
 
     return result
@@ -364,7 +447,9 @@ def _normalize_entities(data: dict[str, Any]) -> list[str]:
             entity["properties"] = {}
 
         if not entity.get("id") and entity.get("name"):
-            entity["id"] = _canonical_entity_id(str(entity["name"]))
+            entity["id"] = _canonical_entity_id_with_collision_avoidance(
+                str(entity["name"]), seen_ids
+            )
 
         if default_labels and not entity.get("labels"):
             entity["labels"] = list(default_labels)
@@ -1057,10 +1142,44 @@ def _existing_is_newer_or_equal(
     return existing_last_updated >= incoming_last_updated
 
 
+def _normalize_label(label: str) -> str:
+    """Normalize label to PascalCase (remove spaces).
+
+    Args:
+        label: Raw label string (may contain spaces).
+
+    Returns:
+        Normalized PascalCase label.
+    """
+    return label.replace(" ", "")
+
+
 def _entity_labels(entity: dict[str, Any]) -> list[str]:
+    """Build entity labels list with normalized PascalCase labels.
+
+    The 'type' field is normalized for use as a label (spaces removed).
+    The original 'type' is stored as a property for display purposes.
+
+    Args:
+        entity: Entity data dictionary with 'type' and optional 'labels' fields.
+
+    Returns:
+        List of unique labels: [JsonEntity, NormalizedType, ...additional labels]
+        Case-insensitive duplicates are removed.
+    """
     entity_type = str(entity.get("type") or "Entity")
-    labels = [JSON_ENTITY_LABEL, entity_type, *(entity.get("labels") or [])]
-    return list(dict.fromkeys(label for label in labels if label))
+    normalized_type = _normalize_label(entity_type)
+
+    labels = [JSON_ENTITY_LABEL, normalized_type]
+    seen_lower: set[str] = {label.lower() for label in labels}
+
+    for label in entity.get("labels") or []:
+        normalized = _normalize_label(str(label))
+        if normalized and normalized.lower() not in seen_lower:
+            labels.append(normalized)
+            seen_lower.add(normalized.lower())
+
+    return [label for label in labels if label]
 
 
 def _entity_properties(
@@ -1115,6 +1234,18 @@ def _relationship_properties(
     metadata: dict[str, Any],
     entities_by_id: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    """Build relationship properties with consolidated schema.
+
+    Uses canonical property names:
+    - `category`: Canonical relationship category (e.g., "CAUSAL")
+    - `emoji`: Single emoji for visualization (e.g., "⚡")
+    - `verb`: Specific relationship verb (e.g., "enables"), preserved from spec.json
+
+    The original `relationship` field from spec.json is preserved as `verb`.
+    Category is inferred from it only when `category` is not explicitly set.
+    Redundant properties (relationship_category, category_with_emoji, relationship_emoji)
+    are removed from input to ensure consistency.
+    """
     properties = dict(_metadata_properties(metadata))
     properties.update(copy.deepcopy(relationship.get("properties") or {}))
     properties["dataset_id"] = dataset_id
@@ -1130,36 +1261,51 @@ def _relationship_properties(
     if relationship.get("isInferred") is not None:
         properties["isInferred"] = bool(relationship["isInferred"])
 
-    # Determine and store relationship category
+    # Preserve the original verb from spec.json BEFORE category inference consumes it
+    original_verb = relationship.get("relationship")
+
+    # Determine canonical relationship category
+    if not relationship.get("category") and original_verb:
+        logger.warning(
+            ls.JSON_MISSING_CATEGORY.format(
+                relationship=original_verb,
+                source=relationship.get("source"),
+                target=relationship.get("target"),
+            )
+        )
+
     raw_category = str(
         relationship.get("category")
-        or relationship.get("relationship")
+        or original_verb
         or "RELATED_TO"
     )
     normalized_category = _normalize_relationship_category(raw_category)
 
-    # Store category for filtering and visualization
-    if "relationship_category" not in properties:
-        properties["relationship_category"] = normalized_category
+    # Set consolidated properties
+    properties["category"] = normalized_category
+    properties["emoji"] = cs.CATEGORY_EMOJI_MAP.get(normalized_category, "🔗")
 
-    # Store category emoji for visualization
-    if "relationship_emoji" not in properties:
-        properties["relationship_emoji"] = cs.CATEGORY_EMOJI_MAP.get(
-            normalized_category, "🔗"
-        )
+    # Remove redundant properties (consolidated schema)
+    properties.pop("relationship_category", None)
+    properties.pop("category_with_emoji", None)
+    properties.pop("relationship_emoji", None)
 
-    if "verb" not in properties and entities_by_id:
-        source_id = str(relationship.get("source", ""))
-        target_id = str(relationship.get("target", ""))
+    # Store verb: use original spec.json verb first, fall back to inference
+    if "verb" not in properties:
+        if original_verb:
+            properties["verb"] = original_verb
+        elif entities_by_id:
+            source_id = str(relationship.get("source", ""))
+            target_id = str(relationship.get("target", ""))
 
-        source_entity = entities_by_id.get(source_id, {})
-        target_entity = entities_by_id.get(target_id, {})
+            source_entity = entities_by_id.get(source_id, {})
+            target_entity = entities_by_id.get(target_id, {})
 
-        properties["verb"] = _infer_relationship_verb(
-            normalized_category,
-            source_entity.get("type", "Entity"),
-            target_entity.get("type", "Entity"),
-        )
+            properties["verb"] = _infer_relationship_verb(
+                normalized_category,
+                source_entity.get("type", "Entity"),
+                target_entity.get("type", "Entity"),
+            )
 
     return properties
 
@@ -1374,7 +1520,7 @@ def ingest_relationships(
     for relationship in relationships:
         source_ref = str(relationship["source"])
         target_ref = str(relationship["target"])
-        rel_type = str(relationship["relationship"])
+        rel_type = sanitize_edge_label(str(relationship["relationship"]))
         operation = str(relationship.get("operation") or "add").lower()
         relationship_last_updated = (
             str(relationship["last_updated"])
@@ -1789,17 +1935,19 @@ def _compute_json_graph_pagerank() -> int:
 def _create_json_graph_indexes() -> None:
     """Create property indexes for JSON graph query optimization.
 
+    Uses Memgraph-compatible syntax: CREATE INDEX ON :Label(property)
+    Handles "already exists" errors gracefully in Python since Memgraph
+    doesn't support IF NOT EXISTS for property indexes.
+
     Indexes improve filtering performance on entity_category, type,
-    pagerank_score for nodes, and relationship_category for edges.
+    and pagerank_score for JsonEntity nodes.
     Vector index is managed separately by recreate_json_vector_index().
+    Edge indexes are not supported by Memgraph.
     """
     indexes = [
-        # Node indexes
-        "CREATE INDEX IF NOT EXISTS FOR (n:JsonEntity) ON (n.entity_category);",
-        "CREATE INDEX IF NOT EXISTS FOR (n:JsonEntity) ON (n.type);",
-        "CREATE INDEX IF NOT EXISTS FOR (n:JsonEntity) ON (n.pagerank_score);",
-        # Edge index for relationship category filtering
-        "CREATE INDEX IF NOT EXISTS FOR ()-[r]-() ON (r.relationship_category);",
+        "CREATE INDEX ON :JsonEntity(entity_category);",
+        "CREATE INDEX ON :JsonEntity(type);",
+        "CREATE INDEX ON :JsonEntity(pagerank_score);",
     ]
     try:
         with _create_json_ingestor(

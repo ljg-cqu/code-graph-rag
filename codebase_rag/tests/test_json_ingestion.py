@@ -95,6 +95,26 @@ def test_validate_auto_generates_missing_entity_ids() -> None:
     assert validated["entities"][0]["id"] == "john_doe"
 
 
+def test_validate_auto_generates_unique_ids_for_colliding_names() -> None:
+    input_json = deepcopy(SAMPLE_VALID_JSON)
+    input_json["entities"] = [
+        {"name": "Python 3.9", "type": "Version"},
+        {"name": "Python 3_9", "type": "Version"},
+    ]
+    input_json["relationships"] = []
+
+    valid, validated, errors = validate_json_input(input_json)
+
+    assert valid is True
+    assert errors == []
+    assert validated is not None
+    ids = [entity["id"] for entity in validated["entities"]]
+    assert len(ids) == len(set(ids))
+    assert ids[0] == "python_3_9"
+    assert ids[1] != "python_3_9"
+    assert "python_3_9_" in ids[1]
+
+
 def test_validate_duplicate_entity_ids() -> None:
     invalid_json = deepcopy(SAMPLE_VALID_JSON)
     invalid_json["entities"][1]["id"] = "ent_001"

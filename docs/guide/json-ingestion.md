@@ -405,9 +405,10 @@ All query methods degrade gracefully when optional features are unavailable:
 | No relationship emoji | Uses `"🔗"` |
 | No relationship verb | Uses `"related-to"` |
 
-**Backward Compatibility**: The `find_relationships` method uses `COALESCE(r.relationship_category, type(r))` for filtering, so it works correctly with:
-- New data that has the `relationship_category` property
-- Legacy data that only has the relationship type (e.g., `CAUSAL`)
+**Backward Compatibility**: The `find_relationships` method uses `COALESCE(r.category, r.relationship_category, type(r))` for filtering, so it works correctly with:
+- New data that has the `category` property
+- Legacy data that has the `relationship_category` property
+- Very old data that only has the relationship type (e.g., `CAUSAL`)
 
 ### Python API
 
