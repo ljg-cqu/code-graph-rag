@@ -108,6 +108,93 @@ class TestNormalizeRelationshipCategory:
         assert _normalize_relationship_category("causal") == "CAUSAL"
         assert _normalize_relationship_category("CaUsAl") == "CAUSAL"
 
+    def test_comprises_maps_to_compositional(self) -> None:
+        assert _normalize_relationship_category("comprises") == "COMPOSITIONAL"
+
+    def test_contains_maps_to_compositional(self) -> None:
+        assert _normalize_relationship_category("contains") == "COMPOSITIONAL"
+
+    def test_similar_to_maps_to_comparative(self) -> None:
+        assert _normalize_relationship_category("similar-to") == "COMPARATIVE"
+
+    def test_contrasts_with_maps_to_comparative(self) -> None:
+        assert _normalize_relationship_category("contrasts-with") == "COMPARATIVE"
+
+    def test_relates_to_maps_to_comparative(self) -> None:
+        assert _normalize_relationship_category("relates-to") == "COMPARATIVE"
+
+    def test_precedes_maps_to_sequential(self) -> None:
+        assert _normalize_relationship_category("precedes") == "SEQUENTIAL"
+
+    def test_follows_maps_to_sequential(self) -> None:
+        assert _normalize_relationship_category("follows") == "SEQUENTIAL"
+
+    def test_preceded_by_maps_to_sequential(self) -> None:
+        assert _normalize_relationship_category("preceded-by") == "SEQUENTIAL"
+
+    def test_followed_by_maps_to_sequential(self) -> None:
+        assert _normalize_relationship_category("followed-by") == "SEQUENTIAL"
+
+    def test_triggers_maps_to_causal(self) -> None:
+        assert _normalize_relationship_category("triggers") == "CAUSAL"
+
+    def test_influences_maps_to_causal(self) -> None:
+        assert _normalize_relationship_category("influences") == "CAUSAL"
+
+    def test_results_in_maps_to_causal(self) -> None:
+        assert _normalize_relationship_category("results-in") == "CAUSAL"
+
+    def test_leads_to_maps_to_causal(self) -> None:
+        assert _normalize_relationship_category("leads-to") == "CAUSAL"
+
+    def test_correlates_with_maps_to_causal(self) -> None:
+        assert _normalize_relationship_category("correlates-with") == "CAUSAL"
+
+    def test_mitigates_maps_to_causal(self) -> None:
+        assert _normalize_relationship_category("mitigates") == "CAUSAL"
+
+    def test_reduces_maps_to_causal(self) -> None:
+        assert _normalize_relationship_category("reduces") == "CAUSAL"
+
+    def test_depends_on_maps_to_causal(self) -> None:
+        assert _normalize_relationship_category("depends-on") == "CAUSAL"
+
+    def test_blocks_maps_to_causal(self) -> None:
+        assert _normalize_relationship_category("blocks") == "CAUSAL"
+
+    def test_drives_maps_to_causal(self) -> None:
+        assert _normalize_relationship_category("drives") == "CAUSAL"
+
+    def test_facilitates_maps_to_causal(self) -> None:
+        assert _normalize_relationship_category("facilitates") == "CAUSAL"
+
+    def test_promotes_maps_to_causal(self) -> None:
+        assert _normalize_relationship_category("promotes") == "CAUSAL"
+
+    def test_partof_maps_to_compositional(self) -> None:
+        assert _normalize_relationship_category("partof") == "COMPOSITIONAL"
+
+    def test_instanceof_maps_to_hierarchical(self) -> None:
+        assert _normalize_relationship_category("instanceof") == "HIERARCHICAL"
+
+    def test_type_of_maps_to_hierarchical(self) -> None:
+        assert _normalize_relationship_category("type_of") == "HIERARCHICAL"
+
+    def test_kind_of_maps_to_hierarchical(self) -> None:
+        assert _normalize_relationship_category("kind_of") == "HIERARCHICAL"
+
+    def test_prevents_maps_to_causal(self) -> None:
+        assert _normalize_relationship_category("prevents") == "CAUSAL"
+
+    def test_enables_maps_to_causal(self) -> None:
+        assert _normalize_relationship_category("enables") == "CAUSAL"
+
+    def test_inhibits_maps_to_causal(self) -> None:
+        assert _normalize_relationship_category("inhibits") == "CAUSAL"
+
+    def test_produces_maps_to_causal(self) -> None:
+        assert _normalize_relationship_category("produces") == "CAUSAL"
+
 
 class TestSanitizeEdgeLabel:
     def test_replaces_hyphens_with_underscores(self) -> None:
@@ -219,6 +306,30 @@ class TestEntityProperties:
         assert props["pagerank_score"] == 0.1
         assert props["community_id"] == -1
         assert props["community_importance"] == 0.0
+
+    def test_explicit_entity_category_override(self) -> None:
+        entity = {
+            "id": "test-1",
+            "name": "Custom Entity",
+            "type": "UnknownType",
+            "entity_category": "EVENT_PROCESS",
+            "properties": {},
+        }
+        props = _entity_properties("test-dataset", entity, {})
+        assert props["entity_category"] == "EVENT_PROCESS"
+        assert props["entity_emoji"] == "⏱️"
+
+    def test_explicit_entity_category_case_insensitive(self) -> None:
+        entity = {
+            "id": "test-1",
+            "name": "Custom Entity",
+            "type": "UnknownType",
+            "entity_category": "concrete_entity",
+            "properties": {},
+        }
+        props = _entity_properties("test-dataset", entity, {})
+        assert props["entity_category"] == "CONCRETE_ENTITY"
+        assert props["entity_emoji"] == "🧱"
 
 
 class TestRelationshipProperties:

@@ -424,9 +424,9 @@ class TestSubtypeRegistryIntegrity:
             )
 
     def test_registry_has_expected_size(self) -> None:
-        """Registry should have 188 sub-types (175 original + 13 JSON entity types)."""
-        assert len(ENTITY_SUBTYPE_REGISTRY) == 188, (
-            f"Expected 188 sub-types, got {len(ENTITY_SUBTYPE_REGISTRY)}"
+        """Registry should have 200 sub-types."""
+        assert len(ENTITY_SUBTYPE_REGISTRY) == 200, (
+            f"Expected 200 sub-types, got {len(ENTITY_SUBTYPE_REGISTRY)}"
         )
 
     def test_registry_no_duplicate_keys(self) -> None:
@@ -720,10 +720,45 @@ class TestJsonEntitySubtypeRegistry:
         assert category == "ABSTRACT_CONCEPT"
         assert emoji == "💡"
 
-    def test_framework_component_maps_to_system_structure(self) -> None:
+    def test_cognitive_mechanism_maps_to_event_process(self) -> None:
+        category, _, emoji = resolve_entity_category(None, "Cognitive Mechanism", "")
+        assert category == "EVENT_PROCESS"
+        assert emoji == "⏱️"
+
+    def test_conceptual_framework_maps_to_abstract_concept(self) -> None:
+        category, _, emoji = resolve_entity_category(None, "Conceptual Framework", "")
+        assert category == "ABSTRACT_CONCEPT"
+        assert emoji == "💡"
+
+    def test_decision_framework_maps_to_abstract_concept(self) -> None:
+        category, _, emoji = resolve_entity_category(None, "Decision Framework", "")
+        assert category == "ABSTRACT_CONCEPT"
+        assert emoji == "💡"
+
+    def test_educational_framework_maps_to_abstract_concept(self) -> None:
+        category, _, emoji = resolve_entity_category(None, "Educational Framework", "")
+        assert category == "ABSTRACT_CONCEPT"
+        assert emoji == "💡"
+
+    def test_research_framework_maps_to_abstract_concept(self) -> None:
+        category, _, emoji = resolve_entity_category(None, "Research Framework", "")
+        assert category == "ABSTRACT_CONCEPT"
+        assert emoji == "💡"
+
+    def test_framework_component_maps_to_information_expression(self) -> None:
+        category, _, emoji = resolve_entity_category(None, "Framework Component", "")
+        assert category == "INFORMATION_EXPRESSION"
+        assert emoji == "📨"
+
+    def test_framework_component_camelcase_maps_to_information_expression(self) -> None:
         category, _, emoji = resolve_entity_category(None, "FrameworkComponent", "")
-        assert category == "SYSTEM_STRUCTURE"
-        assert emoji == "🏗️"
+        assert category == "INFORMATION_EXPRESSION"
+        assert emoji == "📨"
+
+    def test_technology_tool_maps_to_information_expression(self) -> None:
+        category, _, emoji = resolve_entity_category(None, "Technology Tool", "")
+        assert category == "INFORMATION_EXPRESSION"
+        assert emoji == "📨"
 
     def test_governance_construct_maps_to_system_structure(self) -> None:
         category, _, emoji = resolve_entity_category(None, "GovernanceConstruct", "")

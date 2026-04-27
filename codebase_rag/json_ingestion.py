@@ -263,11 +263,11 @@ def _extract_emoji_prefix(name: str) -> tuple[str, str | None]:
 def _normalize_relationship_category(category: str) -> str:
     """Normalize JSON relationship category to internal taxonomy.
 
-    Maps common JSON category names to the canonical categories used
+    Maps common JSON category names and verbs to the canonical categories used
     by VERB_REGISTRY and internal relationship classification.
 
     Args:
-        category: Raw category string from JSON relationship data.
+        category: Raw category string or verb from JSON relationship data.
 
     Returns:
         Normalized canonical category name, defaults to RELATED_TO
@@ -278,24 +278,55 @@ def _normalize_relationship_category(category: str) -> str:
 
     category = category.upper().strip()
     mapping = {
+        # Attributive
         "ATTRIBUTE": "ATTRIBUTIVE",
         "ATTRIBUTES": "ATTRIBUTIVE",
         "INFERRED": "RELATED_TO",
         "INFERENCE": "RELATED_TO",
+        # Causal
         "CAUSES": "CAUSAL",
         "CAUSE": "CAUSAL",
+        "CAUSED-BY": "CAUSAL",
+        "PRODUCES": "CAUSAL",
+        "PREVENTS": "CAUSAL",
+        "ENABLES": "CAUSAL",
+        "INHIBITS": "CAUSAL",
+        "RESULTS-IN": "CAUSAL",
+        "RESULTS": "CAUSAL",
+        "REDUCES": "CAUSAL",
+        "DEPENDS-ON": "CAUSAL",
+        "BLOCKS": "CAUSAL",
+        "DRIVES": "CAUSAL",
+        "FACILITATES": "CAUSAL",
+        "PROMOTES": "CAUSAL",
+        "CORRELATES-WITH": "CAUSAL",
+        "LEADS-TO": "CAUSAL",
+        "MITIGATES": "CAUSAL",
+        "TRIGGERS": "CAUSAL",
+        "INFLUENCES": "CAUSAL",
+        # Compositional
         "PART_OF": "COMPOSITIONAL",
         "PARTOF": "COMPOSITIONAL",
+        "COMPRISES": "COMPOSITIONAL",
+        "CONTAINS": "COMPOSITIONAL",
+        # Hierarchical
         "IS_A": "HIERARCHICAL",
         "ISA": "HIERARCHICAL",
         "INSTANCEOF": "HIERARCHICAL",
+        "TYPE_OF": "HIERARCHICAL",
+        "KIND_OF": "HIERARCHICAL",
+        # Comparative
         "SIMILAR": "COMPARATIVE",
+        "SIMILAR-TO": "COMPARATIVE",
         "COMPARABLE": "COMPARATIVE",
+        "CONTRASTS-WITH": "COMPARATIVE",
+        "CONTRASTS": "COMPARATIVE",
+        "RELATES-TO": "COMPARATIVE",
+        # Sequential
         "PRECEDES": "SEQUENTIAL",
         "FOLLOWS": "SEQUENTIAL",
-        "ENABLES": "CAUSAL",
-        "TRIGGERS": "CAUSAL",
-        "INFLUENCES": "CAUSAL",
+        "PRECEDED-BY": "SEQUENTIAL",
+        "FOLLOWED-BY": "SEQUENTIAL",
     }
     result = mapping.get(category, category)
 
@@ -1209,8 +1240,9 @@ def _entity_properties(
         properties["emoji"] = emoji
         properties["display_name"] = name
 
+    declared_category = entity.get("entity_category")
     category, subtype, cat_emoji = resolve_entity_category(
-        declared_category=None,
+        declared_category=declared_category,
         declared_subtype=entity_type,
         definition=properties.get("description", ""),
     )

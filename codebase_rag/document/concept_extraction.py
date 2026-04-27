@@ -336,11 +336,11 @@ first 6 categories before using it. This mirrors RELATED_TO in the relationship 
 Examples by domain:
 - "Critical Thinking" → EVENT_PROCESS (cognitive activity unfolding over time)
 - "Intellectual Humility" → PROPERTY_ATTRIBUTE (characteristic of a person)
-- "Educational Framework" → SYSTEM_STRUCTURE (organized pedagogical system)
+- "Educational Framework" → ABSTRACT_CONCEPT (pedagogical framework schema)
 - "Case Studies" → INFORMATION_EXPRESSION (representation of knowledge)
 - "Active Learning Methods" → EVENT_PROCESS (teaching activity over time)
 - "Cognitive Bias" → PROPERTY_ATTRIBUTE (characteristic of thinking)
-- "Working Memory" → SYSTEM_STRUCTURE (cognitive subsystem)
+- "Working Memory" → PROPERTY_ATTRIBUTE (cognitive capacity)
 - "Debate" → EVENT_PROCESS (structured discursive activity)
 
 Relationships use an 8-category canonical taxonomy. Choose the most specific verb
@@ -1421,24 +1421,31 @@ ENTITY_SUBTYPE_REGISTRY: dict[str, str] = {
     "Quality Benchmark": "PROPERTY_ATTRIBUTE",
     "Quantitative Threshold": "PROPERTY_ATTRIBUTE",
 
-    # 🏗️ System/Structure — Pedagogical & Cognitive (17)
+    # 🏗️ System/Structure — Pedagogical & Cognitive (9)
     "AI System": "SYSTEM_STRUCTURE",
     "Cognitive Architecture": "SYSTEM_STRUCTURE",
     "Cognitive Framework": "SYSTEM_STRUCTURE",
-    "Cognitive Mechanism": "SYSTEM_STRUCTURE",
     "Cognitive Model": "SYSTEM_STRUCTURE",
     "Cognitive Subsystem": "SYSTEM_STRUCTURE",
     "Cognitive System": "SYSTEM_STRUCTURE",
-    "Conceptual Framework": "SYSTEM_STRUCTURE",
-    "Decision Framework": "SYSTEM_STRUCTURE",
-    "Educational Framework": "SYSTEM_STRUCTURE",
     "Educational Organization": "SYSTEM_STRUCTURE",
-    "Framework Component": "SYSTEM_STRUCTURE",
     "Methodology Framework": "SYSTEM_STRUCTURE",
     "Pedagogical Framework": "SYSTEM_STRUCTURE",
-    "Research Framework": "SYSTEM_STRUCTURE",
     "Research Institution": "SYSTEM_STRUCTURE",
     "Technological Influence": "SYSTEM_STRUCTURE",
+
+    # 💡 Abstract Concept — Frameworks (4)
+    "Conceptual Framework": "ABSTRACT_CONCEPT",
+    "Decision Framework": "ABSTRACT_CONCEPT",
+    "Educational Framework": "ABSTRACT_CONCEPT",
+    "Research Framework": "ABSTRACT_CONCEPT",
+
+    # ⏱️ Event/Process — Cognitive Mechanisms (1)
+    "Cognitive Mechanism": "EVENT_PROCESS",
+
+    # 📨 Information/Expression — Framework Components & Tools (2)
+    "Framework Component": "INFORMATION_EXPRESSION",
+    "Technology Tool": "INFORMATION_EXPRESSION",
 
     # ⏱️ Event/Process — Pedagogical & Cognitive (15)
     "AI Practice": "EVENT_PROCESS",
@@ -1480,9 +1487,8 @@ ENTITY_SUBTYPE_REGISTRY: dict[str, str] = {
     "Psychological Theory": "ABSTRACT_CONCEPT",
     "Mental Model": "ABSTRACT_CONCEPT",
 
-    # 🧱 Concrete Entity — Pedagogical & Cognitive (2)
+    # 🧱 Concrete Entity — Pedagogical & Cognitive (1)
     "Software Tool": "CONCRETE_ENTITY",
-    "Technology Tool": "CONCRETE_ENTITY",
 
     # ═══════════════════════════════════════════════════════════════
     # JSON Entity Types — CTO Competency Framework & General
@@ -1498,7 +1504,6 @@ ENTITY_SUBTYPE_REGISTRY: dict[str, str] = {
     "MentalModel": "ABSTRACT_CONCEPT",
 
     # 🏗️ System/Structure
-    "FrameworkComponent": "SYSTEM_STRUCTURE",
     "GovernanceConstruct": "SYSTEM_STRUCTURE",
     "Layer": "SYSTEM_STRUCTURE",
 
@@ -1511,6 +1516,7 @@ ENTITY_SUBTYPE_REGISTRY: dict[str, str] = {
     # 📨 Information Expression
     "GovernanceRule": "INFORMATION_EXPRESSION",
     "Reference": "INFORMATION_EXPRESSION",
+    "FrameworkComponent": "INFORMATION_EXPRESSION",
 
     # 🧱 Concrete Entity
     "Tool": "CONCRETE_ENTITY",
