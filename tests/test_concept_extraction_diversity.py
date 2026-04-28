@@ -362,12 +362,7 @@ class TestRebalanceRelationships:
 
     @pytest.mark.asyncio
     async def test_rebalance_preserves_category_for_known_verbs(self):
-        """Known verbs rebalanced to a different category must keep the new category.
-
-        Regression: calling resolve_category() on a known verb like 'causes'
-        (hardcoded to CAUSAL) would override a rebalanced COMPOSITIONAL back
-        to CAUSAL. The fix derives emoji directly from CATEGORY_EMOJI_MAP.
-        """
+        """Registry verbs are excluded from rebalancing to preserve vetted categories."""
         rels = [
             ConceptRelationship(
                 from_concept="A",
@@ -378,12 +373,51 @@ class TestRebalanceRelationships:
             ),
         ]
 
-        mock_rebalanced = [
+        mock_agent = Mock()
+        mock_agent.run = AsyncMock()
+
+        with (
+            patch("codebase_rag.compat.pydantic_ai.Agent", return_value=mock_agent),
+            patch("codebase_rag.services.llm._create_chat_model", return_value=Mock()),
+        ):
+            result = await _rebalance_relationships(rels, "some content", "chunk:1")
+
+        assert result[0].category == "CAUSAL"
+        mock_agent.run.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rebalance_only_non_registry_verbs(self):
+        """Only non-registry verbs are passed to the rebalancing agent."""
+        from codebase_rag.document.concept_extraction import VERB_REGISTRY
+
+        registry_verb = "causes"
+        non_registry_verb = "brand-new-verb"
+        assert registry_verb in VERB_REGISTRY
+        assert non_registry_verb not in VERB_REGISTRY
+
+        rels = [
             ConceptRelationship(
                 from_concept="A",
                 to_concept="B",
-                verb="causes",
-                category="COMPOSITIONAL",
+                verb=registry_verb,
+                category="CAUSAL",
+                strength=0.8,
+            ),
+            ConceptRelationship(
+                from_concept="A",
+                to_concept="C",
+                verb=non_registry_verb,
+                category="CAUSAL",
+                strength=0.8,
+            ),
+        ]
+
+        mock_rebalanced = [
+            ConceptRelationship(
+                from_concept="A",
+                to_concept="C",
+                verb=non_registry_verb,
+                category="ANALOGICAL",
                 strength=0.8,
             ),
         ]
@@ -397,8 +431,12 @@ class TestRebalanceRelationships:
         ):
             result = await _rebalance_relationships(rels, "some content", "chunk:1")
 
-        assert result[0].category == "COMPOSITIONAL"
-        assert result[0].emoji == "🧩"
+        registry_result = next(r for r in result if r.verb == registry_verb)
+        non_registry_result = next(r for r in result if r.verb == non_registry_verb)
+
+        assert registry_result.category == "CAUSAL"
+        assert non_registry_result.category == "ANALOGICAL"
+        mock_agent.run.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_extract_sets_was_rebalanced_on_skew(self):

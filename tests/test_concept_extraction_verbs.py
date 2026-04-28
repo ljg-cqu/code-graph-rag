@@ -145,8 +145,8 @@ class TestLearnedVerbRegistry:
 
         learned_file = tmp_path / ".cgr" / "learned_verbs.json"
         data = json.loads(learned_file.read_text())
-        assert "brand-new-verb" in data
-        assert data["brand-new-verb"]["count"] == 1
+        assert "brand_new_verb" in data
+        assert data["brand_new_verb"]["count"] == 1
 
     def test_load_learned_verbs_caches_across_calls(self, tmp_path):
         """Multiple calls should return cached dict."""

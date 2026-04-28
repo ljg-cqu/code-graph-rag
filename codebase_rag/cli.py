@@ -371,6 +371,13 @@ def _handle_indexing(
     effective_index_code = index_code or index_all
     effective_index_docs = index_docs or index_all
 
+    if effective_index_docs and not effective_index_code:
+        logger.info(
+            "No --index-code flag provided. "
+            "Code graph will remain empty. "
+            "Use --index-code to populate code graph with code entities."
+        )
+
     # Implied --with-docs if indexing docs
     if effective_index_docs:
         effective_with_docs = True

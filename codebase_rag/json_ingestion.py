@@ -1712,11 +1712,19 @@ def ingest_relationships(
             continue
 
         if dry_run:
+            is_symmetric = bool(relationship.get("symmetric"))
+            reverse_key = (target_unique_id, rel_type, source_unique_id)
+            reverse_exists = reverse_key in existing_relationships if existing_relationships else False
             if exists or operation == "update":
                 summary.updated += 1 if exists else 0
                 summary.ingested += 0 if exists else 1
             else:
                 summary.ingested += 1
+            if is_symmetric:
+                if reverse_exists:
+                    summary.updated += 1
+                else:
+                    summary.ingested += 1
             continue
 
         if graph_connection is None:
@@ -1748,7 +1756,8 @@ def ingest_relationships(
                     "properties": rel_props,
                 },
             )
-            if rel_props.get("is_symmetric"):
+            is_symmetric = rel_props.get("is_symmetric")
+            if is_symmetric:
                 graph_connection.fetch_all(
                     f"""
                     MATCH (a:JsonEntity {{unique_id: $target_id, dataset_id: $dataset_id}}),
@@ -1768,6 +1777,12 @@ def ingest_relationships(
                 summary.updated += 1
             else:
                 summary.ingested += 1
+            if is_symmetric:
+                reverse_key = (target_unique_id, rel_type, source_unique_id)
+                if reverse_key in existing_relationships:
+                    summary.updated += 1
+                else:
+                    summary.ingested += 1
         except Exception as exc:
             summary.failed += 1
             summary.errors.append(

@@ -17,6 +17,7 @@ from codebase_rag.document.concept_extraction import (
     VERB_REGISTRY,
     ConceptRelationship,
     _fuzzy_match_verb,
+    _is_semantic_override_warranted,
     resolve_category,
 )
 
@@ -134,8 +135,8 @@ class TestResolveCategory:
 class TestVerbRegistryLogging:
     """Tests for verb registry log levels (D-2)."""
 
-    def test_unregistered_verb_with_declared_logged_at_debug(self):
-        """Unregistered verb with valid declared category must log at DEBUG, not INFO."""
+    def test_unregistered_verb_with_declared_logged_at_info(self):
+        """Unregistered verb with valid declared category must log at INFO."""
         from unittest.mock import patch
 
         with (
@@ -144,11 +145,10 @@ class TestVerbRegistryLogging:
         ):
             resolve_category("novel-verb-123", "COMPARATIVE")
 
-        mock_logger.debug.assert_called_once_with(
+        mock_logger.info.assert_called_once_with(
             "Verb 'novel-verb-123' not in registry — using declared category 'COMPARATIVE'. "
             "Learned for future authoritative resolution."
         )
-        mock_logger.info.assert_not_called()
 
     def test_unregistered_verb_fuzzy_match_logged_at_debug(self):
         """Unregistered verb fuzzy-matched to registry must log at DEBUG, not INFO."""
@@ -163,17 +163,81 @@ class TestVerbRegistryLogging:
         )
         mock_logger.info.assert_not_called()
 
-    def test_registry_override_logged_at_debug(self):
-        """Registry override mismatch is already DEBUG — ensure no regression."""
+    def test_registry_override_logged_at_warning(self):
+        """Registry override mismatch must log at WARNING for production visibility."""
         from unittest.mock import patch
 
-        with patch("loguru.logger") as mock_logger:
+        with (
+            patch("codebase_rag.document.concept_extraction._load_learned_verbs", return_value={}),
+            patch("loguru.logger") as mock_logger,
+        ):
             resolve_category("is-a", "CAUSAL")  # registry says HIERARCHICAL
 
-        mock_logger.debug.assert_called_once_with(
+        mock_logger.warning.assert_called_once_with(
             "Verb 'is-a' registry override: LLM declared 'CAUSAL', registry says 'HIERARCHICAL'"
         )
-        mock_logger.info.assert_not_called()
+
+    def test_related_to_fallback_logged_at_warning(self):
+        """Falling back to RELATED_TO with declared category must log at WARNING."""
+        from unittest.mock import patch
+
+        with (
+            patch("codebase_rag.document.concept_extraction._load_learned_verbs", return_value={}),
+            patch("loguru.logger") as mock_logger,
+        ):
+            resolve_category("xyzzy-plugh-garply", "INVALID_CATEGORY")
+
+        mock_logger.warning.assert_called_once_with(
+            "Verb 'xyzzy-plugh-garply' fell back to RELATED_TO. "
+            "LLM declared: 'INVALID_CATEGORY'. "
+            "Consider adding to VERB_REGISTRY."
+        )
+
+    def test_hyphen_normalization_matches_underscore_registry(self):
+        """Hyphenated verbs should match underscore registry keys."""
+        category, emoji = resolve_category("validated-by", "CAUSAL")
+        assert category == "CAUSAL"
+        assert emoji == "⚡"
+
+
+class TestSemanticOverride:
+    """Tests for LLM semantic override logic."""
+
+    def test_compound_verb_triggers_override(self):
+        """Compound verbs (with _ or -) should trigger semantic override."""
+        assert _is_semantic_override_warranted(
+            "subject_to", "ATTRIBUTIVE", "CAUSAL"
+        ) is True
+
+    def test_causal_registry_no_override_for_simple_verbs(self):
+        """Simple verbs should not override CAUSAL registry even when broad."""
+        assert _is_semantic_override_warranted(
+            "structures", "COMPOSITIONAL", "CAUSAL"
+        ) is False
+
+    def test_simple_verb_no_override(self):
+        """Simple verbs should not override registry."""
+        assert _is_semantic_override_warranted(
+            "causes", "COMPOSITIONAL", "CAUSAL"
+        ) is False
+
+    def test_invalid_declared_no_override(self):
+        """Invalid declared category should not trigger override."""
+        assert _is_semantic_override_warranted(
+            "causes", "INVALID", "CAUSAL"
+        ) is False
+
+    def test_semantic_override_applies_in_resolve(self):
+        """resolve_category should apply semantic override for compound verbs."""
+        category, emoji = resolve_category("subject-to", "ATTRIBUTIVE")
+        assert category == "ATTRIBUTIVE"
+        assert emoji == "💭"
+
+    def test_no_override_when_registry_matches_declared(self):
+        """When registry matches declared, no override needed."""
+        category, emoji = resolve_category("causes", "CAUSAL")
+        assert category == "CAUSAL"
+        assert emoji == "⚡"
 
 
 class TestFuzzyMatchVerb:
@@ -282,6 +346,8 @@ class TestVerbRegistry:
             "analogous-to", "has-property", "compares-to", "depends-on",
             "deployed-in", "mitigates", "implements", "extends",
             "is-parent-of", "takes-place-in", "related-to",
+            "sequences", "subject_to", "quantified_by",
+            "validated_by", "influenced_by", "superseded_by",
         }
         for verb in required:
             assert verb in VERB_REGISTRY, f"Required verb '{verb}' missing from registry"

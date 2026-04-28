@@ -971,6 +971,8 @@ VERB_REGISTRY: dict[str, str] = {
     "bears": "ATTRIBUTIVE",
     "remains-lazy-for": "ATTRIBUTIVE",
     "characterizes": "ATTRIBUTIVE",
+    "subject_to": "ATTRIBUTIVE",
+    "quantified_by": "ATTRIBUTIVE",
     # Comparative (⚖️)
     "compares-to": "COMPARATIVE",
     "contrasts-with": "COMPARATIVE",
@@ -994,6 +996,7 @@ VERB_REGISTRY: dict[str, str] = {
     "evolves-into": "SEQUENTIAL",
     "progresses-to": "SEQUENTIAL",
     "succeeds": "SEQUENTIAL",
+    "sequences": "SEQUENTIAL",
     # Causal (⚡)
     "causes": "CAUSAL",
     "produces": "CAUSAL",
@@ -1061,6 +1064,8 @@ VERB_REGISTRY: dict[str, str] = {
     "confirms-or-flags": "CAUSAL",
     "re-evaluation-triggered": "CAUSAL",
     "structures": "CAUSAL",
+    "validated_by": "CAUSAL",
+    "influenced_by": "CAUSAL",
     # Analogical (🌉)
     "analogous-to": "ANALOGICAL",
     "corresponds-to": "ANALOGICAL",
@@ -1102,6 +1107,7 @@ VERB_REGISTRY: dict[str, str] = {
     "replaces": "COMPARATIVE",
     "extends": "HIERARCHICAL",
     "supersedes": "COMPARATIVE",
+    "superseded_by": "COMPARATIVE",
     "compatible-with": "COMPARATIVE",
     "processes": "SEQUENTIAL",
     "handles": "SEQUENTIAL",
@@ -1191,6 +1197,38 @@ def _learn_verb(verb: str, category: str) -> None:
             fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 
+def _verb_in_registry(verb: str) -> bool:
+    """Check if a verb (or its hyphen-normalized form) exists in VERB_REGISTRY."""
+    v = verb.lower().strip()
+    return v in VERB_REGISTRY or v.replace("-", "_") in VERB_REGISTRY
+
+
+def _is_semantic_override_warranted(
+    verb: str,
+    declared_category: str,
+    registry_category: str,
+) -> bool:
+    """Determine if LLM's category declaration should override registry.
+
+    Override is warranted when the verb is compound (contains _),
+    suggesting specific semantic intent that may differ from broad
+    registry defaults.
+    """
+    from codebase_rag.constants import DOC_CONCEPT_CATEGORIES
+
+    if not declared_category:
+        return False
+
+    declared_upper = declared_category.upper()
+    if declared_upper not in DOC_CONCEPT_CATEGORIES:
+        return False
+
+    if "_" in verb:
+        return True
+
+    return False
+
+
 def resolve_category(verb: str, declared_category: str | None) -> tuple[str, str]:
     """Resolve a verb to its canonical category and emoji.
 
@@ -1216,9 +1254,10 @@ def resolve_category(verb: str, declared_category: str | None) -> tuple[str, str
     from codebase_rag.constants import CATEGORY_EMOJI_MAP, DOC_CONCEPT_CATEGORIES
 
     verb_lower = verb.lower().strip()
+    verb_normalized = verb_lower.replace("-", "_")
     learned = _load_learned_verbs()
-    learned_category = learned.get(verb_lower)
-    registry_category = VERB_REGISTRY.get(verb_lower)
+    learned_category = learned.get(verb_lower) or learned.get(verb_normalized)
+    registry_category = VERB_REGISTRY.get(verb_lower) or VERB_REGISTRY.get(verb_normalized)
 
     if learned_category is not None:
         category = learned_category
@@ -1226,21 +1265,30 @@ def resolve_category(verb: str, declared_category: str | None) -> tuple[str, str
         if declared_category and registry_category == declared_category.upper():
             category = declared_category.upper()
         else:
-            if declared_category and registry_category != declared_category.upper():
-                logger.debug(
-                    f"Verb '{verb}' registry override: LLM declared "
-                    f"'{declared_category}', registry says '{registry_category}'"
-                )
-            category = registry_category
+            if declared_category and declared_category.upper() in DOC_CONCEPT_CATEGORIES:
+                if _is_semantic_override_warranted(verb, declared_category, registry_category):
+                    category = declared_category.upper()
+                    logger.info(
+                        f"Verb '{verb}' semantic override: "
+                        f"registry={registry_category}, LLM={declared_category}"
+                    )
+                else:
+                    category = registry_category
+                    logger.warning(
+                        f"Verb '{verb}' registry override: LLM declared "
+                        f"'{declared_category}', registry says '{registry_category}'"
+                    )
+            else:
+                category = registry_category
     elif declared_category and declared_category.upper() in DOC_CONCEPT_CATEGORIES:
         category = declared_category.upper()
-        _learn_verb(verb_lower, category)
-        logger.debug(
+        _learn_verb(verb_normalized, category)
+        logger.info(
             f"Verb '{verb}' not in registry — using declared category '{category}'. "
             f"Learned for future authoritative resolution."
         )
     else:
-        category = _fuzzy_match_verb(verb_lower)
+        category = _fuzzy_match_verb(verb_normalized)
         if category:
             logger.debug(
                 f"Verb '{verb}' not in registry — fuzzy-matched to "
@@ -1248,6 +1296,12 @@ def resolve_category(verb: str, declared_category: str | None) -> tuple[str, str
             )
         else:
             category = "RELATED_TO"
+            if declared_category:
+                logger.warning(
+                    f"Verb '{verb}' fell back to RELATED_TO. "
+                    f"LLM declared: '{declared_category}'. "
+                    f"Consider adding to VERB_REGISTRY."
+                )
 
     emoji = CATEGORY_EMOJI_MAP.get(category, "🔗")
     return category, emoji
@@ -1624,12 +1678,25 @@ async def _rebalance_relationships(
     chunk_content: str,
     chunk_qn: str,
 ) -> list[ConceptRelationship]:
-    """If category skew detected, ask LLM to re-categorize relationships."""
+    """If category skew detected, ask LLM to re-categorize NON-REGISTRY relationships."""
     from loguru import logger
 
     from codebase_rag.compat.pydantic_ai import Agent
     from codebase_rag.config import settings
     from codebase_rag.services.llm import _create_chat_model
+
+    rebalancable = [
+        r for r in relationships
+        if not _verb_in_registry(r.verb)
+    ]
+    registry_fixed = [
+        r for r in relationships
+        if _verb_in_registry(r.verb)
+    ]
+
+    if not rebalancable:
+        logger.debug(f"No non-registry relationships to rebalance for {chunk_qn}")
+        return relationships
 
     try:
         llm = _create_chat_model(settings.active_orchestrator_config)
@@ -1641,12 +1708,12 @@ async def _rebalance_relationships(
         )
         result = await rebalance_agent.run(
             f"Chunk context:\n{chunk_content[:2000]}\n\n"
-            f"Relationships to rebalance:\n"
-            f"{json.dumps([r.model_dump() for r in relationships])}"
+            f"Relationships to rebalance (non-registry verbs only):\n"
+            f"{json.dumps([r.model_dump() for r in rebalancable])}"
         )
         rebalanced = result.output
         validated = []
-        for orig, reb in zip(relationships, rebalanced):
+        for orig, reb in zip(rebalancable, rebalanced):
             if (
                 reb.from_concept == orig.from_concept
                 and reb.to_concept == orig.to_concept
@@ -1659,9 +1726,9 @@ async def _rebalance_relationships(
             else:
                 validated.append(orig)
         logger.info(
-            f"Rebalanced {len(relationships)} relationships for {chunk_qn}"
+            f"Rebalanced {len(rebalancable)} relationships for {chunk_qn}"
         )
-        return validated
+        return registry_fixed + validated
     except Exception as e:
         logger.warning(
             f"Rebalancing failed for {chunk_qn}: {e}. Keeping original relationships."

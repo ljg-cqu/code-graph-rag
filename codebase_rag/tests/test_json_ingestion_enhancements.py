@@ -629,7 +629,7 @@ class TestSymmetricBidirectionalEdges:
             {},
             graph_connection=graph_conn,
         )
-        assert summary.ingested == 1
+        assert summary.ingested == 2
         # Two MERGE calls: one forward, one reverse
         merge_calls = [
             c for c in graph_conn.calls if "MERGE (a)-[r:" in c["query"]
