@@ -1,6 +1,7 @@
 """Tests for Phase 2 data modeling fixes.
 
-See .specs/data_modeling_fixes_phase2_spec.md for details.
+Validates relationship batch buffering, safe cursor result extraction,
+and health checker column exception handling.
 """
 import pytest
 from unittest.mock import MagicMock, patch

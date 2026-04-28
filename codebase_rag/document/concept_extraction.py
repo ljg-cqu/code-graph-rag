@@ -1405,11 +1405,12 @@ ENTITY_SUBTYPE_REGISTRY: dict[str, str] = {
     "Brand": "ABSTRACT_CONCEPT",
     "Moat": "ABSTRACT_CONCEPT",
 
-    # 📏 Property/Attribute — Pedagogical & Cognitive (14)
+    # 📏 Property/Attribute — Pedagogical & Cognitive (15)
     "Cognitive Capacity": "PROPERTY_ATTRIBUTE",
     "Cognitive Condition": "PROPERTY_ATTRIBUTE",
     "Cognitive Constraint": "PROPERTY_ATTRIBUTE",
     "Cognitive Limitation": "PROPERTY_ATTRIBUTE",
+    "Cognitive Phenomenon": "EVENT_PROCESS",
     "Cognitive State": "PROPERTY_ATTRIBUTE",
     "Cognitive Trait": "PROPERTY_ATTRIBUTE",
     "Character Traits": "PROPERTY_ATTRIBUTE",
@@ -1440,27 +1441,25 @@ ENTITY_SUBTYPE_REGISTRY: dict[str, str] = {
     "Educational Framework": "ABSTRACT_CONCEPT",
     "Research Framework": "ABSTRACT_CONCEPT",
 
-    # ⏱️ Event/Process — Cognitive Mechanisms (1)
-    "Cognitive Mechanism": "EVENT_PROCESS",
+    # 🏗️ System/Structure — Cognitive (1)
+    "Cognitive Mechanism": "SYSTEM_STRUCTURE",
 
     # 📨 Information/Expression — Framework Components & Tools (2)
-    "Framework Component": "INFORMATION_EXPRESSION",
-    "Technology Tool": "INFORMATION_EXPRESSION",
+    "Framework Component": "SYSTEM_STRUCTURE",
+    "Technology Tool": "SYSTEM_STRUCTURE",
 
     # ⏱️ Event/Process — Pedagogical & Cognitive (15)
     "AI Practice": "EVENT_PROCESS",
     "Analytical Process": "EVENT_PROCESS",
     "Behavioral Phenomenon": "EVENT_PROCESS",
     "Cognitive Activity": "EVENT_PROCESS",
-    "Cognitive Phenomenon": "EVENT_PROCESS",
-    "Cognitive Process": "EVENT_PROCESS",
-    "Cognitive Skill": "EVENT_PROCESS",
+    "Cognitive Process": "ABSTRACT_CONCEPT",
+    "Cognitive Skill": "ABSTRACT_CONCEPT",
     "Cognitive Strategy": "EVENT_PROCESS",
     "Decision Process": "EVENT_PROCESS",
     "Educational Outcome": "EVENT_PROCESS",
     "Human-Computer Interaction": "EVENT_PROCESS",
     "Pedagogical Activity": "EVENT_PROCESS",
-    "Reasoning Method": "EVENT_PROCESS",
     "Teaching Activity": "EVENT_PROCESS",
     "Teaching Method": "EVENT_PROCESS",
 
@@ -1481,11 +1480,12 @@ ENTITY_SUBTYPE_REGISTRY: dict[str, str] = {
     "Research Organization": "AGENT_ROLE",
     "Researcher": "AGENT_ROLE",
 
-    # 💡 Abstract Concept — Pedagogical & Cognitive (4)
+    # 💡 Abstract Concept — Pedagogical & Cognitive (5)
     "Capability": "ABSTRACT_CONCEPT",
     "Foundational Concept": "ABSTRACT_CONCEPT",
     "Psychological Theory": "ABSTRACT_CONCEPT",
     "Mental Model": "ABSTRACT_CONCEPT",
+    "Reasoning Method": "ABSTRACT_CONCEPT",
 
     # 🧱 Concrete Entity — Pedagogical & Cognitive (1)
     "Software Tool": "CONCRETE_ENTITY",
@@ -1516,7 +1516,7 @@ ENTITY_SUBTYPE_REGISTRY: dict[str, str] = {
     # 📨 Information Expression
     "GovernanceRule": "INFORMATION_EXPRESSION",
     "Reference": "INFORMATION_EXPRESSION",
-    "FrameworkComponent": "INFORMATION_EXPRESSION",
+    "FrameworkComponent": "SYSTEM_STRUCTURE",
 
     # 🧱 Concrete Entity
     "Tool": "CONCRETE_ENTITY",

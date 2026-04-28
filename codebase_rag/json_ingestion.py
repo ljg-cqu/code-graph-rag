@@ -436,11 +436,39 @@ def _batch_last_updated(data: dict[str, Any]) -> str | None:
     return value or None
 
 
+# Metadata keys that should NOT be copied into relationship properties.
+# These conflict with relationship property names (e.g., deep_causal_analysis is a
+# boolean in metadata but a dict in relationship properties).
+_METADATA_ONLY_KEYS = frozenset({
+    # Processing flags (booleans that conflict with relationship properties)
+    "deep_causal_analysis",
+    "layer_classification",
+    # Counts and summaries (not relationship properties)
+    "entity_count",
+    "relationship_count",
+    "inferred_relationship_count",
+    "feynman_summary",
+    "resolution_reason",
+    # Standard metadata
+    "dataset_id",
+    "default_entity_labels",
+    # Document tracking
+    "source",
+    "created_at",
+    "agent_version",
+    "guidance_version",
+    "input_path",
+    "output_mode",
+    "processing_time_seconds",
+    "confidence_threshold",
+})
+
+
 def _metadata_properties(metadata: dict[str, Any]) -> dict[str, Any]:
     return {
         key: value
         for key, value in metadata.items()
-        if key not in {"dataset_id", "default_entity_labels"}
+        if key not in _METADATA_ONLY_KEYS
     }
 
 
@@ -925,9 +953,22 @@ def _load_json_files_with_errors(
             skip_count += non_entity_total
             skip_breakdown["non_entity"] += non_entity_total
     else:
-        raise ValueError(
-            f"Invalid input path: {input_path} (must be .json file or directory containing JSON files)"
+        parent_dir = path.parent
+        suggestions: list[str] = []
+        if parent_dir.exists():
+            similar = list(parent_dir.glob("*.json"))
+            if similar:
+                suggestions = [f"  Did you mean: {f.name}" for f in similar[:3]]
+
+        error_msg = (
+            f"JSON path does not exist: {path}\n"
+            f"  - If '{path.name}' is a filename, check the spelling and path are correct\n"
+            f"  - If you meant to scan a directory, provide a directory path instead"
         )
+        if suggestions:
+            error_msg += "\n" + "\n".join(suggestions)
+
+        raise ValueError(error_msg)
 
     return json_files, load_errors, skip_count, skip_breakdown
 
@@ -1236,6 +1277,10 @@ def _entity_properties(
     properties["dataset_id"] = dataset_id
     properties["entity_labels"] = labels
 
+    source_emoji = entity.get("emoji")
+    if source_emoji:
+        properties["entity_emoji_source"] = str(source_emoji)
+
     if emoji:
         properties["emoji"] = emoji
         properties["display_name"] = name
@@ -1290,8 +1335,29 @@ def _relationship_properties(
         properties["confidence"] = relationship["confidence"]
     if relationship.get("explanation"):
         properties["explanation"] = str(relationship["explanation"])
-    if relationship.get("isInferred") is not None:
-        properties["isInferred"] = bool(relationship["isInferred"])
+    if relationship.get("symmetric") is not None:
+        properties["is_symmetric"] = bool(relationship["symmetric"])
+
+    if relationship.get("inferred") is not None:
+        properties["is_inferred"] = bool(relationship["inferred"])
+    elif relationship.get("isInferred") is not None:
+        properties["is_inferred"] = bool(relationship["isInferred"])
+
+    if "is_inferred" in properties:
+        confidence = properties.get("confidence", 1.0)
+        properties["trust_score"] = confidence if not properties["is_inferred"] else confidence * 0.8
+
+    # Flatten deep_causal_analysis into queryable properties
+    deep_causal = properties.get("deep_causal_analysis")
+    if deep_causal:
+        properties["root_cause_chain"] = json.dumps(deep_causal.get("root_cause_chain", []))
+        properties["ultimate_effects"] = json.dumps(deep_causal.get("ultimate_effects", []))
+        properties["causal_depth"] = max(
+            [r.get("depth", 0) for r in deep_causal.get("root_cause_chain", [])],
+            default=0,
+        )
+        properties["causal_termination"] = deep_causal.get("termination_reason", "")
+        del properties["deep_causal_analysis"]
 
     # Preserve the original verb from spec.json BEFORE category inference consumes it
     original_verb = relationship.get("relationship")
@@ -1321,6 +1387,10 @@ def _relationship_properties(
     properties.pop("relationship_category", None)
     properties.pop("category_with_emoji", None)
     properties.pop("relationship_emoji", None)
+
+    # Store original verb for provenance
+    if original_verb:
+        properties["original_verb"] = str(original_verb)
 
     # Store verb: use original spec.json verb first, fall back to inference
     if "verb" not in properties:
@@ -1657,6 +1727,12 @@ def ingest_relationships(
             continue
 
         try:
+            rel_props = _relationship_properties(
+                dataset_id,
+                relationship,
+                metadata,
+                entities_by_id=entities_by_id,
+            )
             graph_connection.fetch_all(
                 f"""
                 MATCH (a:JsonEntity {{unique_id: $source_id, dataset_id: $dataset_id}}),
@@ -1669,14 +1745,25 @@ def ingest_relationships(
                     "dataset_id": dataset_id,
                     "source_id": source_unique_id,
                     "target_id": target_unique_id,
-                    "properties": _relationship_properties(
-                        dataset_id,
-                        relationship,
-                        metadata,
-                        entities_by_id=entities_by_id,
-                    ),
+                    "properties": rel_props,
                 },
             )
+            if rel_props.get("is_symmetric"):
+                graph_connection.fetch_all(
+                    f"""
+                    MATCH (a:JsonEntity {{unique_id: $target_id, dataset_id: $dataset_id}}),
+                          (b:JsonEntity {{unique_id: $source_id, dataset_id: $dataset_id}})
+                    MERGE (a)-[r:`{_escape_identifier(rel_type)}` {{dataset_id: $dataset_id}}]->(b)
+                    SET r += $properties
+                    RETURN id(r) AS relationship_id
+                    """,
+                    {
+                        "dataset_id": dataset_id,
+                        "target_id": target_unique_id,
+                        "source_id": source_unique_id,
+                        "properties": rel_props,
+                    },
+                )
             if exists:
                 summary.updated += 1
             else:
@@ -1980,6 +2067,8 @@ def _create_json_graph_indexes() -> None:
         "CREATE INDEX ON :JsonEntity(entity_category);",
         "CREATE INDEX ON :JsonEntity(type);",
         "CREATE INDEX ON :JsonEntity(pagerank_score);",
+        "CREATE INDEX ON :JsonEntity(name);",
+        "CREATE INDEX ON :JsonEntity(dataset_id);",
     ]
     try:
         with _create_json_ingestor(
@@ -2279,20 +2368,27 @@ def ingest_json_data(
 
         # Log completion with guidance if nothing was ingested
         if result.entities_ingested == 0 and result.files_processed > 0:
-            logger.warning(
-                f"Ingestion completed with {result.files_processed} file(s) processed "
-                f"but 0 entities ingested. This usually means:"
-            )
-            logger.warning(
-                "  1. The JSON files don't match the expected ingestion format "
-                "(needs 'entities' array with entity objects)"
-            )
-            logger.warning(
-                "  2. The files are documentation, configuration, or schema files rather than entity data"
-            )
-            logger.warning(
-                "  3. Check the 'entities' array is present and contains valid entity objects with 'id' and 'name' fields"
-            )
+            if result.entities_processed == 0:
+                logger.warning(
+                    f"Ingestion completed with {result.files_processed} file(s) processed "
+                    f"but 0 entities found. This usually means:"
+                )
+                logger.warning(
+                    "  1. The JSON files don't match the expected ingestion format "
+                    "(needs 'entities' array with entity objects)"
+                )
+                logger.warning(
+                    "  2. The files are documentation, configuration, or schema files rather than entity data"
+                )
+                logger.warning(
+                    "  3. Check the 'entities' array is present and contains valid entity objects with 'id' and 'name' fields"
+                )
+            else:
+                logger.info(
+                    f"Ingestion completed with {result.files_processed} file(s) processed, "
+                    f"{result.entities_processed} entities found, but 0 newly ingested. "
+                    f"All entities were skipped (already exist, incremental check, or delete operations)."
+                )
 
         logger.info(
             "Ingestion completed: "

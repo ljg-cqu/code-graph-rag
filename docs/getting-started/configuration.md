@@ -180,8 +180,8 @@ Fine-tune LLM-based concept extraction timeouts and circuit breaker behavior:
 | `CGR_CIRCUIT_BREAKER_ENABLED` | `True` | Enable circuit breaker for LLM calls |
 | `CGR_CIRCUIT_FAILURE_THRESHOLD` | `5` | Failures before opening circuit |
 | `CGR_CIRCUIT_SUCCESS_THRESHOLD` | `2` | Successes to close from half-open |
-| `CGR_CIRCUIT_TIMEOUT_SECONDS` | `60.0` | Seconds before recovery attempt |
-| `CGR_CIRCUIT_WINDOW_SIZE` | `10` | Rolling window size for failure rate |
+| `CGR_CIRCUIT_TIMEOUT_SECONDS` | `120.0` | Seconds before recovery attempt |
+| `CGR_CIRCUIT_WINDOW_SIZE` | `20` | Rolling window size for failure rate |
 
 ## Setting Up Ollama
 

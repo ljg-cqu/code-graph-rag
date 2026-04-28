@@ -22,8 +22,8 @@ class CircuitState(Enum):
 class CircuitBreakerConfig:
     failure_threshold: int = 5
     success_threshold: int = 2
-    timeout_seconds: float = 60.0
-    window_size: int = 10
+    timeout_seconds: float = 120.0
+    window_size: int = 20
 
 
 @dataclass

@@ -26,6 +26,16 @@
             }
         },
         {
+            "id": "concept_001",
+            "name": "Strategic Thinking",
+            "type": "Competency",
+            "entity_category": "ABSTRACT_CONCEPT",
+            "labels": ["Competency", "Mindset"],
+            "properties": {
+                "description": "The ability to think critically and plan for long-term outcomes."
+            }
+        },
+        {
             "id": "skill_002",
             "name": "Neo4j",
             "type": "Skill",
@@ -54,6 +64,39 @@
             "properties": {
                 "description": "Job requires Neo4j proficiency",
                 "minimum_experience_years": 2
+            }
+        },
+        {
+            "source": "skill_001",
+            "target": "skill_002",
+            "relationship": "complements",
+            "category": "COMPARATIVE",
+            "symmetric": true,
+            "inferred": true,
+            "properties": {
+                "confidence": 0.72,
+                "explanation": "Python and Neo4j are frequently used together in graph-based applications",
+                "analogy": "Like peanut butter and jelly"
+            }
+        },
+        {
+            "source": "concept_001",
+            "target": "skill_001",
+            "relationship": "enables",
+            "category": "CAUSAL",
+            "properties": {
+                "confidence": 0.85,
+                "explanation": "Strategic thinking enables effective Python development",
+                "deep_causal_analysis": {
+                    "root_cause_chain": [
+                        {"factor": "Problem Decomposition", "depth": 1, "confidence": 0.90},
+                        {"factor": "Pattern Recognition", "depth": 2, "confidence": 0.85}
+                    ],
+                    "ultimate_effects": [
+                        {"effect": "Clean Architecture", "depth": 1, "confidence": 0.88}
+                    ],
+                    "termination_reason": "max_depth_reached"
+                }
             }
         }
     ]

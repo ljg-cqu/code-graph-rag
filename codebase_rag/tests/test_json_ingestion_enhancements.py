@@ -6,14 +6,17 @@ from unittest.mock import patch
 import pytest
 
 from codebase_rag.json_ingestion import (
+    DatasetReferences,
     _entity_labels,
     _entity_properties,
     _extract_emoji_prefix,
     _infer_relationship_verb,
     _normalize_relationship_category,
     _relationship_properties,
+    ingest_relationships,
     sanitize_edge_label,
 )
+from codebase_rag.schemas import JSONRelationship
 
 
 class TestExtractEmojiPrefix:
@@ -331,6 +334,28 @@ class TestEntityProperties:
         assert props["entity_category"] == "CONCRETE_ENTITY"
         assert props["entity_emoji"] == "🧱"
 
+    def test_source_emoji_preserved(self) -> None:
+        entity = {
+            "id": "test-1",
+            "name": "Critical Thinking",
+            "type": "Cognitive Process",
+            "emoji": "🧠",
+            "properties": {},
+        }
+        props = _entity_properties("test-dataset", entity, {})
+        assert props["entity_emoji_source"] == "🧠"
+        assert props["entity_emoji"] == "💡"
+
+    def test_source_emoji_omitted_when_absent(self) -> None:
+        entity = {
+            "id": "test-1",
+            "name": "Critical Thinking",
+            "type": "Cognitive Process",
+            "properties": {},
+        }
+        props = _entity_properties("test-dataset", entity, {})
+        assert "entity_emoji_source" not in props
+
 
 class TestRelationshipProperties:
     def test_verb_inferred_when_missing(self) -> None:
@@ -432,6 +457,228 @@ class TestRelationshipProperties:
         ]
         assert any("missing 'category' field" in msg for msg in warning_messages)
 
+    def test_symmetric_stored_as_is_symmetric(self) -> None:
+        relationship = {
+            "source": "src-1",
+            "target": "tgt-1",
+            "relationship": "CAUSAL",
+            "symmetric": True,
+        }
+        props = _relationship_properties("test-dataset", relationship, {})
+        assert props["is_symmetric"] is True
+
+    def test_symmetric_false_stored(self) -> None:
+        relationship = {
+            "source": "src-1",
+            "target": "tgt-1",
+            "relationship": "CAUSAL",
+            "symmetric": False,
+        }
+        props = _relationship_properties("test-dataset", relationship, {})
+        assert props["is_symmetric"] is False
+
+    def test_inferred_stored_as_snake_case(self) -> None:
+        relationship = {
+            "source": "src-1",
+            "target": "tgt-1",
+            "relationship": "CAUSAL",
+            "inferred": True,
+        }
+        props = _relationship_properties("test-dataset", relationship, {})
+        assert props["is_inferred"] is True
+        assert "isInferred" not in props
+
+    def test_legacy_isInferred_normalized(self) -> None:
+        relationship = {
+            "source": "src-1",
+            "target": "tgt-1",
+            "relationship": "CAUSAL",
+            "isInferred": True,
+        }
+        props = _relationship_properties("test-dataset", relationship, {})
+        assert props["is_inferred"] is True
+        assert "isInferred" not in props
+
+    def test_original_verb_stored(self) -> None:
+        relationship = {
+            "source": "src-1",
+            "target": "tgt-1",
+            "relationship": "causes",
+            "category": "CAUSAL",
+        }
+        props = _relationship_properties("test-dataset", relationship, {})
+        assert props["original_verb"] == "causes"
+        assert props["verb"] == "causes"
+
+    def test_original_verb_stored_when_verb_overridden(self) -> None:
+        relationship = {
+            "source": "src-1",
+            "target": "tgt-1",
+            "relationship": "causes",
+            "category": "CAUSAL",
+            "properties": {"verb": "custom"},
+        }
+        props = _relationship_properties("test-dataset", relationship, {})
+        assert props["original_verb"] == "causes"
+        assert props["verb"] == "custom"
+
+    def test_deep_causal_analysis_flattened(self) -> None:
+        relationship = {
+            "source": "src-1",
+            "target": "tgt-1",
+            "relationship": "causes",
+            "category": "CAUSAL",
+            "properties": {
+                "deep_causal_analysis": {
+                    "root_cause_chain": [
+                        {"factor": "Evolutionary Pressure", "depth": 3, "confidence": 0.70},
+                        {"factor": "Survival Optimization", "depth": 2, "confidence": 0.80},
+                        {"factor": "Energy Efficiency", "depth": 1, "confidence": 0.85},
+                    ],
+                    "ultimate_effects": [
+                        {"effect": "Decision Errors", "depth": 1, "confidence": 0.85},
+                    ],
+                    "termination_reason": "max_depth_reached",
+                },
+            },
+        }
+        props = _relationship_properties("test-dataset", relationship, {})
+        assert "deep_causal_analysis" not in props
+        assert props["causal_depth"] == 3
+        assert props["causal_termination"] == "max_depth_reached"
+        assert "root_cause_chain" in props
+        assert "ultimate_effects" in props
+
+    def test_trust_score_for_explicit_relationship(self) -> None:
+        relationship = {
+            "source": "src-1",
+            "target": "tgt-1",
+            "relationship": "causes",
+            "inferred": False,
+            "properties": {"confidence": 0.85},
+        }
+        props = _relationship_properties("test-dataset", relationship, {})
+        assert props["is_inferred"] is False
+        assert props["trust_score"] == 0.85
+
+    def test_trust_score_for_inferred_relationship(self) -> None:
+        relationship = {
+            "source": "src-1",
+            "target": "tgt-1",
+            "relationship": "causes",
+            "inferred": True,
+            "properties": {"confidence": 0.72},
+        }
+        props = _relationship_properties("test-dataset", relationship, {})
+        assert props["is_inferred"] is True
+        assert props["trust_score"] == pytest.approx(0.576, abs=0.001)
+
+    def test_trust_score_defaults_to_one_when_no_confidence(self) -> None:
+        relationship = {
+            "source": "src-1",
+            "target": "tgt-1",
+            "relationship": "causes",
+            "inferred": False,
+        }
+        props = _relationship_properties("test-dataset", relationship, {})
+        assert props["trust_score"] == 1.0
+
+    def test_trust_score_for_inferred_without_confidence(self) -> None:
+        relationship = {
+            "source": "src-1",
+            "target": "tgt-1",
+            "relationship": "causes",
+            "inferred": True,
+        }
+        props = _relationship_properties("test-dataset", relationship, {})
+        assert props["trust_score"] == 0.8
+
+
+class TestSymmetricBidirectionalEdges:
+    def test_symmetric_relationship_creates_reverse_edge(self) -> None:
+        class _MockGraphConn:
+            def __init__(self):
+                self.calls: list[dict] = []
+
+            def fetch_all(self, query: str, params: dict):
+                self.calls.append({"query": query, "params": params})
+                if "MATCH (n:JsonEntity" in query and "LIMIT 2" in query:
+                    return [{"unique_id": f"test-dataset::{params['reference']}"}]
+                if "deleted" in query:
+                    return [{"deleted": 0}]
+                return [{"relationship_id": 1}]
+
+        graph_conn = _MockGraphConn()
+        refs = DatasetReferences(
+            ids={"System 1": "test-dataset::sys1", "System 2": "test-dataset::sys2"}
+        )
+        relationships = [
+            {
+                "source": "System 1",
+                "target": "System 2",
+                "relationship": "contrasts_with",
+                "category": "COMPARATIVE",
+                "symmetric": True,
+                "properties": {"confidence": 0.9},
+            }
+        ]
+        summary = ingest_relationships(
+            "test-dataset",
+            relationships,
+            refs,
+            {},
+            graph_connection=graph_conn,
+        )
+        assert summary.ingested == 1
+        # Two MERGE calls: one forward, one reverse
+        merge_calls = [
+            c for c in graph_conn.calls if "MERGE (a)-[r:" in c["query"]
+        ]
+        assert len(merge_calls) == 2
+        # First call is forward
+        assert merge_calls[0]["params"]["source_id"] == "test-dataset::sys1"
+        assert merge_calls[0]["params"]["target_id"] == "test-dataset::sys2"
+        # Second call is reverse (params retain original names; Cypher swaps them)
+        assert merge_calls[1]["params"]["source_id"] == "test-dataset::sys1"
+        assert merge_calls[1]["params"]["target_id"] == "test-dataset::sys2"
+
+    def test_non_symmetric_relationship_creates_single_edge(self) -> None:
+        class _MockGraphConn:
+            def __init__(self):
+                self.calls: list[dict] = []
+
+            def fetch_all(self, query: str, params: dict):
+                self.calls.append({"query": query, "params": params})
+                if "MATCH (n:JsonEntity" in query and "LIMIT 2" in query:
+                    return [{"unique_id": f"test-dataset::{params['reference']}"}]
+                return [{"relationship_id": 1}]
+
+        graph_conn = _MockGraphConn()
+        refs = DatasetReferences(
+            ids={"A": "test-dataset::a", "B": "test-dataset::b"}
+        )
+        relationships = [
+            {
+                "source": "A",
+                "target": "B",
+                "relationship": "causes",
+                "category": "CAUSAL",
+                "symmetric": False,
+            }
+        ]
+        summary = ingest_relationships(
+            "test-dataset",
+            relationships,
+            refs,
+            {},
+            graph_connection=graph_conn,
+        )
+        assert summary.ingested == 1
+        merge_calls = [
+            c for c in graph_conn.calls if "MERGE (a)-[r:" in c["query"]
+        ]
+        assert len(merge_calls) == 1
+
 
 class TestEntityLabels:
     def test_basic_labels(self) -> None:
@@ -463,3 +710,31 @@ class TestEntityLabels:
         assert "Valid" in labels
         assert "" not in labels
         assert "  " not in labels
+
+
+class TestJSONRelationshipModel:
+    def test_inferred_field_validated(self) -> None:
+        rel = JSONRelationship(
+            source="a",
+            target="b",
+            relationship="causes",
+            inferred=True,
+        )
+        assert rel.inferred is True
+
+    def test_inferred_defaults_to_none(self) -> None:
+        rel = JSONRelationship(
+            source="a",
+            target="b",
+            relationship="causes",
+        )
+        assert rel.inferred is None
+
+    def test_legacy_isInferred_ignored(self) -> None:
+        rel = JSONRelationship(
+            source="a",
+            target="b",
+            relationship="causes",
+            isInferred=True,
+        )
+        assert rel.inferred is None

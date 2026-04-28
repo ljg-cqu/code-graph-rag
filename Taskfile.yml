@@ -1,0 +1,179 @@
+version: '3'
+
+vars:
+  COMPOSE_FILE: '-f docker-compose.yaml'
+  MAX_HEALTH_WAIT: '90'
+  COMPOSE_OPTS: '--progress plain'   # Clean output without TTY progress bar collisions
+
+tasks:
+  # ── Start / Stop ─────────────────────────────────────────────────────────────
+
+  db-start:
+    desc: Start all Memgraph containers and wait for healthy
+    cmds:
+      - docker compose {{.COMPOSE_OPTS}} {{.COMPOSE_FILE}} up -d
+      - task: _wait-health
+
+  db-stop:
+    desc: Stop all Memgraph containers (preserves data volumes)
+    cmds:
+      - docker compose {{.COMPOSE_FILE}} stop -t 10 2>&1 | cat
+
+  db-restart:
+    desc: Restart all Memgraph containers
+    cmds:
+      - docker compose {{.COMPOSE_FILE}} down --remove-orphans 2>&1 | cat
+      - docker compose {{.COMPOSE_OPTS}} {{.COMPOSE_FILE}} up -d
+      - task: _wait-health
+
+  # ── Clean / Reset ─────────────────────────────────────────────────────────────
+
+  db-volumes:
+    desc: List Memgraph data volume sizes
+    cmds:
+      - 'echo "Memgraph data volumes:"'
+      - |
+        python3 -c "
+        import subprocess, json
+        result = subprocess.run(['docker', 'volume', 'ls', '--format', 'json'], capture_output=True, text=True)
+        found = False
+        for line in result.stdout.strip().split('\n'):
+            if not line:
+                continue
+            vol = json.loads(line)
+            if 'memgraph' in vol.get('Name', ''):
+                print(f'  {vol[\"Name\"]}\t{vol.get(\"Size\", \"unknown\")}')
+                found = True
+        if not found:
+            print('  (none)')
+        "
+
+  db-clean:
+    desc: Stop containers and remove all Memgraph data volumes
+    prompt: |
+      ⚠️  This permanently deletes ALL Memgraph data volumes:
+        - code-graph-rag_memgraph_code_data
+        - code-graph-rag_memgraph_doc_data
+        - code-graph-rag_memgraph_json_data
+        - code-graph-rag_memgraph_concept_data
+      Continue?
+    cmds:
+      - docker compose {{.COMPOSE_FILE}} down --volumes --remove-orphans 2>&1 | cat
+      - 'echo "Done. Run `task db-start` to begin fresh."'
+
+  db-reset:
+    desc: Full reset — stop, clear volumes, restart fresh
+    cmds:
+      - docker compose {{.COMPOSE_FILE}} down --volumes --remove-orphans 2>&1 | cat
+      - docker compose {{.COMPOSE_OPTS}} {{.COMPOSE_FILE}} up -d
+      - task: _wait-health
+
+  # ── Status / Logs ───────────────────────────────────────────────────────────
+
+  db-status:
+    desc: Show container name, status, and port bindings
+    cmds:
+      - 'printf "%-45s %-20s %s\n" "Name" "Status" "Ports"'
+      - 'printf "%s\n" "---------------------------------------------"'
+      - |
+        python3 -c "
+        import subprocess, json
+        r = subprocess.run(['docker', 'ps', '--filter', 'label=com.docker.compose.project=code-graph-rag', '-q'], capture_output=True, text=True)
+        for id in r.stdout.strip().split():
+            insp = json.loads(subprocess.run(['docker', 'inspect', id], capture_output=True, text=True).stdout)[0]
+            name = insp['Name']
+            status = insp['State']['Status']
+            ports_list = []
+            for bindings in insp['NetworkSettings']['Ports'].values():
+                if bindings:
+                    ports_list.append(bindings[0]['HostIp'] + ':' + bindings[0]['HostPort'])
+            ports = ' '.join(ports_list)
+            print(f'  {name:<43} {status:<18} {ports}')
+        "
+
+  db-health:
+    desc: Show health status of each container
+    cmds:
+      - 'printf "%-45s %-20s %s\n" "Name" "Status" "Health"'
+      - 'printf "%s\n" "---------------------------------------------"'
+      - |
+        python3 -c "
+        import subprocess, json
+        r = subprocess.run(['docker', 'ps', '--filter', 'label=com.docker.compose.project=code-graph-rag', '-q'], capture_output=True, text=True)
+        for id in r.stdout.strip().split():
+            insp = json.loads(subprocess.run(['docker', 'inspect', id], capture_output=True, text=True).stdout)[0]
+            name = insp['Name']
+            status = insp['State']['Status']
+            health = insp['State'].get('Health', {}).get('Status', '—') if 'Health' in insp['State'] else '—'
+            print(f'  {name:<43} {status:<18} {health}')
+        "
+
+  db-logs:
+    desc: Stream logs from a specific container
+    vars:
+      SERVICE: '{{.SERVICE | default "memgraph"}}'
+      LINES: '{{.LINES | default "100"}}'
+    cmds:
+      - docker compose {{.COMPOSE_FILE}} logs --tail={{.LINES}} -f {{.SERVICE}}
+
+  db-logs-all:
+    desc: Stream all container logs (prefixed by name)
+    cmds:
+      - docker compose {{.COMPOSE_FILE}} logs --tail=50 -f
+
+  # ── Internal ────────────────────────────────────────────────────────────────
+
+  _wait-health:
+    desc: Wait for all Memgraph containers to report healthy
+    cmds:
+      - |
+        set -e
+        echo "Waiting up to {{.MAX_HEALTH_WAIT}}s for containers to be healthy..."
+        failed=0
+        python3 -c "
+        import subprocess, json, time, sys
+        r = subprocess.run(['docker', 'ps', '--filter', 'label=com.docker.compose.project=code-graph-rag', '-q'], capture_output=True, text=True)
+        ids = [x for x in r.stdout.strip().split() if x]
+        deadline = time.time() + {{.MAX_HEALTH_WAIT}}
+        for id in ids:
+            insp = json.loads(subprocess.run(['docker', 'inspect', id], capture_output=True, text=True).stdout)[0]
+            name = insp['Name']
+            health = insp.get('State', {}).get('Health')
+            if health is None:
+                print(f'  {name:<45} healthy (no healthcheck)')
+                continue
+            sys.stdout.write(f'  {name:<45} ')
+            sys.stdout.flush()
+            while time.time() < deadline:
+                insp = json.loads(subprocess.run(['docker', 'inspect', id], capture_output=True, text=True).stdout)[0]
+                st = insp.get('State', {}).get('Health', {}).get('Status', '')
+                if st == 'healthy':
+                    print('healthy')
+                    break
+                elif st == 'exited':
+                    print('exited')
+                    sys.stdout.flush()
+                    sys.exit(1)
+                elif st == 'unhealthy':
+                    print('unhealthy')
+                    sys.stdout.flush()
+                    sys.exit(1)
+                time.sleep(2)
+            else:
+                print('TIMEOUT')
+                sys.stdout.flush()
+                sys.exit(1)
+        " || failed=1
+        echo ""
+        python3 -c "
+        import subprocess, json
+        r = subprocess.run(['docker', 'ps', '--filter', 'label=com.docker.compose.project=code-graph-rag', '-q'], capture_output=True, text=True)
+        for id in r.stdout.strip().split():
+            insp = json.loads(subprocess.run(['docker', 'inspect', id], capture_output=True, text=True).stdout)[0]
+            print(f'  {insp[\"Name\"]:<43} {insp[\"State\"][\"Status\"]}')
+        "
+        if [ $failed -ne 0 ]; then
+          echo ""
+          echo "ERROR: Some containers failed to become healthy within {{.MAX_HEALTH_WAIT}}s"
+          exit 1
+        fi

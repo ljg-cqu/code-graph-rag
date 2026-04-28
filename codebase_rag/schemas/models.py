@@ -118,7 +118,7 @@ class JSONRelationship(BaseModel):
     last_updated: str | None = None
     confidence: float | None = None
     explanation: str | None = None
-    isInferred: bool | None = None
+    inferred: bool | None = None
     properties: PropertyDict = Field(default_factory=dict)
 
 

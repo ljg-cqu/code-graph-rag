@@ -798,16 +798,16 @@ class AppConfig(BaseSettings):
         description="Successes required to close circuit breaker from half-open",
     )
     CGR_CIRCUIT_TIMEOUT_SECONDS: float = Field(
-        default=60.0,
+        default=120.0,
         ge=10.0,
         le=300.0,
-        description="Seconds before circuit breaker attempts recovery",
+        description="Seconds before circuit breaker attempts recovery. Increased to 120s to handle LLM rate limiting during batch ingestion.",
     )
     CGR_CIRCUIT_WINDOW_SIZE: int = Field(
-        default=10,
+        default=20,
         ge=1,
         le=50,
-        description="Rolling window size for circuit breaker failure rate",
+        description="Rolling window size for circuit breaker failure rate. Increased to 20 to absorb burst failures during batch ingestion.",
     )
 
     # Debug mode for concept extraction failures

@@ -53,6 +53,10 @@
             "items": {"type": "string"},
             "description": "Labels to apply to the graph node"
           },
+          "entity_category": {
+            "type": "string",
+            "description": "Optional explicit MECE entity category override. One of: CONCRETE_ENTITY, EVENT_PROCESS, INFORMATION_EXPRESSION, PROPERTY_ATTRIBUTE, SYSTEM_STRUCTURE, AGENT_ROLE, ABSTRACT_CONCEPT. When omitted, the category is resolved from the entity type registry."
+          },
           "properties": {
             "type": "object",
             "additionalProperties": true,
@@ -86,12 +90,24 @@
           },
           "category": {
             "type": "string",
-            "description": "Relationship category for verb inference and visualization. One of: CAUSAL, HIERARCHICAL, COMPOSITIONAL, CONTEXTUAL, ATTRIBUTIVE, SEQUENTIAL, COMPARATIVE, ANALOGICAL. Auto-inferred from relationship type if not provided."
+            "description": "Relationship category for verb inference and visualization. One of: CAUSAL, HIERARCHICAL, COMPOSITIONAL, CONTEXTUAL, ATTRIBUTIVE, SEQUENTIAL, COMPARATIVE, ANALOGICAL, RELATED_TO. Auto-inferred from the relationship verb if not provided."
+          },
+          "symmetric": {
+            "type": "boolean",
+            "description": "When true, creates a bidirectional edge in the graph"
+          },
+          "inferred": {
+            "type": "boolean",
+            "description": "When true, indicates the relationship was inferred rather than explicitly stated"
+          },
+          "explanation": {
+            "type": "string",
+            "description": "Natural language description of why the relationship exists"
           },
           "properties": {
             "type": "object",
             "additionalProperties": true,
-            "description": "Arbitrary key-value properties (e.g., confidence, explanation)"
+            "description": "Arbitrary key-value properties. Well-known fields include: confidence (float 0.0-1.0), explanation (string), analogy (string), deep_causal_analysis (object with root_cause_chain, ultimate_effects, termination_reason)"
           }
         }
       }

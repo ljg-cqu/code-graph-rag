@@ -34,6 +34,7 @@ All ingested JSON files must conform to the official ingestion schema. Entities 
       "name": "string (required, human-readable entity name)",
       "type": "string (optional, primary entity type used as a label)",
       "labels": ["string (optional, node labels e.g. ['Job', 'Company'])", "inherited from metadata.default_entity_labels if not specified"],
+      "entity_category": "string (optional, explicit MECE category override: CONCRETE_ENTITY, EVENT_PROCESS, INFORMATION_EXPRESSION, PROPERTY_ATTRIBUTE, SYSTEM_STRUCTURE, AGENT_ROLE, ABSTRACT_CONCEPT)",
       "properties": {
         "description": "string (recommended, content used for embedding generation)",
         "any_custom_property": "any (optional custom metadata fields)"
@@ -166,15 +167,105 @@ All JSON entities are automatically classified into one of 7 MECE (Mutually Excl
 | `AGENT_ROLE` | 🎭 | Entities that exercise intention | Role, Stakeholder, CI Bot |
 | `ABSTRACT_CONCEPT` | 💡 | Pure ideas or mental constructs | Mindset, Competency, AntiPattern |
 
-**Automatic Classification**: Entities are classified based on their `type` field using a 122+ entry subtype registry. If no match is found, entities default to `ABSTRACT_CONCEPT`.
+**Automatic Classification**: Entities are classified based on their `type` field using a 200-entry subtype registry. If no match is found, entities default to `ABSTRACT_CONCEPT`.
+
+**Explicit Override**: You can optionally set `entity_category` directly on any entity to bypass automatic classification:
+
+```json
+{
+  "id": "entity-001",
+  "name": "Strategic Thinking",
+  "type": "Competency",
+  "entity_category": "ABSTRACT_CONCEPT",
+  "properties": { "description": "..." }
+}
+```
 
 **Stored Properties**:
 - `entity_category` — The MECE category name (e.g., `"AGENT_ROLE"`)
 - `entity_subtype` — The specific type (e.g., `"Role"`)
 - `entity_emoji` — The category emoji (e.g., `"🎭"`)
 
-### 6. Relationship Verb Inference
-Relationships automatically receive inferred properties for precise semantic queries:
+### 6. Relationship Metadata
+
+Relationships support rich metadata for precise semantic queries and trust scoring:
+
+#### Top-Level Relationship Flags
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `symmetric` | `boolean` | When `true`, a bidirectional edge is created automatically (e.g., `contrasts_with`) |
+| `inferred` | `boolean` | When `true`, the relationship was inferred rather than explicitly stated |
+| `explanation` | `string` | Natural language description of why the relationship exists |
+
+#### Relationship Properties
+
+The `properties` object can contain arbitrary metadata plus these well-known fields:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `confidence` | `float (0.0–1.0)` | Confidence score for the relationship |
+| `explanation` | `string` | Natural language description |
+| `analogy` | `string` | Analogy explaining the relationship |
+| `deep_causal_analysis` | `object` | Nested causal analysis (see below) |
+
+#### Computed Properties (Set During Ingestion)
+
+The ingestion pipeline computes and stores these additional properties:
+
+| Property | Description |
+|----------|-------------|
+| `is_symmetric` | Boolean copy of the top-level `symmetric` flag |
+| `is_inferred` | Boolean copy of the top-level `inferred` flag |
+| `trust_score` | `confidence` for explicit relationships; `confidence * 0.8` for inferred ones |
+| `category` | Normalized relationship category (e.g., `"CAUSAL"`) |
+| `emoji` | Category emoji (e.g., `"⚡"`) |
+| `verb` | Inferred or provided relationship verb |
+
+#### Deep Causal Analysis
+
+For `CAUSAL` relationships, you can include structured causal analysis in `properties.deep_causal_analysis`:
+
+```json
+{
+  "source": "Cognitive Bias",
+  "target": "System 1",
+  "relationship": "originates_from",
+  "category": "CAUSAL",
+  "properties": {
+    "confidence": 0.85,
+    "explanation": "Cognitive biases systematically originate from...",
+    "deep_causal_analysis": {
+      "root_cause_chain": [
+        {"factor": "Evolutionary Pressure", "depth": 3, "confidence": 0.70},
+        {"factor": "Survival Optimization", "depth": 2, "confidence": 0.80},
+        {"factor": "Energy Efficiency", "depth": 1, "confidence": 0.85}
+      ],
+      "ultimate_effects": [
+        {"effect": "Decision Errors", "depth": 1, "confidence": 0.85}
+      ],
+      "termination_reason": "max_depth_reached"
+    }
+  }
+}
+```
+
+During ingestion, `deep_causal_analysis` is flattened into queryable properties:
+- `root_cause_chain` — JSON string of the root cause chain
+- `ultimate_effects` — JSON string of the ultimate effects
+- `causal_depth` — Maximum depth from the root cause chain
+- `causal_termination` — The termination reason
+
+This enables Cypher queries like:
+```cypher
+MATCH (s)-[r:CAUSAL]->(t)
+WHERE r.confidence > 0.8 AND r.causal_depth >= 2
+RETURN s.name, t.name, r.root_cause_chain, r.ultimate_effects
+```
+
+#### Relationship Verb Inference
+
+Relationships automatically receive inferred verb properties:
 
 | Category | Emoji | Default Verb | Type-Specific Examples |
 |----------|-------|--------------|------------------------|
@@ -187,11 +278,6 @@ Relationships automatically receive inferred properties for precise semantic que
 | `ATTRIBUTIVE` | 💭 | `has-property` | Framework → Property: `characterizes` |
 | `ANALOGICAL` | 🌉 | `analogous-to` | Concept → Concept: `similar-to` |
 | `RELATED_TO` | 🔗 | `related-to` | Generic fallback |
-
-**Stored Properties**:
-- `relationship_category` — The normalized category (e.g., `"CAUSAL"`)
-- `relationship_emoji` — The category emoji (e.g., `"⚡"`)
-- `verb` — The inferred or provided verb (e.g., `"enables"`)
 
 **Category Normalization**: JSON categories like `ATTRIBUTE` are automatically mapped to internal taxonomy (e.g., `ATTRIBUTIVE`).
 

@@ -282,6 +282,7 @@ def _migrate_relationship_properties(cursor: mgclient.Cursor, dry_run: bool) -> 
     - relationship_category (duplicate of category)
     - category_with_emoji (inconsistent format)
     - relationship_emoji (replaced by emoji)
+    - isInferred (legacy camelCase duplicate of is_inferred)
 
     Adds:
     - emoji (clean single emoji derived from category)
@@ -292,6 +293,7 @@ def _migrate_relationship_properties(cursor: mgclient.Cursor, dry_run: bool) -> 
         WHERE r.relationship_category IS NOT NULL
            OR r.category_with_emoji IS NOT NULL
            OR r.relationship_emoji IS NOT NULL
+           OR r.isInferred IS NOT NULL
         RETURN count(r)
     """)
     count = cursor.fetchone()[0]
@@ -309,6 +311,7 @@ def _migrate_relationship_properties(cursor: mgclient.Cursor, dry_run: bool) -> 
         WHERE r.relationship_category IS NOT NULL
            OR r.category_with_emoji IS NOT NULL
            OR r.relationship_emoji IS NOT NULL
+           OR r.isInferred IS NOT NULL
         RETURN id(r) AS rel_id, properties(r) AS props
     """)
     rows = cursor.fetchall()
@@ -343,7 +346,7 @@ def _migrate_relationship_properties(cursor: mgclient.Cursor, dry_run: bool) -> 
             MATCH ()-[r]-() WHERE id(r) = $rel_id
             SET r.category = $category
             SET r.emoji = $emoji
-            REMOVE r.relationship_category, r.category_with_emoji, r.relationship_emoji
+            REMOVE r.relationship_category, r.category_with_emoji, r.relationship_emoji, r.isInferred
         """, {"rel_id": rel_id, "category": category, "emoji": emoji})
 
     logger.info(ls.MIGRATION_PROPS_DONE.format(count=count))

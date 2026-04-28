@@ -60,6 +60,10 @@ class Entity(BaseModel):
     """
     Labels to apply to the graph node
     """
+    entity_category: str | None = None
+    """
+    Optional explicit MECE entity category override. One of: CONCRETE_ENTITY, EVENT_PROCESS, INFORMATION_EXPRESSION, PROPERTY_ATTRIBUTE, SYSTEM_STRUCTURE, AGENT_ROLE, ABSTRACT_CONCEPT. When omitted, the category is resolved from the entity type registry.
+    """
     properties: dict[str, Any] | None = None
     """
     Arbitrary key-value properties
@@ -84,11 +88,23 @@ class Relationship(BaseModel):
     """
     category: str | None = None
     """
-    Relationship category for verb inference and visualization. One of: CAUSAL, HIERARCHICAL, COMPOSITIONAL, CONTEXTUAL, ATTRIBUTIVE, SEQUENTIAL, COMPARATIVE, ANALOGICAL. Auto-inferred from relationship type if not provided.
+    Relationship category for verb inference and visualization. One of: CAUSAL, HIERARCHICAL, COMPOSITIONAL, CONTEXTUAL, ATTRIBUTIVE, SEQUENTIAL, COMPARATIVE, ANALOGICAL, RELATED_TO. Auto-inferred from the relationship verb if not provided.
+    """
+    symmetric: bool | None = None
+    """
+    When true, creates a bidirectional edge in the graph
+    """
+    inferred: bool | None = None
+    """
+    When true, indicates the relationship was inferred rather than explicitly stated
+    """
+    explanation: str | None = None
+    """
+    Natural language description of why the relationship exists
     """
     properties: dict[str, Any] | None = None
     """
-    Arbitrary key-value properties (e.g., confidence, explanation)
+    Arbitrary key-value properties. Well-known fields include: confidence (float 0.0-1.0), explanation (string), analogy (string), deep_causal_analysis (object with root_cause_chain, ultimate_effects, termination_reason)
     """
 
 

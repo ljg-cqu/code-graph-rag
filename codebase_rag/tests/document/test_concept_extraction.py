@@ -693,15 +693,11 @@ class TestAdaptiveTimeoutTuning:
                 await extractor.extract_with_retry("content", "qn2")
 
         # First chunk: 4 timeouts
-        # Second chunk: 4 timeouts
-        assert len(timeouts_passed) == 8
+        # Second chunk: 1 timeout (circuit breaker opens after 5th failure,
+        # so attempt 1 returns immediately without calling wait_for)
+        assert len(timeouts_passed) == 5
         # Second chunk attempt 0 uses normal adaptive timeout
         assert timeouts_passed[4] == pytest.approx(10.07, abs=0.01)
-        # Second chunk attempt 1 gets fast-fail (set by attempt 0's failure)
-        assert timeouts_passed[5] == pytest.approx(5.0, abs=0.1)
-        # Second chunk retries should NOT re-trigger fast-fail (monotonically increasing)
-        assert timeouts_passed[6] == pytest.approx(5.5, abs=0.1)
-        assert timeouts_passed[7] == pytest.approx(6.05, abs=0.1)
 
     @pytest.mark.asyncio
     async def test_consecutive_timeouts_reset_on_success(self):
@@ -777,8 +773,9 @@ class TestAdaptiveTimeoutTuning:
             return_value=False,
         ):
             await extractor.extract_with_retry("content", "qn")
-        # Timeout errors do not record breaker failures; probe also should not
-        assert cb.failure_count == 0
+        # Timeout errors record breaker failures (transient); probe returning
+        # False only skips retries, it does not affect breaker state
+        assert cb.failure_count == 1
 
 
 class TestRetryObservability:
