@@ -27,6 +27,7 @@ class FailureType(Enum):
     TRANSACTION_CONFLICT = auto()
     IMPORT_TARGET_MISSING = auto()  # Target module for IMPORTS relationship not in graph
     MGCLIENT_STATE_CORRUPTION = auto()  # mgclient internal state error
+    ENTERPRISE_FEATURE_REQUIRED = auto()  # Memgraph Enterprise license required
     UNKNOWN = auto()
 
 
@@ -75,6 +76,7 @@ class FailureClassification:
             "vector_dimension_mismatch": FailureType.VECTOR_DIMENSION_MISMATCH,
             "vector_index_missing": FailureType.VECTOR_INDEX_MISSING,
             "missing_procedure": FailureType.MISSING_PROCEDURE,
+            "enterprise_feature_required": FailureType.ENTERPRISE_FEATURE_REQUIRED,
         }
         failure_type = type_to_failure.get(error_type, FailureType.UNKNOWN)
         return cls(
@@ -188,6 +190,13 @@ _MGCLIENT_STATE_MARKERS = frozenset({
     "cannot close connection during execution",
 })
 
+_ENTERPRISE_FEATURE_MARKERS = frozenset({
+    "multi-tenancy",
+    "enterprise license",
+    "enterprise feature",
+    "invalid type",
+})
+
 # Known third-party packages for import classification
 _KNOWN_THIRD_PARTY = frozenset({
     "pydantic",
@@ -239,8 +248,8 @@ def is_stdlib_module(module_name: str) -> bool:
         return base_name in sys.stdlib_module_names
 
     # Fallback for older Python versions
-    import importlib.util
     import importlib.machinery
+    import importlib.util
 
     # Check if it's a built-in or frozen module
     if base_name in sys.builtin_module_names:
@@ -333,6 +342,16 @@ def classify_memgraph_failure(error: Exception) -> FailureClassification:
             message="Memgraph procedure not found (likely community edition)",
             should_retry=False,
             recovery_action="fallback_alternative",
+        )
+
+    # Check enterprise feature / license errors
+    if any(m in message for m in _ENTERPRISE_FEATURE_MARKERS):
+        return FailureClassification(
+            failure_type=FailureType.ENTERPRISE_FEATURE_REQUIRED,
+            message="Memgraph Enterprise feature required",
+            should_retry=False,
+            max_retries=0,
+            recovery_action="upgrade_to_enterprise_or_use_community_mode",
         )
 
     # Data integrity issues (don't retry)

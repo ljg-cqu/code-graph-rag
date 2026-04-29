@@ -1210,9 +1210,9 @@ def _is_semantic_override_warranted(
 ) -> bool:
     """Determine if LLM's category declaration should override registry.
 
-    Override is warranted when the verb is compound (contains _),
-    suggesting specific semantic intent that may differ from broad
-    registry defaults.
+    Override is warranted when the verb is compound (contains _ or -)
+    AND is not already in the registry, suggesting specific semantic
+    intent that may differ from broad registry defaults.
     """
     from codebase_rag.constants import DOC_CONCEPT_CATEGORIES
 
@@ -1223,7 +1223,9 @@ def _is_semantic_override_warranted(
     if declared_upper not in DOC_CONCEPT_CATEGORIES:
         return False
 
-    if "_" in verb:
+    # Compound verbs NOT in registry warrant override; established registry
+    # verbs (including hyphenated ones like "related-to") remain authoritative
+    if registry_category is None and ("_" in verb or "-" in verb):
         return True
 
     return False
@@ -1268,16 +1270,28 @@ def resolve_category(verb: str, declared_category: str | None) -> tuple[str, str
             if declared_category and declared_category.upper() in DOC_CONCEPT_CATEGORIES:
                 if _is_semantic_override_warranted(verb, declared_category, registry_category):
                     category = declared_category.upper()
-                    logger.info(
-                        f"Verb '{verb}' semantic override: "
-                        f"registry={registry_category}, LLM={declared_category}"
-                    )
+                    if verb != verb_normalized:
+                        logger.info(
+                            f"Verb '{verb}' (normalized: '{verb_normalized}') semantic override: "
+                            f"registry={registry_category}, LLM={declared_category}"
+                        )
+                    else:
+                        logger.info(
+                            f"Verb '{verb}' semantic override: "
+                            f"registry={registry_category}, LLM={declared_category}"
+                        )
                 else:
                     category = registry_category
-                    logger.warning(
-                        f"Verb '{verb}' registry override: LLM declared "
-                        f"'{declared_category}', registry says '{registry_category}'"
-                    )
+                    if verb != verb_normalized:
+                        logger.warning(
+                            f"Verb '{verb}' (normalized: '{verb_normalized}') registry override: "
+                            f"LLM declared '{declared_category}', registry says '{registry_category}'"
+                        )
+                    else:
+                        logger.warning(
+                            f"Verb '{verb}' registry override: LLM declared "
+                            f"'{declared_category}', registry says '{registry_category}'"
+                        )
             else:
                 category = registry_category
     elif declared_category and declared_category.upper() in DOC_CONCEPT_CATEGORIES:

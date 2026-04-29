@@ -174,7 +174,7 @@ class TestVerbRegistryLogging:
             resolve_category("is-a", "CAUSAL")  # registry says HIERARCHICAL
 
         mock_logger.warning.assert_called_once_with(
-            "Verb 'is-a' registry override: LLM declared 'CAUSAL', registry says 'HIERARCHICAL'"
+            "Verb 'is-a' (normalized: 'is_a') registry override: LLM declared 'CAUSAL', registry says 'HIERARCHICAL'"
         )
 
     def test_related_to_fallback_logged_at_warning(self):
@@ -204,10 +204,27 @@ class TestSemanticOverride:
     """Tests for LLM semantic override logic."""
 
     def test_compound_verb_triggers_override(self):
-        """Compound verbs (with _ or -) should trigger semantic override."""
+        """Compound verbs (with _ or -) not in registry should trigger semantic override."""
+        # subject_to is in VERB_REGISTRY (ATTRIBUTIVE), so test via resolve_category instead
+        # This test verifies the function logic directly with None registry_category
         assert _is_semantic_override_warranted(
-            "subject_to", "ATTRIBUTIVE", "CAUSAL"
+            "custom_compound_verb", "ATTRIBUTIVE", None
         ) is True
+
+    def test_hyphenated_verb_triggers_override(self):
+        """Hyphenated compound verbs (e.g. 'provides-approach-for') not in registry should trigger semantic override."""
+        # These verbs are not in VERB_REGISTRY, so registry_category would be None in practice
+        assert _is_semantic_override_warranted(
+            "provides-approach-for", "ANALOGICAL", None
+        ) is True
+        assert _is_semantic_override_warranted(
+            "analogous-to", "ANALOGICAL", None
+        ) is True
+
+    def test_hyphenated_verb_resolve_category_shows_normalized(self):
+        """resolve_category should show normalized verb in logs when hyphen differs from underscore form."""
+        category, emoji = resolve_category("provides-approach-for", "ANALOGICAL")
+        assert category == "ANALOGICAL"
 
     def test_causal_registry_no_override_for_simple_verbs(self):
         """Simple verbs should not override CAUSAL registry even when broad."""

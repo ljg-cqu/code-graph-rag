@@ -22,6 +22,7 @@ from .main import (
     _check_graph_freshness,
     _prompt_for_reindex,
     app_context,
+    connect_concept_memgraph,
     connect_doc_memgraph,
     connect_memgraph,
     export_graph_to_file,
@@ -312,6 +313,61 @@ def _resolve_exclude_settings(
     return exclude_paths, unignore_paths
 
 
+def _display_graph_availability(
+    index_code: bool,
+    index_docs: bool,
+    ingest_json: bool,
+    batch_size: int,
+) -> None:
+    """Display pre-flight availability status for graphs that will be used."""
+    from codebase_rag.json_ingestion import _create_json_ingestor
+
+    checks = []
+    if index_code:
+        checks.append(("Code Graph", settings.MEMGRAPH_PORT, connect_memgraph))
+    if index_docs:
+        checks.append(("Document Graph", settings.DOC_MEMGRAPH_PORT, connect_doc_memgraph))
+    if ingest_json:
+        checks.append(("JSON Graph", settings.JSON_MEMGRAPH_PORT, _create_json_ingestor))
+    if index_docs and settings.CONCEPT_MEMGRAPH_ENABLED:
+        checks.append(("Concept Graph", settings.CONCEPT_MEMGRAPH_PORT, connect_concept_memgraph))
+
+    if not checks:
+        return
+
+    results = []
+    for name, port, connector in checks:
+        try:
+            with connector(batch_size) as ingestor:
+                ingestor.fetch_all("RETURN 1 as health")
+                results.append((name, port, "Available", True))
+        except Exception as e:
+            error_msg = str(e).lower()
+            if any(
+                m in error_msg
+                for m in ("multi-tenancy", "enterprise license", "enterprise feature", "invalid type")
+            ):
+                status = "Unavailable (Enterprise license required)"
+            else:
+                status = f"Unavailable ({type(e).__name__})"
+            results.append((name, port, status, False))
+
+    table = Table(
+        title="Graph Availability Check",
+        show_header=True,
+        header_style=f"{cs.StyleModifier.BOLD} {cs.Color.MAGENTA}",
+    )
+    table.add_column("Graph", style=cs.Color.CYAN)
+    table.add_column("Port", style=cs.Color.YELLOW, justify="right")
+    table.add_column("Status")
+
+    for name, port, status, available in results:
+        status_style = cs.Color.GREEN if available else cs.Color.RED
+        table.add_row(name, str(port), style(status, status_style))
+
+    app_context.console.print(table)
+
+
 def _handle_indexing(
     repo_path: Path,
     index_code: bool,
@@ -387,6 +443,13 @@ def _handle_indexing(
         exclude,
         interactive_setup,
         should_prompt=effective_index_code or effective_index_docs,
+    )
+
+    _display_graph_availability(
+        index_code=effective_index_code,
+        index_docs=effective_index_docs,
+        ingest_json=ingest_json,
+        batch_size=batch_size,
     )
 
     # === Code Indexing ===

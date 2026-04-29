@@ -129,6 +129,40 @@ def _create_json_ingestor(batch_size: int) -> MemgraphIngestor:
     )
 
 
+def _get_actual_relationship_count(
+    dataset_ids: list[str],
+) -> int:
+    """Get actual relationship count from database for given dataset IDs.
+
+    Used for verification after ingestion to detect count discrepancies
+    from symmetric relationship deduplication.
+    """
+    if not dataset_ids:
+        return 0
+    try:
+        with _create_json_ingestor(
+            settings.JSON_MEMGRAPH_BATCH_SIZE
+        ) as graph_connection:
+            if len(dataset_ids) == 1:
+                query = """
+                    MATCH ()-[r]->()
+                    WHERE r.dataset_id = $dataset_id
+                    RETURN count(r) AS actual_count
+                """
+                params = {"dataset_id": dataset_ids[0]}
+            else:
+                query = """
+                    MATCH ()-[r]->()
+                    WHERE r.dataset_id IN $dataset_ids
+                    RETURN count(r) AS actual_count
+                """
+                params = {"dataset_ids": dataset_ids}
+            rows = graph_connection.fetch_all(query, params)
+            return int(rows[0].get("actual_count", 0)) if rows else 0
+    except Exception:
+        return -1  # Indicate error/unavailable
+
+
 def _canonical_entity_id(name: str) -> str:
     slug = re.sub(r"[^a-zA-Z0-9_]+", "_", name.strip().lower()).strip("_")
     return slug or "entity"
@@ -1741,6 +1775,8 @@ def ingest_relationships(
                 metadata,
                 entities_by_id=entities_by_id,
             )
+            rel_props["source_id"] = source_unique_id
+            rel_props["target_id"] = target_unique_id
             graph_connection.fetch_all(
                 f"""
                 MATCH (a:JsonEntity {{unique_id: $source_id, dataset_id: $dataset_id}}),
@@ -2375,6 +2411,20 @@ def ingest_json_data(
                     is_entity_summary=False,
                 )
 
+        # Verify relationship count against actual database state
+        # (handles symmetric relationship deduplication discrepancy)
+        actual_stored = -1
+        logged_relationships = result.relationships_ingested
+        if result.relationships_ingested > 0 and not dry_run and result.dataset_ids:
+            actual_stored = _get_actual_relationship_count(result.dataset_ids)
+            if actual_stored >= 0 and actual_stored != logged_relationships:
+                logger.warning(
+                    f"Relationship count mismatch: logged {logged_relationships}, "
+                    f"actually stored {actual_stored}. "
+                    f"Possible cause: symmetric relationship reverse edges were "
+                    f"deduplicated by MERGE or already existed in database."
+                )
+
         # Post-ingestion: create indexes and compute PageRank
         if not dry_run and result.entities_ingested > 0:
             _create_json_graph_indexes()
@@ -2405,12 +2455,16 @@ def ingest_json_data(
                     f"All entities were skipped (already exist, incremental check, or delete operations)."
                 )
 
+        rel_count_str = str(result.relationships_ingested)
+        if actual_stored >= 0 and actual_stored != result.relationships_ingested:
+            merged = result.relationships_ingested - actual_stored
+            rel_count_str = f"{result.relationships_ingested} ({actual_stored} stored) [{merged} symmetric duplicate{'s' if merged != 1 else ''} merged]"
         logger.info(
             "Ingestion completed: "
             f"{result.files_processed} files processed, "
             f"{result.files_skipped} files skipped, "
             f"{result.entities_ingested} entities ingested, "
-            f"{result.relationships_ingested} relationships ingested"
+            f"{rel_count_str} relationships ingested"
         )
         return result
     except Exception as exc:

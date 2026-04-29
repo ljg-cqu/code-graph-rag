@@ -122,6 +122,38 @@ class TestFailureClassification:
         assert classification.failure_type == FailureType.MGCLIENT_STATE_CORRUPTION
         assert classification.should_retry
 
+    def test_classifies_enterprise_license_error(self) -> None:
+        """ENTERPRISE_FEATURE_REQUIRED should match multi-tenancy license errors."""
+        error = Exception(
+            "Your license has an invalid type. To use multi-tenancy "
+            "you need to have an enterprise license."
+        )
+        classification = classify_memgraph_failure(error)
+
+        assert classification.failure_type == FailureType.ENTERPRISE_FEATURE_REQUIRED
+        assert not classification.should_retry
+        assert classification.max_retries == 0
+        assert classification.recovery_action == "upgrade_to_enterprise_or_use_community_mode"
+
+    def test_classifies_enterprise_feature_error(self) -> None:
+        """ENTERPRISE_FEATURE_REQUIRED should match generic enterprise feature errors."""
+        error = Exception("This is an enterprise feature")
+        classification = classify_memgraph_failure(error)
+
+        assert classification.failure_type == FailureType.ENTERPRISE_FEATURE_REQUIRED
+        assert not classification.should_retry
+
+
+    def test_from_error_type_enterprise_feature(self) -> None:
+        """from_error_type should map enterprise_feature_required correctly."""
+        classification = FailureClassification.from_error_type(
+            "enterprise_feature_required",
+            message="Enterprise license required",
+        )
+        assert classification.failure_type == FailureType.ENTERPRISE_FEATURE_REQUIRED
+        assert not classification.should_retry
+        assert classification.message == "Enterprise license required"
+
 
 class TestIsStdlibModule:
     """Test is_stdlib_module function."""
@@ -168,6 +200,7 @@ class TestFailureType:
             "TRANSACTION_CONFLICT",
             "IMPORT_TARGET_MISSING",
             "MGCLIENT_STATE_CORRUPTION",
+            "ENTERPRISE_FEATURE_REQUIRED",
             "UNKNOWN",
         }
         actual_types = {ft.name for ft in FailureType}

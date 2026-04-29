@@ -1,12 +1,10 @@
 """Tests for the LLM-First error guidance system."""
 
-import pytest
-
 from codebase_rag.services.error_guidance import (
+    STATIC_GUIDANCE,
     ErrorContext,
     ErrorGuidance,
     LLMErrorGuidance,
-    STATIC_GUIDANCE,
     UserExpertiseLevel,
     format_user_error,
 )
@@ -100,6 +98,15 @@ class TestStaticGuidance:
         assert "VECTOR_DIMENSION_MISMATCH" in STATIC_GUIDANCE
         guidance = STATIC_GUIDANCE["VECTOR_DIMENSION_MISMATCH"]
         assert guidance.severity == "blocking"
+
+    def test_has_enterprise_feature_required_guidance(self) -> None:
+        """Should have guidance for ENTERPRISE_FEATURE_REQUIRED."""
+        assert "ENTERPRISE_FEATURE_REQUIRED" in STATIC_GUIDANCE
+        guidance = STATIC_GUIDANCE["ENTERPRISE_FEATURE_REQUIRED"]
+        assert guidance.severity == "blocking"
+        assert guidance.should_retry is False
+        assert "enterprise" in guidance.explanation.lower()
+        assert guidance.doc_link == "https://memgraph.com/enterprise"
 
 
 class TestLLMErrorGuidance:

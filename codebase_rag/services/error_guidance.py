@@ -13,7 +13,6 @@ from __future__ import annotations
 import hashlib
 import time
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from enum import Enum, auto
 from typing import TYPE_CHECKING
 
@@ -206,6 +205,14 @@ STATIC_GUIDANCE: dict[str, ErrorGuidance] = {
         severity="warning",
         should_retry=True,
         retry_after_seconds=1,
+    ),
+    "ENTERPRISE_FEATURE_REQUIRED": ErrorGuidance(
+        summary="Enterprise License Required",
+        explanation="The document graph requires Memgraph Enterprise edition for multi-tenancy support. Your current license (Community) does not support multiple databases.",
+        suggested_fix="Upgrade to Memgraph Enterprise, or use a single Memgraph instance with label-based separation, or continue with code graph and JSON ingestion only.",
+        severity="blocking",
+        doc_link="https://memgraph.com/enterprise",
+        should_retry=False,
     ),
 }
 

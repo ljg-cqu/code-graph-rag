@@ -421,6 +421,21 @@ class TestCheckGraphAvailability:
         # Static guidance includes "Memgraph" in the error message
         assert "memgraph" in str(exc_info.value).lower()
 
+    def test_raises_on_enterprise_license_error(self) -> None:
+        """Should raise DocumentGraphUnavailableError on enterprise license failure."""
+        ingestor = MagicMock()
+        ingestor.fetch_all.side_effect = Exception(
+            "Your license has an invalid type. To use multi-tenancy "
+            "you need to have an enterprise license."
+        )
+
+        with pytest.raises(DocumentGraphUnavailableError) as exc_info:
+            _check_graph_availability(ingestor, "document")
+
+        assert exc_info.value.failure_type == FailureType.ENTERPRISE_FEATURE_REQUIRED
+        assert exc_info.value.should_retry is False
+        assert "enterprise" in str(exc_info.value).lower()
+
 
 class TestDocumentGraphUnavailableError:
     """Tests for DocumentGraphUnavailableError exception."""
