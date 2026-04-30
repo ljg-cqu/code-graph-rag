@@ -95,7 +95,7 @@ def _semantic_search_keyword_fallback(
             port=settings.MEMGRAPH_PORT,
         ) as ingestor:
             # Use LLM-extracted entities only; no keyword fallback per LLM-First spec
-            keywords = entities[:3] if entities else []
+            keywords = [kw.lower() for kw in entities[:3]] if entities else []
             if not keywords:
                 return []
 
@@ -103,9 +103,9 @@ def _semantic_search_keyword_fallback(
             MATCH (n)
             WHERE labels(n)[0] IN ['Function', 'Class', 'Method']
               AND ANY(kw IN $keywords WHERE
-                  n.name CONTAINS kw
-                  OR n.qualified_name CONTAINS kw
-                  OR n.docstring CONTAINS kw)
+                  toLower(n.name) CONTAINS kw
+                  OR toLower(n.qualified_name) CONTAINS kw
+                  OR toLower(COALESCE(n.docstring, '')) CONTAINS kw)
             RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
                    n.name AS name, labels(n)[0] AS node_type
             LIMIT $limit

@@ -53,6 +53,22 @@ class TestCircuitBreakerErrorClassification:
         assert cb.can_execute() is True
 
     @pytest.mark.asyncio
+    async def test_output_token_limit_does_not_trigger_cb(self, extractor):
+        """CONCEPT_OUTPUT_TOKEN_LIMIT should not count as circuit breaker failure."""
+        ext, cb = extractor
+        ext.agent = MockAgent(
+            Exception(
+                "Model token limit (2048) exceeded before any response was generated"
+            )
+        )
+
+        with pytest.raises(Exception, match="before any response"):
+            await ext.extract("some content", "test_chunk")
+
+        assert cb.failure_count == 0
+        assert cb.can_execute() is True
+
+    @pytest.mark.asyncio
     async def test_auth_error_does_not_trigger_cb(self, extractor):
         """CONCEPT_AUTH_ERROR should not count as circuit breaker failure."""
         ext, cb = extractor
@@ -77,15 +93,15 @@ class TestCircuitBreakerErrorClassification:
         assert cb.can_execute() is True
 
     @pytest.mark.asyncio
-    async def test_timeout_triggers_cb(self, extractor):
-        """TimeoutError should count as circuit breaker failure."""
+    async def test_timeout_does_not_trigger_cb(self, extractor):
+        """TimeoutError should NOT count as circuit breaker failure (handled by retry)."""
         ext, cb = extractor
         ext.agent = MockAgent(TimeoutError("request timed out"))
 
         with pytest.raises(TimeoutError):
             await ext.extract("content", "test_chunk")
 
-        assert cb.failure_count == 1
+        assert cb.failure_count == 0
         assert cb.can_execute() is True
 
     @pytest.mark.asyncio
@@ -114,32 +130,28 @@ class TestCircuitBreakerErrorClassification:
 
     @pytest.mark.asyncio
     async def test_mixed_errors_only_transient_count(self, extractor):
-        """Only transient errors increment failure count across multiple calls."""
+        """Only non-timeout transient errors increment failure count across multiple calls."""
         ext, cb = extractor
 
-        # 1. Context overflow - should NOT count
         ext.agent = MockAgent(Exception("context window exceeded"))
         with pytest.raises(Exception):
             await ext.extract("x" * 100000, "chunk1")
         assert cb.failure_count == 0
 
-        # 2. Timeout - should count
         ext.agent = MockAgent(TimeoutError("timeout"))
         with pytest.raises(TimeoutError):
             await ext.extract("content", "chunk2")
-        assert cb.failure_count == 1
+        assert cb.failure_count == 0
 
-        # 3. Auth error - should NOT count
         ext.agent = MockAgent(Exception("invalid api key"))
         with pytest.raises(Exception):
             await ext.extract("content", "chunk3")
-        assert cb.failure_count == 1
+        assert cb.failure_count == 0
 
-        # 4. Another timeout - should count
-        ext.agent = MockAgent(TimeoutError("timeout"))
-        with pytest.raises(TimeoutError):
+        ext.agent = MockAgent(Exception("connection reset by peer"))
+        with pytest.raises(Exception):
             await ext.extract("content", "chunk4")
-        assert cb.failure_count == 2
+        assert cb.failure_count == 1
 
     @pytest.mark.asyncio
     async def test_success_resets_cb_state(self, extractor):
@@ -147,9 +159,8 @@ class TestCircuitBreakerErrorClassification:
         ext, cb = extractor
         ext.agent = MockAgent()
 
-        # First cause a transient failure
-        ext.agent = MockAgent(TimeoutError("timeout"))
-        with pytest.raises(TimeoutError):
+        ext.agent = MockAgent(Exception("connection reset by peer"))
+        with pytest.raises(Exception):
             await ext.extract("content", "chunk1")
         assert cb.failure_count == 1
 

@@ -121,12 +121,16 @@ class BaseDocumentExtractor(ABC):
         """List of supported file extensions (e.g., ['.md', '.rst'])."""
         pass
 
-    def extract(self, file_path: Path) -> ExtractedDocument:
+    def extract(
+        self, file_path: Path, skip_validation: bool = False
+    ) -> ExtractedDocument:
         """
         Extract content from document.
 
         Args:
             file_path: Path to document file
+            skip_validation: If True, skip file existence check. Caller promises
+                content is available by other means. Use sparingly.
 
         Returns:
             ExtractedDocument with all extracted content
@@ -134,6 +138,8 @@ class BaseDocumentExtractor(ABC):
         Raises:
             ExtractionException: If extraction fails
         """
+        if skip_validation:
+            return self._extract(file_path)
         repo_root_value = self.get_config("repo_root")
         validated_path = self._validate_path(
             file_path,
@@ -143,7 +149,9 @@ class BaseDocumentExtractor(ABC):
         )
         return self._extract(validated_path)
 
-    async def extract_async(self, file_path: Path) -> ExtractedDocument:
+    async def extract_async(
+        self, file_path: Path, skip_validation: bool = False
+    ) -> ExtractedDocument:
         """
         Async extraction for large files.
 
@@ -152,10 +160,14 @@ class BaseDocumentExtractor(ABC):
 
         Args:
             file_path: Path to document file
+            skip_validation: If True, skip file existence check. Caller promises
+                content is available by other means. Use sparingly.
 
         Returns:
             ExtractedDocument with all extracted content
         """
+        if skip_validation:
+            return await self._extract_async(file_path)
         repo_root_value = self.get_config("repo_root")
         validated_path = self._validate_path(
             file_path,

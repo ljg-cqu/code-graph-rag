@@ -6,6 +6,7 @@ User MUST specify mode — no automatic guessing.
 Query Modes:
 - CODE_ONLY: Query code graph only
 - DOCUMENT_ONLY: Query document graph only
+- CONCEPT_ONLY: Query concept graph only
 - BOTH_MERGED: Query both, merge results
 - CODE_VS_DOC: Validate code against docs (doc is truth)
 - DOC_VS_CODE: Validate docs against code (code is truth)
@@ -113,6 +114,16 @@ class QueryMode(StrEnum):
     Example: "Is docs/api.md still accurate?"
     """
 
+    CONCEPT_ONLY = "concept_only"
+    """
+    Query CONCEPT graph ONLY.
+
+    Code and document graphs are NOT touched.
+
+    Use for: Concept lookups, knowledge graph traversal, entity relationships.
+    Example: "What concepts are related to Critical Thinking?"
+    """
+
 
 @dataclass
 class QueryRequest:
@@ -133,7 +144,7 @@ class QueryRequest:
 class Source:
     """Source attribution for query results."""
 
-    type: Literal["code", "document"]
+    type: Literal["code", "document", "concept"]
     path: str
     node_type: str | None = None  # Function, Class, Section, etc.
     qualified_name: str | None = None
@@ -236,12 +247,14 @@ class QueryRouter:
         code_vector: VectorBackend | None = None,
         doc_vector: VectorBackend | None = None,
         concept_graph: QueryProtocol | None = None,
+        concept_vector: VectorBackend | None = None,
     ):
         self.code_graph = code_graph
         self.doc_graph = doc_graph
         self.concept_graph = concept_graph
         self._code_vector = code_vector
         self._doc_vector = doc_vector
+        self._concept_vector = concept_vector
         self.current_mode: QueryMode = QueryMode.CODE_ONLY  # For in-chat mode switching
 
     @property
@@ -262,8 +275,18 @@ class QueryRouter:
             self._doc_vector = get_shared_backend_for_documents()
         return self._doc_vector
 
+    @property
+    def concept_vector(self) -> VectorBackend | None:
+        """Lazy initialization of concept vector backend - only when concept_graph is available."""
+        if self._concept_vector is None and self.concept_graph is not None:
+            from ..vector_backend import get_shared_backend_for_concepts
+
+            self._concept_vector = get_shared_backend_for_concepts()
+        return self._concept_vector
+
     def query(self, request: QueryRequest) -> QueryResponse:
         """Route query based on EXPLICIT mode."""
+        self.current_mode = request.mode
         if request.mode == QueryMode.CODE_ONLY:
             return self._query_code_only(request)
 
@@ -289,11 +312,15 @@ class QueryRouter:
         elif request.mode == QueryMode.DOC_VS_CODE:
             return self._validate_doc_against_code(request)
 
+        elif request.mode == QueryMode.CONCEPT_ONLY:
+            return self._query_concept_only(request)
+
         else:
             raise ValueError(f"Unknown query mode: {request.mode}")
 
     async def query_async(self, request: QueryRequest) -> QueryResponse:
         """Async version of query() for use in async contexts."""
+        self.current_mode = request.mode
         if request.mode == QueryMode.CODE_ONLY:
             return self._query_code_only(request)
 
@@ -308,6 +335,9 @@ class QueryRouter:
 
         elif request.mode == QueryMode.DOC_VS_CODE:
             return self._validate_doc_against_code(request)
+
+        elif request.mode == QueryMode.CONCEPT_ONLY:
+            return await self._query_concept_only_async(request)
 
         else:
             raise ValueError(f"Unknown query mode: {request.mode}")
@@ -651,7 +681,7 @@ class QueryRouter:
             WHERE labels(n)[0] IN ['Function', 'Class', 'Method', 'Enum', 'Type',
                                     'Union', 'Interface', 'Contract', 'Library']
               AND ANY(kw IN $keywords WHERE
-                  n.name CONTAINS kw OR n.qualified_name CONTAINS kw)
+                  toLower(n.name) CONTAINS kw OR toLower(n.qualified_name) CONTAINS kw)
             RETURN n.name as name, n.qualified_name as qualified_name,
                    n.path as file_path, n.start_line as start_line,
                    n.end_line as end_line, labels(n) as labels
@@ -659,7 +689,7 @@ class QueryRouter:
             """
             # Use LLM-extracted entities only; no keyword fallback per LLM-First spec
             keywords = (
-                request.plan.expected_entities[:3]
+                [kw.lower() for kw in request.plan.expected_entities[:3]]
                 if request.plan and request.plan.expected_entities
                 else []
             )
@@ -829,6 +859,214 @@ class QueryRouter:
     def _query_document_only(self, request: QueryRequest) -> QueryResponse:
         """Synchronous wrapper for backward compatibility."""
         return self._query_document_only_legacy(request)
+
+    def _query_concept_only(self, request: QueryRequest) -> QueryResponse:
+        """Query CONCEPT graph ONLY.
+
+        Does not touch code_graph or doc_graph.
+        """
+        if self.current_mode == QueryMode.CODE_ONLY and not request.forced:
+            logger.warning("Concept query called in CODE_ONLY mode, returning empty")
+            return QueryResponse(
+                answer="Concept queries are disabled in CODE_ONLY mode.",
+                sources=[],
+                mode=request.mode,
+                warnings=["Concept queries disabled in CODE_ONLY mode"],
+            )
+
+        if not self.concept_graph:
+            return QueryResponse(
+                answer="Concept graph is not available.",
+                sources=[],
+                mode=request.mode,
+                warnings=["Concept graph connection not configured"],
+            )
+
+        logger.info(f"Querying concept graph: {request.question}")
+
+        try:
+            return self._query_concept_keyword(request)
+        except Exception as e:
+            logger.error(f"Concept search failed: {e}")
+            return QueryResponse(
+                answer=f"Concept search failed: {e}",
+                sources=[],
+                mode=request.mode,
+                warnings=[str(e)],
+            )
+
+    async def _query_concept_only_async(self, request: QueryRequest) -> QueryResponse:
+        """Async version of _query_concept_only for use in async contexts."""
+        if self.current_mode == QueryMode.CODE_ONLY and not request.forced:
+            return QueryResponse(
+                answer="Concept queries are disabled in CODE_ONLY mode.",
+                sources=[],
+                mode=request.mode,
+                warnings=["Concept queries disabled in CODE_ONLY mode"],
+            )
+
+        if not self.concept_graph:
+            return QueryResponse(
+                answer="Concept graph is not available.",
+                sources=[],
+                mode=request.mode,
+                warnings=["Concept graph connection not configured"],
+            )
+
+        logger.info(f"Querying concept graph: {request.question}")
+
+        try:
+            return await self._query_concept_keyword_async(request)
+        except Exception as e:
+            logger.error(f"Concept search failed: {e}")
+            return QueryResponse(
+                answer=f"Concept search failed: {e}",
+                sources=[],
+                mode=request.mode,
+                warnings=[str(e)],
+            )
+
+    def _query_concept_keyword(self, request: QueryRequest) -> QueryResponse:
+        """Query concept using keyword matching."""
+        assert self.concept_graph is not None, "concept_graph must be available"
+        keywords = [w.lower() for w in request.question.split() if len(w) > 2][:3]
+        workspace = getattr(self, "workspace", "default")
+
+        cypher = (
+            self._concept_keyword_cypher()
+            if keywords
+            else self._concept_keyword_cypher_no_keywords()
+        )
+        results = self.concept_graph.fetch_all(
+            cypher,
+            {"keywords": keywords, "limit": request.top_k, "workspace": workspace},
+        )
+        return self._build_concept_response(request, results)
+
+    async def _query_concept_keyword_async(self, request: QueryRequest) -> QueryResponse:
+        """Async version of _query_concept_keyword."""
+        assert self.concept_graph is not None, "concept_graph must be available"
+        keywords = [w.lower() for w in request.question.split() if len(w) > 2][:3]
+        workspace = getattr(self, "workspace", "default")
+
+        cypher = (
+            self._concept_keyword_cypher()
+            if keywords
+            else self._concept_keyword_cypher_no_keywords()
+        )
+        results = await self.concept_graph.fetch_all_async(
+            cypher,
+            {"keywords": keywords, "limit": request.top_k, "workspace": workspace},
+        )
+        return self._build_concept_response(request, results)
+
+    @staticmethod
+    def _concept_keyword_cypher() -> str:
+        """Return Cypher query for concept keyword search with relationship traversal."""
+        cypher = """
+        MATCH (c:Concept)
+        WHERE c.workspace = $workspace
+          AND """
+        cypher += """ANY(kw IN $keywords WHERE
+                toLower(c.name) CONTAINS kw
+                OR toLower(c.entity_category) CONTAINS kw
+                OR toLower(c.entity_subtype) CONTAINS kw)"""
+        cypher += """
+        OPTIONAL MATCH (c)-[rel:RELATED_TO|IS_A|PART_OF|CAUSES|HIERARCHICAL|COMPOSITIONAL|CONTEXTUAL|ATTRIBUTIVE|COMPARATIVE|SEQUENTIAL|CAUSAL|ANALOGICAL]->(related:Concept)
+        WHERE related.workspace = $workspace
+        WITH c, collect(DISTINCT related.name) AS related_concepts
+        OPTIONAL MATCH (c)<-[m:MENTIONS]-(cr:ChunkRef)
+        WHERE cr.workspace = $workspace
+        RETURN c.name AS name,
+               c.entity_category AS entity_category,
+               c.entity_subtype AS entity_subtype,
+               c.entity_emoji AS entity_emoji,
+               c.qualified_name AS qualified_name,
+               c.definition AS definition,
+               related_concepts,
+               collect(DISTINCT cr.qualified_name) AS references
+        LIMIT $limit
+        """
+        return cypher
+
+    @staticmethod
+    def _concept_keyword_cypher_no_keywords() -> str:
+        """Return Cypher query for concept search when no keywords are extracted."""
+        cypher = """
+        MATCH (c:Concept)
+        WHERE c.workspace = $workspace
+          AND c.name IS NOT NULL
+        OPTIONAL MATCH (c)-[rel:RELATED_TO|IS_A|PART_OF|CAUSES|HIERARCHICAL|COMPOSITIONAL|CONTEXTUAL|ATTRIBUTIVE|COMPARATIVE|SEQUENTIAL|CAUSAL|ANALOGICAL]->(related:Concept)
+        WHERE related.workspace = $workspace
+        WITH c, collect(DISTINCT related.name) AS related_concepts
+        OPTIONAL MATCH (c)<-[m:MENTIONS]-(cr:ChunkRef)
+        WHERE cr.workspace = $workspace
+        RETURN c.name AS name,
+               c.entity_category AS entity_category,
+               c.entity_subtype AS entity_subtype,
+               c.entity_emoji AS entity_emoji,
+               c.qualified_name AS qualified_name,
+               c.definition AS definition,
+               related_concepts,
+               collect(DISTINCT cr.qualified_name) AS references
+        LIMIT $limit
+        """
+        return cypher
+
+    def _build_concept_response(
+        self,
+        request: QueryRequest,
+        results: list,
+    ) -> QueryResponse:
+        """Build QueryResponse from concept query results."""
+        if not results:
+            return QueryResponse(
+                answer=f"No concepts found for: {request.question}",
+                sources=[],
+                mode=request.mode,
+            )
+
+        sources: list[Source] = []
+        answer_parts: list[str] = ["**Concept Results:**\n"]
+
+        for i, row in enumerate(results, 1):
+            name = _coerce_str(row.get("name"), "unknown")
+            entity_category = _coerce_str(row.get("entity_category"), "UNKNOWN")
+            entity_subtype = _coerce_str(row.get("entity_subtype"), "")
+            entity_emoji = _coerce_str(row.get("entity_emoji"), "")
+            qualified_name = _coerce_str(row.get("qualified_name"), "")
+            definition = _coerce_str(row.get("definition"), "")
+            references = _coerce_str_list(row.get("references"), [])
+            related_concepts = _coerce_str_list(row.get("related_concepts"), [])
+
+            sources.append(
+                Source(
+                    type="concept",
+                    path="concept_graph",
+                    node_type=entity_category,
+                    qualified_name=qualified_name,
+                )
+            )
+
+            label = f"{name} [{entity_category}"
+            if entity_subtype:
+                label += f" / {entity_subtype}"
+            label += f"] {entity_emoji}"
+
+            answer_parts.append(f"\n{i}. **{label}**")
+            if definition:
+                preview = definition[:200] + "..." if len(definition) > 200 else definition
+                answer_parts.append(f"   {preview}")
+            if related_concepts:
+                answer_parts.append(f"   Related: {', '.join(related_concepts[:5])}")
+            if references:
+                answer_parts.append(f"   Sources: {', '.join(references[:3])}")
+
+        return QueryResponse(
+            answer="\n".join(answer_parts),
+            sources=sources,
+            mode=request.mode,
+        )
 
     def _query_both_merged(self, request: QueryRequest) -> QueryResponse:
         """

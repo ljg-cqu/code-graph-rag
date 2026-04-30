@@ -1681,6 +1681,7 @@ def _handle_mode_command(
 Available modes:
     /mode code_only       - Query code graph only
   /mode document_only   - Query document graph only
+  /mode concept_only    - Query concept graph only
   /mode both_merged     - Query both, merge results
   /mode code_vs_doc     - Validate code against docs
   /mode doc_vs_code     - Validate docs against code
@@ -1705,6 +1706,14 @@ Available modes:
                     code_count=code_count
                 )
             return current_mode, cs.UI_MODE_SWITCH_WARN_BOTH_EMPTY
+
+        if new_mode == QueryMode.CONCEPT_ONLY and (
+            query_router is None or query_router.concept_graph is None
+        ):
+            return current_mode, (
+                f"Mode '{new_mode.value}' requires concept graph. "
+                "Concept graph must be available."
+            )
 
         if new_mode == QueryMode.BOTH_MERGED and (code_count == 0 or doc_count == 0):
             missing = []

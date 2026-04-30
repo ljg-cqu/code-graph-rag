@@ -732,3 +732,28 @@ def test_semantic_search_returns_results_with_graph_context(
         assert "callers" in result
         assert "callees" in result
         assert "parents" in result
+
+
+def test_keyword_fallback_lowercases_entities() -> None:
+    """_semantic_search_keyword_fallback lowercases entities and uses toLower() in Cypher."""
+    from codebase_rag.tools.semantic_search import _semantic_search_keyword_fallback
+
+    mock_ingestor = MagicMock()
+    mock_ingestor.fetch_all.return_value = []
+    mock_ingestor.__enter__.return_value = mock_ingestor
+
+    with patch(
+        "codebase_rag.services.graph_service.MemgraphIngestor",
+        return_value=mock_ingestor,
+    ):
+        _semantic_search_keyword_fallback(
+            "test query", top_k=5, entities=["ResolveEntityCategory"]
+        )
+
+    call_args = mock_ingestor.fetch_all.call_args
+    params = call_args[0][1]
+    assert params["keywords"] == ["resolveentitycategory"]
+    cypher = call_args[0][0]
+    assert "toLower(n.name) CONTAINS kw" in cypher
+    assert "toLower(n.qualified_name) CONTAINS kw" in cypher
+    assert "toLower(COALESCE(n.docstring, '')) CONTAINS kw" in cypher

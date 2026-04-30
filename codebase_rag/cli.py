@@ -1005,7 +1005,7 @@ def start(
     except ValueError:
         typer.echo(
             f"ERROR: Invalid mode '{mode}'. "
-            f"Valid modes: auto, code_only, document_only, both_merged, code_vs_doc, doc_vs_code",
+            f"Valid modes: auto, code_only, document_only, concept_only, both_merged, code_vs_doc, doc_vs_code",
             err=True,
         )
         raise typer.Exit(1)

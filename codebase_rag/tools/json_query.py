@@ -63,12 +63,12 @@ def create_query_json_graph_tool() -> Tool:
                 )
 
                 if not results:
-                    return cs.MSG_SEMANTIC_NO_RESULTS.format(
+                    return cs.MSG_JSON_GRAPH_NO_RESULTS.format(
                         query=natural_language_query
                     )
 
                 lines = [
-                    f"**JSON Graph Results ({len(results)} entities):**\n"
+                    cs.MSG_JSON_GRAPH_RESULT_HEADER.format(count=len(results))
                 ]
 
                 for result in results[:top_k]:
@@ -78,13 +78,18 @@ def create_query_json_graph_tool() -> Tool:
                     display_emoji = f"{result.emoji} " if result.emoji else ""
                     score_note = ""
                     if result.vector_score > 0:
-                        score_note = f" (similarity: {result.combined_score:.2f})"
+                        score_note = cs.MSG_JSON_GRAPH_ENTITY_SIMILARITY.format(
+                            score=result.combined_score
+                        )
 
+                    desc = result.description[:120]
+                    if len(result.description) > 120:
+                        desc += "..."
                     lines.append(
                         f"- **{display_emoji}{result.name}** "
                         f"[{result.entity_category} {category_emoji}]{score_note}\n"
-                        f"  {result.description[:120]}"
-                        f"{'...' if len(result.description) > 120 else ''}"
+                        f"  {cs.MSG_JSON_GRAPH_ENTITY_ID.format(unique_id=result.unique_id)}\n"
+                        f"  {desc}"
                     )
 
                 return "\n".join(lines)

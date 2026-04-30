@@ -152,6 +152,8 @@ class IngestionResult(BaseModel):
     entities_skipped: int = 0
     entities_failed: int = 0
     relationships_processed: int = 0
+    relationships_created: int = 0
+    relationships_matched: int = 0
     relationships_ingested: int = 0
     relationships_updated: int = 0
     relationships_deleted: int = 0
@@ -159,6 +161,33 @@ class IngestionResult(BaseModel):
     relationships_failed: int = 0
     errors: list[str] = Field(default_factory=list)
     dry_run: bool = False
+
+    @property
+    def ingested(self) -> int:
+        """Legacy alias for relationships_created. Backward compatibility."""
+        return self.relationships_created
+
+    @property
+    def updated(self) -> int:
+        """Legacy alias for relationships_matched. Backward compatibility."""
+        return self.relationships_matched
+
+    @model_validator(mode="after")
+    def _sync_legacy_fields(self) -> IngestionResult:
+        if self.relationships_created != 0 and self.relationships_ingested == 0:
+            self.relationships_ingested = self.relationships_created
+        elif self.relationships_ingested != 0 and self.relationships_created == 0:
+            self.relationships_created = self.relationships_ingested
+        elif self.relationships_created != self.relationships_ingested:
+            self.relationships_ingested = self.relationships_created
+
+        if self.relationships_matched != 0 and self.relationships_updated == 0:
+            self.relationships_updated = self.relationships_matched
+        elif self.relationships_updated != 0 and self.relationships_matched == 0:
+            self.relationships_matched = self.relationships_updated
+        elif self.relationships_matched != self.relationships_updated:
+            self.relationships_updated = self.relationships_matched
+        return self
 
 
 class UpdateResult(IngestionResult):

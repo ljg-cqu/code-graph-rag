@@ -127,37 +127,43 @@ class VectorBackend(Protocol):
         ...
 
 
-def get_vector_backend(is_document: bool = False) -> VectorBackend:
+def get_vector_backend(is_document: bool = False, is_concept: bool = False) -> VectorBackend:
     """Factory function to get configured vector backend.
 
     Memgraph native vector storage is the only supported backend.
 
     Args:
-        is_document: If True, use document graph vector backend, else use code graph backend.
+        is_document: If True, use document graph vector backend.
+        is_concept: If True, use concept graph vector backend.
 
     Returns:
         VectorBackend instance (MemgraphBackend)
     """
     from .vector_store_memgraph import MemgraphBackend
 
-    configured_backend = (
-        settings.DOC_VECTOR_STORE_BACKEND if is_document else settings.VECTOR_STORE_BACKEND
-    ).strip().lower()
-    if configured_backend != "memgraph":
+    if is_concept:
+        configured_backend = settings.VECTOR_STORE_BACKEND.strip().lower()
+        backend_scope = "VECTOR_STORE_BACKEND"
+    else:
+        configured_backend = (
+            settings.DOC_VECTOR_STORE_BACKEND if is_document else settings.VECTOR_STORE_BACKEND
+        ).strip().lower()
         backend_scope = "DOC_VECTOR_STORE_BACKEND" if is_document else "VECTOR_STORE_BACKEND"
+
+    if configured_backend != "memgraph":
         raise ValueError(
             f"{backend_scope}={configured_backend!r} is not supported. Only 'memgraph' is available."
         )
 
-    logger.info(
-        f"Using Memgraph native vector backend for {'document' if is_document else 'code'}"
-    )
-    return MemgraphBackend(is_document=is_document)
+    scope_name = "concept" if is_concept else ("document" if is_document else "code")
+    logger.info(f"Using Memgraph native vector backend for {scope_name}")
+    return MemgraphBackend(is_document=is_document, is_concept=is_concept)
 
 
 # Global backend instances (lazy initialization)
 _BACKEND_INSTANCE: VectorBackend | None = None
 _DOC_BACKEND_INSTANCE: VectorBackend | None = None
+_CONCEPT_BACKEND_INSTANCE: VectorBackend | None = None
 
 
 def get_shared_backend() -> VectorBackend:
@@ -191,12 +197,30 @@ def get_shared_backend_for_documents() -> VectorBackend:
     return _DOC_BACKEND_INSTANCE
 
 
+def get_shared_backend_for_concepts() -> VectorBackend:
+    """Get shared concept backend instance.
+
+    Creates concept backend on first call, reuses on subsequent calls.
+
+    Returns:
+        Shared VectorBackend instance for concepts
+    """
+    global _CONCEPT_BACKEND_INSTANCE
+    if _CONCEPT_BACKEND_INSTANCE is None:
+        _CONCEPT_BACKEND_INSTANCE = get_vector_backend(is_concept=True)
+        _CONCEPT_BACKEND_INSTANCE.initialize()
+    return _CONCEPT_BACKEND_INSTANCE
+
+
 def close_shared_backend() -> None:
     """Close and cleanup the shared backend instance."""
-    global _BACKEND_INSTANCE, _DOC_BACKEND_INSTANCE
+    global _BACKEND_INSTANCE, _DOC_BACKEND_INSTANCE, _CONCEPT_BACKEND_INSTANCE
     if _BACKEND_INSTANCE is not None:
         _BACKEND_INSTANCE.close()
         _BACKEND_INSTANCE = None
     if _DOC_BACKEND_INSTANCE is not None:
         _DOC_BACKEND_INSTANCE.close()
         _DOC_BACKEND_INSTANCE = None
+    if _CONCEPT_BACKEND_INSTANCE is not None:
+        _CONCEPT_BACKEND_INSTANCE.close()
+        _CONCEPT_BACKEND_INSTANCE = None

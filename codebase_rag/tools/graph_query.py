@@ -34,7 +34,7 @@ def create_graph_query_tool(query_router: QueryRouter) -> Tool:
         Args:
             question: Natural language query
             mode: Override session mode (optional). Options: code_only, document_only,
-                  both_merged, code_vs_doc, doc_vs_code
+                  concept_only, both_merged, code_vs_doc, doc_vs_code
             top_k: Maximum results per graph
 
         Returns:
@@ -95,7 +95,7 @@ def create_graph_query_tool(query_router: QueryRouter) -> Tool:
             "Query code and/or document graphs based on the current mode. "
             "Use this for comprehensive questions that may span both code and documentation. "
             "Results include clear source attribution (code vs. document). "
-            "Modes: code_only, document_only, both_merged, code_vs_doc, doc_vs_code."
+            "Modes: code_only, document_only, concept_only, both_merged, code_vs_doc, doc_vs_code."
         ),
     )
 

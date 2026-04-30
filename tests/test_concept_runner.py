@@ -805,3 +805,45 @@ class TestRetryDlq:
             mock_cleanup.assert_called_once_with(["doc:chunk1"], mock_concept)
             assert stats.successful_extractions == 1
             mock_dlq.remove.assert_called_once_with(mock_error)
+
+    def test_retry_dlq_includes_output_limit_errors(self, tmp_path: Path):
+        """DLQ retry should include CONCEPT_OUTPUT_TOKEN_LIMIT errors."""
+        runner = ConceptExtractionRunner(repo_path=tmp_path)
+
+        mock_error = MagicMock()
+        mock_error.error_type = ErrorType.CONCEPT_OUTPUT_TOKEN_LIMIT
+        mock_error.chunk_qn = "doc:chunk1"
+        mock_error.chunk_content = "x" * 200
+        mock_error.path = "doc:chunk1"
+
+        mock_dlq = MagicMock()
+        mock_dlq.get_pending.return_value = [mock_error]
+        runner.dead_letter_queue = mock_dlq
+        runner.extractor = MagicMock()
+
+        mock_doc = MagicMock()
+        mock_concept = MagicMock()
+
+        with patch.object(runner, "_connect_graphs") as mock_connect, \
+             patch.object(runner, "_initialize_extractor") as mock_init, \
+             patch.object(runner, "_store_extraction_results"), \
+             patch("codebase_rag.document.concept_runner.asyncio.run") as mock_asyncio_run:
+
+            mock_connect.return_value.__enter__ = lambda self: (mock_doc, mock_concept)
+            mock_connect.return_value.__exit__ = lambda self, *args: None
+            mock_init.return_value = True
+            mock_asyncio_run.return_value = AdaptiveRetryResult(
+                success=True,
+                concepts=1,
+                relationships=0,
+                result=ExtractionResult(
+                    concepts=[ExtractedConcept(name="C", definition="d", confidence=0.9)],
+                    relationships=[],
+                ),
+            )
+
+            stats = runner.retry_dlq(force=False)
+
+            assert stats.total_chunks == 1
+            assert stats.successful_extractions == 1
+            mock_dlq.remove.assert_called_once_with(mock_error)

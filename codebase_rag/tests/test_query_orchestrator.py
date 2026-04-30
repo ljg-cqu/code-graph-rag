@@ -143,6 +143,54 @@ class TestQueryMethodOrchestrator:
             assert isinstance(result, CombinedQueryResult)
             assert result.intent == QueryIntent.FUNCTIONAL
 
+    def test_keyword_search_lowercases_entities(
+        self, orchestrator: QueryMethodOrchestrator, mock_graph: MagicMock
+    ) -> None:
+        """_execute_keyword_search lowercases expected_entities before Cypher."""
+        import asyncio
+        from unittest.mock import AsyncMock
+
+        mock_graph.fetch_all_async = AsyncMock(return_value=[])
+        plan = QueryPlan(
+            methods=[QueryMethod.KEYWORD_SEARCH],
+            reasoning="test",
+            expected_entities=["ResolveEntityCategory"],
+        )
+
+        result = asyncio.run(orchestrator._execute_keyword_search("test", 10, 0.0, plan))
+
+        assert result.method == QueryMethod.KEYWORD_SEARCH
+        call_args = mock_graph.fetch_all_async.call_args
+        params = call_args[0][1]
+        assert params["keywords"] == ["resolveentitycategory"]
+        cypher = call_args[0][0]
+        assert "toLower(n.name) CONTAINS kw" in cypher
+        assert "toLower(n.qualified_name) CONTAINS kw" in cypher
+
+    def test_graph_navigation_lowercases_entities(
+        self, orchestrator: QueryMethodOrchestrator, mock_graph: MagicMock
+    ) -> None:
+        """_execute_graph_navigation lowercases expected_entities before Cypher."""
+        import asyncio
+        from unittest.mock import AsyncMock
+
+        mock_graph.fetch_all_async = AsyncMock(return_value=[])
+        plan = QueryPlan(
+            methods=[QueryMethod.GRAPH_NAVIGATION],
+            reasoning="test",
+            expected_entities=["ResolveEntityCategory"],
+        )
+
+        result = asyncio.run(orchestrator._execute_graph_navigation("test", 10, 0.0, plan))
+
+        assert result.method == QueryMethod.GRAPH_NAVIGATION
+        call_args = mock_graph.fetch_all_async.call_args
+        params = call_args[0][1]
+        assert params["keywords"] == ["resolveentitycategory"]
+        cypher = call_args[0][0]
+        assert "toLower(n.name) CONTAINS kw" in cypher
+        assert "toLower(n.qualified_name) CONTAINS kw" in cypher
+
     def test_merge_and_rank_combines_scores(
         self, orchestrator: QueryMethodOrchestrator
     ) -> None:

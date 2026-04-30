@@ -17,6 +17,9 @@ DOC_CONCEPT_SPLIT_ATTEMPT = "Attempting split extraction for {chunk_qn}"
 DOC_CONCEPT_SPLIT_SUCCESS = "Split extraction succeeded for {chunk_qn}"
 DOC_CONCEPT_SPLIT_FAILED = "Split extraction failed for {chunk_qn}: {error}"
 DOC_CONCEPT_ADAPTIVE_RETRY = "Retrying {chunk_qn} with increased max_tokens: {max_tokens}"
+DOC_CONCEPT_OUTPUT_ADAPTIVE_RETRY = (
+    "Retrying {chunk_qn} with increased max_tokens after output limit: {max_tokens}"
+)
 DOC_CONCEPT_RETRY_SUCCESS = "Concept extraction succeeded on attempt {attempt} for {chunk_qn}"
 DOC_CONCEPT_QUOTA_EXCEEDED = "LLM quota exceeded. Reset at: {retry_after}. Stopping all retries to preserve remaining quota."
 DOC_CONCEPT_NON_RECOVERABLE = "Non-recoverable error: {error_type}"
@@ -60,12 +63,14 @@ DOC_PREFLIGHT_MISSING = "Document disappeared between scan and extraction: {path
 DOC_PRE_VERIFICATION_FILTERED = "Filtered {count} documents that no longer exist (likely temporary/generated files)"
 DOC_DLQ_CLEANUP = "Cleaned up {count} stale error files from {path}"
 DOC_DLQ_SIZE_WARNING = "DLQ has accumulated {count} errors — consider investigating root cause"
-DOC_DLQ_NO_OVERFLOW_ERRORS = "No CONCEPT_CONTEXT_OVERFLOW errors to retry"
-DOC_DLQ_RETRY_START = "Retrying {count} context-overflow chunks from DLQ"
+DOC_DLQ_NO_OVERFLOW_ERRORS = "No context-overflow or output-limit errors to retry"
+DOC_DLQ_RETRY_START = "Retrying {count} overflow chunks from DLQ"
 DOC_DLQ_NO_CONTENT = "No content available for DLQ retry: {chunk_qn}"
 DOC_DLQ_UNAVAILABLE = "No dead letter queue available for retry"
 DOC_DLQ_ADAPTIVE_FAILED = "Adaptive retry failed for {chunk_qn}: {reason}. Falling back to split retry."
+DOC_DLQ_ADAPTIVE_SUCCESS = "DLQ adaptive retry succeeded for {chunk_qn} with {tokens_used} tokens"
 DOC_DLQ_ADAPTIVE_MISSING_CONTENT = "No chunk content in DLQ entry"
+DOC_DLQ_RETRY_MISSING = "DLQ retry skipped — file no longer exists: {path}"
 DOC_CACHE_PRUNE = "Pruned stale version cache entry: {path}"
 
 # Concept runner — dual-graph connection
@@ -91,3 +96,8 @@ DOC_CONCEPT_EXTRACT_FAILED = "Concept extraction failed for {chunk_qn}: {error}"
 # Concept runner — index management
 DOC_CONCEPT_INDEX_EXISTS = "Index on :{label}({prop}) already exists"
 DOC_CONCEPT_INDEX_FAILED = "Failed to create index on :{label}({prop}): {error}"
+
+# Concept extraction — verb override suppression
+DOC_CONCEPT_VERB_OVERRIDE_SUPPRESSED = (
+    "Verb '{verb}' registry override (suppressed): LLM declared '{declared_category}', registry says '{registry_category}'"
+)

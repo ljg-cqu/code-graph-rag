@@ -372,6 +372,7 @@ UI_MODE_REQUIRES_DOCS = "[bold yellow]Mode '{mode}' requires document graph. Res
 UI_MODE_USAGE = """[bold yellow]Available modes:[/bold yellow]
   /mode code_only       - Query code graph only
   /mode document_only   - Query document graph only
+  /mode concept_only    - Query concept graph only
   /mode both_merged     - Query both, merge results
   /mode code_vs_doc     - Validate code against docs
   /mode doc_vs_code     - Validate docs against code
@@ -1819,6 +1820,17 @@ MSG_SEMANTIC_RESULT_HEADER = "Found {count} semantic matches for '{query}':\n\n"
 MSG_SEMANTIC_RESULT_FOOTER = "\n\nUse the qualified names above with other tools to get more details or source code."
 SEMANTIC_BATCH_SIZE = 100
 SEMANTIC_TYPE_UNKNOWN = "Unknown"
+
+# (H) JSON graph query constants
+MSG_JSON_GRAPH_NO_RESULTS = (
+    "No JSON graph entities found for query: '{query}'. This could mean:\n"
+    "1. No entities match this description in the ingested JSON data\n"
+    "2. JSON data has not been ingested yet\n"
+    "3. The vector index for JSON entities is not available"
+)
+MSG_JSON_GRAPH_RESULT_HEADER = "**JSON Graph Results ({count} entities):**\n"
+MSG_JSON_GRAPH_ENTITY_ID = "ID: `{unique_id}`"
+MSG_JSON_GRAPH_ENTITY_SIMILARITY = " (similarity: {score:.2f})"
 
 # (H) Document analyzer constants
 MSG_DOC_NO_CANDIDATES = "No valid text found in response candidates."

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
+import pytest
+
 from codebase_rag.document.concept_extraction import (
     _parse_quota_reset_time,
     classify_concept_extraction_error,
@@ -58,6 +60,11 @@ class TestErrorClassification:
         overlap = RECOVERABLE_ERRORS & FATAL_ERRORS
         assert len(overlap) == 0
 
+    def test_output_token_limit_recoverable(self):
+        """CONCEPT_OUTPUT_TOKEN_LIMIT should be recoverable."""
+        assert ErrorType.CONCEPT_OUTPUT_TOKEN_LIMIT in RECOVERABLE_ERRORS
+        assert ErrorType.CONCEPT_OUTPUT_TOKEN_LIMIT not in FATAL_ERRORS
+
 
 class TestExtractionError:
     """Tests for ExtractionError dataclass."""
@@ -82,6 +89,15 @@ class TestExtractionError:
             message="Path traversal detected",
         )
         assert error.recoverable is False
+
+    def test_output_token_limit_recoverable_true(self):
+        """CONCEPT_OUTPUT_TOKEN_LIMIT should have recoverable=True."""
+        error = ExtractionError(
+            path="/test/doc.pdf",
+            error_type=ErrorType.CONCEPT_OUTPUT_TOKEN_LIMIT,
+            message="Model token limit exceeded before any response was generated",
+        )
+        assert error.recoverable is True
 
     def test_to_dict(self):
         """Test serialization to dictionary."""
@@ -242,9 +258,7 @@ class TestQuotaErrorClassification:
 
     def test_generic_429_defaults_to_rate_limited(self):
         """Generic 429 should be treated as transient rate limit."""
-        exc = MockModelHTTPError(
-            status_code=429, body={"error": "Too many requests"}
-        )
+        exc = MockModelHTTPError(status_code=429, body={"error": "Too many requests"})
 
         error = classify_concept_extraction_error(exc, "test content", "test::chunk")
 
@@ -267,6 +281,74 @@ class TestQuotaErrorClassification:
     def test_error_types_in_fatal_set(self):
         """CONCEPT_QUOTA_EXCEEDED should be in FATAL_ERRORS."""
         assert ErrorType.CONCEPT_QUOTA_EXCEEDED in FATAL_ERRORS
+
+
+class TestContextOverflowErrorClassification:
+    """Test classification of context overflow vs output token limit."""
+
+    def test_context_overflow_without_response_pattern(self):
+        """Generic token error should be CONCEPT_CONTEXT_OVERFLOW (fatal)."""
+        exc = Exception("Context window exceeded: token limit reached")
+
+        error = classify_concept_extraction_error(exc, "test content", "test::chunk")
+
+        assert error.error_type == ErrorType.CONCEPT_CONTEXT_OVERFLOW
+        assert error.recoverable is False
+
+    def test_output_token_limit_with_response_pattern(self):
+        """Before-any-response pattern should be CONCEPT_OUTPUT_TOKEN_LIMIT (recoverable)."""
+        exc = Exception(
+            "Model token limit (2048) exceeded before any response was generated"
+        )
+
+        error = classify_concept_extraction_error(exc, "test content", "test::chunk")
+
+        assert error.error_type == ErrorType.CONCEPT_OUTPUT_TOKEN_LIMIT
+        assert error.recoverable is True
+
+    def test_output_token_limit_case_insensitive(self):
+        """Pattern matching should be case-insensitive."""
+        exc = Exception("MODEL TOKEN LIMIT EXCEEDED BEFORE ANY RESPONSE WAS GENERATED")
+
+        error = classify_concept_extraction_error(exc, "test content", "test::chunk")
+
+        assert error.error_type == ErrorType.CONCEPT_OUTPUT_TOKEN_LIMIT
+
+    def test_output_token_limit_with_output_token_phrasing(self):
+        """Output token limit exceeded should be CONCEPT_OUTPUT_TOKEN_LIMIT."""
+        exc = Exception("output token limit exceeded for model gpt-4")
+
+        error = classify_concept_extraction_error(exc, "test content", "test::chunk")
+
+        assert error.error_type == ErrorType.CONCEPT_OUTPUT_TOKEN_LIMIT
+        assert error.recoverable is True
+
+    def test_output_token_limit_with_maximum_output_phrasing(self):
+        """Maximum output length should be CONCEPT_OUTPUT_TOKEN_LIMIT."""
+        exc = Exception("maximum output length reached")
+
+        error = classify_concept_extraction_error(exc, "test content", "test::chunk")
+
+        assert error.error_type == ErrorType.CONCEPT_OUTPUT_TOKEN_LIMIT
+        assert error.recoverable is True
+
+    def test_output_token_limit_with_response_limit_phrasing(self):
+        """Response limit reached should be CONCEPT_OUTPUT_TOKEN_LIMIT."""
+        exc = Exception("response limit reached, try reducing output")
+
+        error = classify_concept_extraction_error(exc, "test content", "test::chunk")
+
+        assert error.error_type == ErrorType.CONCEPT_OUTPUT_TOKEN_LIMIT
+        assert error.recoverable is True
+
+    def test_context_overflow_still_fatal_without_output_pattern(self):
+        """Generic token errors without output-specific phrasing remain fatal."""
+        exc = Exception("context window exceeded: token limit reached")
+
+        error = classify_concept_extraction_error(exc, "test content", "test::chunk")
+
+        assert error.error_type == ErrorType.CONCEPT_CONTEXT_OVERFLOW
+        assert error.recoverable is False
 
 
 class TestQuotaResetTimeParsing:
@@ -359,6 +441,18 @@ class TestUserFacingMessages:
 
         assert "chunk" in message.lower() or "context" in message.lower()
 
+    def test_output_token_limit_message(self):
+        """Test output token limit user message."""
+        error = ExtractionError(
+            path="test::chunk",
+            error_type=ErrorType.CONCEPT_OUTPUT_TOKEN_LIMIT,
+            message="Model token limit exceeded before any response was generated",
+        )
+
+        message = get_user_facing_message(error)
+
+        assert "output token" in message.lower() or "limit" in message.lower()
+
     def test_fallback_message(self):
         """Test fallback message for unknown error types."""
         error = ExtractionError(
@@ -438,9 +532,7 @@ class TestDeadLetterQueueCleanup:
                 with patch(
                     "codebase_rag.document.document_updater._check_graph_availability"
                 ):
-                    with patch.object(
-                        updater, "_collect_documents", return_value=[]
-                    ):
+                    with patch.object(updater, "_collect_documents", return_value=[]):
                         with patch.object(
                             updater.dead_letter_queue,
                             "cleanup_stale_errors",
@@ -503,3 +595,190 @@ class TestBoundedDeadLetterQueue:
         dlq.enqueue(error)
         dlq.enqueue(error)
         assert dlq.size() == 1
+
+
+class TestDocumentUpdaterSkipValidation:
+    """Tests that DocumentGraphUpdater passes skip_validation=True to extractors."""
+
+    def test_process_document_passes_skip_validation(self, tmp_path):
+        """_process_document should pass skip_validation=True after pre-check."""
+        from unittest.mock import MagicMock, patch
+
+        from codebase_rag.document.document_updater import DocumentGraphUpdater
+
+        existing_file = tmp_path / "doc.md"
+        existing_file.write_text("# Test")
+
+        mock_extractor = MagicMock()
+        mock_extractor.extract.return_value = MagicMock(
+            code_references=[], sections=[], metadata={}
+        )
+
+        with (
+            patch(
+                "codebase_rag.document.document_updater.get_extractor_for_file",
+                return_value=mock_extractor,
+            ),
+            patch.object(
+                DocumentGraphUpdater, "_resolve_code_reference_names", return_value=[]
+            ),
+            patch.object(
+                DocumentGraphUpdater,
+                "_prepare_embeddings_with_fallback",
+                return_value={},
+            ),
+            patch.object(DocumentGraphUpdater, "_delete_document_nodes"),
+            patch.object(
+                DocumentGraphUpdater,
+                "_store_document",
+                return_value=({"sections": 1}, {}, "2024-01-01"),
+            ),
+            patch.object(
+                DocumentGraphUpdater, "_store_chunks_with_embeddings", return_value=0
+            ),
+        ):
+            updater = DocumentGraphUpdater("localhost", 7688, tmp_path)
+            updater.version_cache = MagicMock()
+            updater.version_tracker = MagicMock()
+            updater.version_tracker.needs_reindex.return_value = (True, None)
+            updater.chunker = MagicMock()
+            updater.chunker.chunk_document.return_value = []
+
+            result = updater._process_document(
+                existing_file, MagicMock(), concept_ingestor=MagicMock()
+            )
+
+        assert result == "indexed"
+        mock_extractor.extract.assert_called_once_with(
+            existing_file, skip_validation=True
+        )
+
+    def test_process_document_async_passes_skip_validation(self, tmp_path):
+        """_process_document_async should pass skip_validation=True after pre-check."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from codebase_rag.document.document_updater import DocumentGraphUpdater
+
+        existing_file = tmp_path / "doc.md"
+        existing_file.write_text("# Test")
+
+        mock_extractor = MagicMock()
+        mock_extractor.extract_async = AsyncMock(
+            return_value=MagicMock(code_references=[], sections=[], metadata={})
+        )
+
+        with (
+            patch(
+                "codebase_rag.document.document_updater.get_extractor_for_file",
+                return_value=mock_extractor,
+            ),
+            patch.object(
+                DocumentGraphUpdater, "_resolve_code_reference_names", return_value=[]
+            ),
+            patch.object(
+                DocumentGraphUpdater,
+                "_prepare_embeddings_with_fallback",
+                return_value={},
+            ),
+            patch.object(DocumentGraphUpdater, "_delete_document_nodes"),
+            patch.object(
+                DocumentGraphUpdater,
+                "_store_document",
+                return_value=({"sections": 1}, {}, "2024-01-01"),
+            ),
+            patch.object(
+                DocumentGraphUpdater, "_store_chunks_with_embeddings", return_value=0
+            ),
+        ):
+            updater = DocumentGraphUpdater("localhost", 7688, tmp_path)
+            updater.version_cache = MagicMock()
+            updater.version_tracker = MagicMock()
+            updater.version_tracker.needs_reindex.return_value = (True, None)
+            updater.chunker = MagicMock()
+            updater.chunker.chunk_document.return_value = []
+
+            import asyncio
+
+            result = asyncio.run(
+                updater._process_document_async(
+                    existing_file, MagicMock(), concept_ingestor=MagicMock()
+                )
+            )
+
+        assert result == "indexed"
+        mock_extractor.extract_async.assert_called_once_with(
+            existing_file, skip_validation=True
+        )
+
+
+class TestDeadLetterQueueRetryWithBackoff:
+    """Tests for DLQ retry_with_backoff behavior."""
+
+    @pytest.mark.asyncio
+    async def test_retry_skips_missing_files_gracefully(self, tmp_path):
+        """DLQ retry should remove entries for files that no longer exist."""
+        from datetime import UTC, datetime, timedelta
+        from unittest.mock import MagicMock
+
+        from codebase_rag.document.extractors.base import BaseDocumentExtractor
+
+        dlq = DeadLetterQueue(tmp_path)
+        error = ExtractionError(
+            path="/nonexistent/path/doc.pdf",
+            error_type=ErrorType.CONCEPT_CONTEXT_OVERFLOW,
+            message="Context overflow",
+            retry_after=(datetime.now(UTC) - timedelta(seconds=1)).isoformat(),
+        )
+        dlq.enqueue(error)
+
+        class MockExtractor(BaseDocumentExtractor):
+            def supported_extensions(self) -> list[str]:
+                return [".pdf"]
+
+            def _extract(self, file_path):
+                return MagicMock()
+
+            async def _extract_async(self, file_path):
+                return MagicMock()
+
+        extractor = MockExtractor()
+        results = await dlq.retry_with_backoff(extractor, max_concurrent=1)
+
+        assert results == {"/nonexistent/path/doc.pdf": True}
+        assert dlq.size() == 0
+
+    @pytest.mark.asyncio
+    async def test_retry_extracts_existing_files(self, tmp_path):
+        """DLQ retry should process entries for files that still exist."""
+        from datetime import UTC, datetime, timedelta
+        from unittest.mock import MagicMock
+
+        from codebase_rag.document.extractors.base import BaseDocumentExtractor
+
+        dlq = DeadLetterQueue(tmp_path)
+        existing_file = tmp_path / "existing.pdf"
+        existing_file.write_text("test content")
+
+        error = ExtractionError(
+            path=str(existing_file),
+            error_type=ErrorType.CONCEPT_CONTEXT_OVERFLOW,
+            message="Context overflow",
+            retry_after=(datetime.now(UTC) - timedelta(seconds=1)).isoformat(),
+        )
+        dlq.enqueue(error)
+
+        class MockExtractor(BaseDocumentExtractor):
+            def supported_extensions(self) -> list[str]:
+                return [".pdf"]
+
+            def _extract(self, file_path):
+                return MagicMock()
+
+            async def _extract_async(self, file_path):
+                return MagicMock()
+
+        extractor = MockExtractor()
+        results = await dlq.retry_with_backoff(extractor, max_concurrent=1)
+
+        assert results == {str(existing_file): True}
+        assert dlq.size() == 0

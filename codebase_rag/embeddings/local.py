@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 from typing import TYPE_CHECKING, Protocol, cast
 
@@ -10,9 +11,9 @@ from loguru import logger
 from .. import constants as cs
 from ..config import settings
 from ..exceptions import (
-    EmbeddingGenerationError,
     SEMANTIC_EXTRA_DETAIL,
     SEMANTIC_EXTRA_MODEL_LOAD,
+    EmbeddingGenerationError,
 )
 from .base import EmbeddingProvider
 
@@ -150,6 +151,9 @@ class LocalEmbeddingProvider(EmbeddingProvider):
         self._device = device
         self._model: object | None = None
         self._tokenizer: object | None = None
+        self._ssl_verify = ssl_verify
+        if not ssl_verify:
+            os.environ["HF_HUB_DISABLE_SSL_VERIFICATION"] = "1"
         # Clamp max_length for UniXcoder to its position embedding limit (512)
         if "unixcoder" in self.model_id.lower():
             self._effective_max_length = min(settings.EMBEDDING_MAX_LENGTH, 512)

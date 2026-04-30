@@ -162,3 +162,28 @@ class TestRetryWithAdaptiveTokens:
         runner.extractor.extract.assert_awaited_once()
         call_kwargs = runner.extractor.extract.call_args.kwargs
         assert "max_tokens" in call_kwargs
+
+    def test_uses_dlq_multiplier_for_output_limit(self, tmp_path) -> None:
+        runner = ConceptExtractionRunner(repo_path=tmp_path)
+        runner.extractor = MagicMock()
+        runner.extractor.extract = AsyncMock(return_value=MagicMock(
+            concepts=[MagicMock()],
+            relationships=[],
+        ))
+
+        error = ExtractionError(
+            path="test",
+            error_type=ErrorType.CONCEPT_OUTPUT_TOKEN_LIMIT,
+            message="Model token limit exceeded before any response was generated",
+            chunk_content="word " * 1000,
+        )
+
+        import asyncio
+        result = asyncio.run(runner._retry_with_adaptive_tokens(error))
+
+        assert result.success is True
+        assert result.tokens_used is not None
+        assert result.tokens_used > 0
+        runner.extractor.extract.assert_awaited_once()
+        call_kwargs = runner.extractor.extract.call_args.kwargs
+        assert "max_tokens" in call_kwargs

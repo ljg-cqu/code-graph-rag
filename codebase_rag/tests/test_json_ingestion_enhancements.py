@@ -344,7 +344,7 @@ class TestEntityProperties:
         }
         props = _entity_properties("test-dataset", entity, {})
         assert props["entity_emoji_source"] == "🧠"
-        assert props["entity_emoji"] == "💡"
+        assert props["entity_emoji"] == "⏱️"
 
     def test_source_emoji_omitted_when_absent(self) -> None:
         entity = {

@@ -275,6 +275,23 @@ class TestQueryRouter:
         assert "References:" in response.answer
         assert "proj.auth.authenticate_user" in response.answer
 
+    def test_document_only_updates_current_mode(self):
+        """Regression: explicit mode in request must update current_mode."""
+        router = QueryRouter(doc_graph=Mock(), doc_vector=Mock())
+        request = QueryRequest(
+            question="test query",
+            mode=QueryMode.DOCUMENT_ONLY,
+        )
+
+        with patch(
+            "codebase_rag.document.tools.document_search.document_semantic_search",
+            return_value=[],
+        ):
+            response = router.query(request)
+
+        assert router.current_mode == QueryMode.DOCUMENT_ONLY
+        assert "disabled" not in response.answer.lower()
+
     def test_both_merged_without_graphs(self):
         """BOTH_MERGED handles missing graphs."""
         router = QueryRouter()

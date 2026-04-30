@@ -17,7 +17,6 @@ from codebase_rag.document.concept_extraction import (
     VERB_REGISTRY,
     ConceptRelationship,
     _fuzzy_match_verb,
-    _is_semantic_override_warranted,
     resolve_category,
 )
 
@@ -131,6 +130,17 @@ class TestResolveCategory:
         assert category == "CONTEXTUAL"
         assert emoji == "🎯"
 
+    def test_hyphenated_verb_not_in_registry_learns_declared(self) -> None:
+        """Hyphenated verb not in registry uses declared category and learns it."""
+        category, emoji = resolve_category("provides-approach-for", "ANALOGICAL")
+        assert category == "ANALOGICAL"
+
+    def test_subject_to_hyphen_normalization_matches_registry(self) -> None:
+        """Hyphenated 'subject-to' normalizes to 'subject_to' in registry."""
+        category, emoji = resolve_category("subject-to", "ATTRIBUTIVE")
+        assert category == "ATTRIBUTIVE"
+        assert emoji == "💭"
+
 
 class TestVerbRegistryLogging:
     """Tests for verb registry log levels (D-2)."""
@@ -196,63 +206,6 @@ class TestVerbRegistryLogging:
     def test_hyphen_normalization_matches_underscore_registry(self):
         """Hyphenated verbs should match underscore registry keys."""
         category, emoji = resolve_category("validated-by", "CAUSAL")
-        assert category == "CAUSAL"
-        assert emoji == "⚡"
-
-
-class TestSemanticOverride:
-    """Tests for LLM semantic override logic."""
-
-    def test_compound_verb_triggers_override(self):
-        """Compound verbs (with _ or -) not in registry should trigger semantic override."""
-        # subject_to is in VERB_REGISTRY (ATTRIBUTIVE), so test via resolve_category instead
-        # This test verifies the function logic directly with None registry_category
-        assert _is_semantic_override_warranted(
-            "custom_compound_verb", "ATTRIBUTIVE", None
-        ) is True
-
-    def test_hyphenated_verb_triggers_override(self):
-        """Hyphenated compound verbs (e.g. 'provides-approach-for') not in registry should trigger semantic override."""
-        # These verbs are not in VERB_REGISTRY, so registry_category would be None in practice
-        assert _is_semantic_override_warranted(
-            "provides-approach-for", "ANALOGICAL", None
-        ) is True
-        assert _is_semantic_override_warranted(
-            "analogous-to", "ANALOGICAL", None
-        ) is True
-
-    def test_hyphenated_verb_resolve_category_shows_normalized(self):
-        """resolve_category should show normalized verb in logs when hyphen differs from underscore form."""
-        category, emoji = resolve_category("provides-approach-for", "ANALOGICAL")
-        assert category == "ANALOGICAL"
-
-    def test_causal_registry_no_override_for_simple_verbs(self):
-        """Simple verbs should not override CAUSAL registry even when broad."""
-        assert _is_semantic_override_warranted(
-            "structures", "COMPOSITIONAL", "CAUSAL"
-        ) is False
-
-    def test_simple_verb_no_override(self):
-        """Simple verbs should not override registry."""
-        assert _is_semantic_override_warranted(
-            "causes", "COMPOSITIONAL", "CAUSAL"
-        ) is False
-
-    def test_invalid_declared_no_override(self):
-        """Invalid declared category should not trigger override."""
-        assert _is_semantic_override_warranted(
-            "causes", "INVALID", "CAUSAL"
-        ) is False
-
-    def test_semantic_override_applies_in_resolve(self):
-        """resolve_category should apply semantic override for compound verbs."""
-        category, emoji = resolve_category("subject-to", "ATTRIBUTIVE")
-        assert category == "ATTRIBUTIVE"
-        assert emoji == "💭"
-
-    def test_no_override_when_registry_matches_declared(self):
-        """When registry matches declared, no override needed."""
-        category, emoji = resolve_category("causes", "CAUSAL")
         assert category == "CAUSAL"
         assert emoji == "⚡"
 

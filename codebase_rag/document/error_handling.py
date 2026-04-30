@@ -39,6 +39,7 @@ class ErrorType(StrEnum):
     CONCEPT_RATE_LIMIT = "concept_rate_limit"
     CONCEPT_AUTH_ERROR = "concept_auth_error"
     CONCEPT_CONTEXT_OVERFLOW = "concept_context_overflow"
+    CONCEPT_OUTPUT_TOKEN_LIMIT = "concept_output_token_limit"
     CONCEPT_NETWORK_ERROR = "concept_network_error"
     CONCEPT_LLM_ERROR = "concept_llm_error"
     # Quota/Rate Limit specific errors (distinguish from transient rate limits)
@@ -67,6 +68,7 @@ RECOVERABLE_ERRORS = frozenset(
         ErrorType.CONCEPT_PARSING_ERROR,
         ErrorType.CONCEPT_LLM_ERROR,
         ErrorType.CONCEPT_RATE_LIMITED,      # Transient rate limit - retry with backoff
+        ErrorType.CONCEPT_OUTPUT_TOKEN_LIMIT,
     }
 )
 
@@ -147,6 +149,7 @@ class ExtractionError:
             ErrorType.CONCEPT_PARSING_ERROR,
             ErrorType.CONCEPT_LLM_ERROR,
             ErrorType.CONCEPT_RATE_LIMITED,      # Transient rate limit - recoverable
+            ErrorType.CONCEPT_OUTPUT_TOKEN_LIMIT,
         }
         concept_fatal = {
             ErrorType.CONCEPT_AUTH_ERROR,
@@ -416,8 +419,17 @@ class DeadLetterQueue:
 
         async def retry_one(error: ExtractionError) -> tuple[str, bool]:
             async with semaphore:
+                file_path = Path(error.path)
+                if not file_path.exists():
+                    from loguru import logger
+
+                    from codebase_rag.document import logs as doc_ls
+
+                    logger.debug(doc_ls.DOC_DLQ_RETRY_MISSING.format(path=file_path))
+                    self.remove(error)
+                    return error.path, True
                 try:
-                    await extractor.extract_async(Path(error.path))
+                    await extractor.extract_async(file_path)
                     self.remove(error)
                     return error.path, True
                 except Exception:

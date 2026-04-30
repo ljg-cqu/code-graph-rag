@@ -654,7 +654,7 @@ class ConceptExtractionRunner:
         self,
         error: ExtractionError,
     ) -> AdaptiveRetryResult:
-        """Retry a context-overflow chunk with adaptive max_tokens."""
+        """Retry a context-overflow or output-limit chunk with adaptive max_tokens."""
         if not error.chunk_content:
             return AdaptiveRetryResult(
                 success=False, reason=doc_ls.DOC_DLQ_ADAPTIVE_MISSING_CONTENT
@@ -699,8 +699,9 @@ class ConceptExtractionRunner:
     def retry_dlq(self, force: bool = False) -> StandaloneExtractionStats:
         """Retry concept extraction for DLQ entries.
 
-        For CONCEPT_CONTEXT_OVERFLOW, first retries with adaptive max_tokens,
-        then falls back to splitting the chunk content into smaller sub-chunks.
+        For CONCEPT_CONTEXT_OVERFLOW and CONCEPT_OUTPUT_TOKEN_LIMIT, first retries
+        with adaptive max_tokens, then falls back to splitting the chunk content
+        into smaller sub-chunks.
 
         Args:
             force: If True, retry even if chunk already has concepts.
@@ -728,7 +729,10 @@ class ConceptExtractionRunner:
             pending = self.dead_letter_queue.get_pending(include_scheduled=True)
             overflow_errors = [
                 e for e in pending
-                if e.error_type == ErrorType.CONCEPT_CONTEXT_OVERFLOW
+                if e.error_type in (
+                    ErrorType.CONCEPT_CONTEXT_OVERFLOW,
+                    ErrorType.CONCEPT_OUTPUT_TOKEN_LIMIT,
+                )
             ]
 
             if not overflow_errors:
@@ -776,6 +780,11 @@ class ConceptExtractionRunner:
                     stats.successful_extractions += 1
                     stats.concepts_created += adaptive_result.concepts
                     stats.relationships_created += adaptive_result.relationships
+                    logger.info(
+                        doc_ls.DOC_DLQ_ADAPTIVE_SUCCESS.format(
+                            chunk_qn=chunk_qn, tokens_used=adaptive_result.tokens_used
+                        )
+                    )
                     continue
 
                 if adaptive_result.reason:

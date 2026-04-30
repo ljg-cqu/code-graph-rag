@@ -786,7 +786,7 @@ class AppConfig(BaseSettings):
         description="Enable circuit breaker for LLM concept extraction calls",
     )
     CGR_CIRCUIT_FAILURE_THRESHOLD: int = Field(
-        default=5,
+        default=12,
         ge=1,
         le=20,
         description="Failures before opening circuit breaker",
@@ -804,10 +804,10 @@ class AppConfig(BaseSettings):
         description="Seconds before circuit breaker attempts recovery. Increased to 120s to handle LLM rate limiting during batch ingestion.",
     )
     CGR_CIRCUIT_WINDOW_SIZE: int = Field(
-        default=20,
+        default=40,
         ge=1,
         le=50,
-        description="Rolling window size for circuit breaker failure rate. Increased to 20 to absorb burst failures during batch ingestion.",
+        description="Rolling window size for circuit breaker failure rate. Increased to 40 to absorb burst failures during batch ingestion.",
     )
 
     # Debug mode for concept extraction failures
@@ -891,6 +891,10 @@ class AppConfig(BaseSettings):
     JSON_VECTOR_SEARCH_TOP_K: int = 5
     # JSON ingestion parallel worker count (round-robin connection pool)
     JSON_PARALLEL_WORKERS: int = 10
+    JSON_INGESTION_VERIFY: bool = Field(
+        default=False,
+        description="Run verification after JSON ingestion to detect incomplete entity indexing",
+    )
 
     # ─────────────────────────────────────────────────────────
     # CONCEPT GRAPH (NEW — 4th Memgraph instance)

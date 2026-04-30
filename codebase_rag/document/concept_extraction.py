@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, NamedTuple, Protocol
 
 from pydantic import BaseModel, Field
 
-from codebase_rag.document.error_handling import FATAL_ERRORS
+from codebase_rag.document.error_handling import FATAL_ERRORS, ErrorType
 from codebase_rag.utils.token_utils import count_tokens
 
 if TYPE_CHECKING:
@@ -336,7 +336,7 @@ first 6 categories before using it. This mirrors RELATED_TO in the relationship 
 Examples by domain:
 - "Critical Thinking" → EVENT_PROCESS (cognitive activity unfolding over time)
 - "Intellectual Humility" → PROPERTY_ATTRIBUTE (characteristic of a person)
-- "Educational Framework" → ABSTRACT_CONCEPT (pedagogical framework schema)
+- "Educational Framework" → SYSTEM_STRUCTURE (pedagogical framework schema)
 - "Case Studies" → INFORMATION_EXPRESSION (representation of knowledge)
 - "Active Learning Methods" → EVENT_PROCESS (teaching activity over time)
 - "Cognitive Bias" → PROPERTY_ATTRIBUTE (characteristic of thinking)
@@ -563,7 +563,9 @@ Rules:
             # D-8: Relationship category diversity check + rebalancing
             if result.output.relationships:
                 is_skewed = _check_relationship_diversity(
-                    result.output.relationships, chunk_qn
+                    result.output.relationships,
+                    chunk_qn,
+                    min_count_for_check=4,
                 )
                 if is_skewed:
                     result.output.was_rebalanced = True
@@ -609,12 +611,10 @@ Rules:
                 self._circuit_breaker.record_success()
             return result.output
         except TimeoutError:
-            if self._circuit_breaker is not None:
-                self._circuit_breaker.record_failure()
             raise
         except Exception as e:
             error = classify_concept_extraction_error(e, chunk_content, chunk_qn)
-            if error.error_type not in FATAL_ERRORS:
+            if error.error_type not in FATAL_ERRORS and error.error_type != ErrorType.CONCEPT_OUTPUT_TOKEN_LIMIT:
                 if self._circuit_breaker is not None:
                     self._circuit_breaker.record_failure()
             raise
@@ -656,7 +656,7 @@ Rules:
         # Proactive split: avoid initial failure for predictable overflow cases
         estimated_tokens = estimate_input_tokens(chunk_content)
         input_limit = settings.DOC_CONCEPT_INPUT_TOKEN_LIMIT
-        if estimated_tokens > input_limit:
+        if estimated_tokens > input_limit or _should_proactive_split(chunk_content):
             logger.info(
                 doc_ls.DOC_CONCEPT_PROACTIVE_SPLIT.format(
                     chunk_qn=chunk_qn, tokens=estimated_tokens, limit=input_limit
@@ -695,7 +695,10 @@ Rules:
                 error.retry_count = attempt
                 last_error = error
 
-                if error.error_type == ErrorType.CONCEPT_CONTEXT_OVERFLOW:
+                if error.error_type in (
+                    ErrorType.CONCEPT_CONTEXT_OVERFLOW,
+                    ErrorType.CONCEPT_OUTPUT_TOKEN_LIMIT,
+                ):
                     logger.info(doc_ls.DOC_CONCEPT_SPLIT_ATTEMPT.format(chunk_qn=chunk_qn))
                     try:
                         split_result = await self._extract_with_splitting(
@@ -711,15 +714,26 @@ Rules:
                             )
                         )
 
-                    model_max = settings.DOC_CONCEPT_MAX_OUTPUT_TOKENS
-                    if current_max_tokens < model_max and attempt < max_retries:
-                        current_max_tokens = min(current_max_tokens * 2, model_max)
-                        logger.info(
-                            doc_ls.DOC_CONCEPT_ADAPTIVE_RETRY.format(
-                                chunk_qn=chunk_qn, max_tokens=current_max_tokens
+                    if error.error_type == ErrorType.CONCEPT_CONTEXT_OVERFLOW:
+                        model_max = settings.DOC_CONCEPT_MAX_OUTPUT_TOKENS
+                        if current_max_tokens < model_max and attempt < max_retries:
+                            current_max_tokens = min(current_max_tokens * 2, model_max)
+                            logger.info(
+                                doc_ls.DOC_CONCEPT_ADAPTIVE_RETRY.format(
+                                    chunk_qn=chunk_qn, max_tokens=current_max_tokens
+                                )
                             )
-                        )
-                        continue
+                            continue
+                    else:
+                        model_max = settings.DOC_CONCEPT_MAX_OUTPUT_TOKENS
+                        if current_max_tokens < model_max and attempt < max_retries:
+                            current_max_tokens = min(current_max_tokens * 2, model_max)
+                            logger.info(
+                                doc_ls.DOC_CONCEPT_OUTPUT_ADAPTIVE_RETRY.format(
+                                    chunk_qn=chunk_qn, max_tokens=current_max_tokens
+                                )
+                            )
+                            continue
 
                 if error.error_type == ErrorType.CONCEPT_QUOTA_EXCEEDED:
                     logger.error(
@@ -1122,6 +1136,8 @@ VERB_REGISTRY: dict[str, str] = {
     "abstracts": "ANALOGICAL",
 }
 
+_logged_verb_warnings: set[tuple[str, str, str]] = set()
+
 
 def _fuzzy_match_verb(verb: str, cutoff: float = 0.8) -> str | None:
     """Fuzzy match a verb against VERB_REGISTRY keys as a last resort.
@@ -1203,31 +1219,40 @@ def _verb_in_registry(verb: str) -> bool:
     return v in VERB_REGISTRY or v.replace("-", "_") in VERB_REGISTRY
 
 
-def _is_semantic_override_warranted(
+def _should_log_verb_warning(
     verb: str,
     declared_category: str,
     registry_category: str,
 ) -> bool:
-    """Determine if LLM's category declaration should override registry.
+    """Return True if this exact conflict hasn't been logged yet this session.
 
-    Override is warranted when the verb is compound (contains _ or -)
-    AND is not already in the registry, suggesting specific semantic
-    intent that may differ from broad registry defaults.
+    De-duplicates warnings for recurring verb+declared+registry conflicts
+    to reduce log noise. The key includes the verb, the LLM-declared
+    category, and the registry category so that different conflicts for
+    the same verb are still logged.
     """
-    from codebase_rag.constants import DOC_CONCEPT_CATEGORIES
-
-    if not declared_category:
+    key = (verb.lower().strip(), declared_category.upper().strip(), registry_category.upper().strip())
+    if key in _logged_verb_warnings:
         return False
+    _logged_verb_warnings.add(key)
+    return True
 
-    declared_upper = declared_category.upper()
-    if declared_upper not in DOC_CONCEPT_CATEGORIES:
-        return False
 
-    # Compound verbs NOT in registry warrant override; established registry
-    # verbs (including hyphenated ones like "related-to") remain authoritative
-    if registry_category is None and ("_" in verb or "-" in verb):
+def _should_proactive_split(chunk_content: str) -> bool:
+    """Check if chunk has known structural patterns that cause timeouts.
+
+    These patterns are orthogonal to token count and catch cases where
+    dense structural content (long lines, tables) makes extraction slow
+    even when the token total is under the input limit.
+
+    Very long individual lines (tables, dense data) and extremely dense
+    content with heavy punctuation are the main signals.
+    """
+    max_line_len = max((len(line) for line in chunk_content.split("\n")), default=0)
+    if max_line_len > 2000:
         return True
-
+    if len(chunk_content) > 15000 and chunk_content.count(",") > 50:
+        return True
     return False
 
 
@@ -1254,6 +1279,7 @@ def resolve_category(verb: str, declared_category: str | None) -> tuple[str, str
     from loguru import logger
 
     from codebase_rag.constants import CATEGORY_EMOJI_MAP, DOC_CONCEPT_CATEGORIES
+    from codebase_rag.document import logs as doc_ls
 
     verb_lower = verb.lower().strip()
     verb_normalized = verb_lower.replace("-", "_")
@@ -1266,34 +1292,29 @@ def resolve_category(verb: str, declared_category: str | None) -> tuple[str, str
     elif registry_category is not None:
         if declared_category and registry_category == declared_category.upper():
             category = declared_category.upper()
-        else:
-            if declared_category and declared_category.upper() in DOC_CONCEPT_CATEGORIES:
-                if _is_semantic_override_warranted(verb, declared_category, registry_category):
-                    category = declared_category.upper()
-                    if verb != verb_normalized:
-                        logger.info(
-                            f"Verb '{verb}' (normalized: '{verb_normalized}') semantic override: "
-                            f"registry={registry_category}, LLM={declared_category}"
-                        )
-                    else:
-                        logger.info(
-                            f"Verb '{verb}' semantic override: "
-                            f"registry={registry_category}, LLM={declared_category}"
-                        )
+        elif declared_category and declared_category.upper() in DOC_CONCEPT_CATEGORIES:
+            category = registry_category
+            if _should_log_verb_warning(verb, declared_category, registry_category):
+                if verb != verb_normalized:
+                    logger.warning(
+                        f"Verb '{verb}' (normalized: '{verb_normalized}') registry override: "
+                        f"LLM declared '{declared_category}', registry says '{registry_category}'"
+                    )
                 else:
-                    category = registry_category
-                    if verb != verb_normalized:
-                        logger.warning(
-                            f"Verb '{verb}' (normalized: '{verb_normalized}') registry override: "
-                            f"LLM declared '{declared_category}', registry says '{registry_category}'"
-                        )
-                    else:
-                        logger.warning(
-                            f"Verb '{verb}' registry override: LLM declared "
-                            f"'{declared_category}', registry says '{registry_category}'"
-                        )
+                    logger.warning(
+                        f"Verb '{verb}' registry override: LLM declared "
+                        f"'{declared_category}', registry says '{registry_category}'"
+                    )
             else:
-                category = registry_category
+                logger.debug(
+                    doc_ls.DOC_CONCEPT_VERB_OVERRIDE_SUPPRESSED.format(
+                        verb=verb,
+                        declared_category=declared_category,
+                        registry_category=registry_category,
+                    )
+                )
+        else:
+            category = registry_category
     elif declared_category and declared_category.upper() in DOC_CONCEPT_CATEGORIES:
         category = declared_category.upper()
         _learn_verb(verb_normalized, category)
@@ -1473,12 +1494,13 @@ ENTITY_SUBTYPE_REGISTRY: dict[str, str] = {
     "Brand": "ABSTRACT_CONCEPT",
     "Moat": "ABSTRACT_CONCEPT",
 
-    # 📏 Property/Attribute — Pedagogical & Cognitive (15)
+    # 📏 Property/Attribute — Pedagogical & Cognitive (16)
     "Cognitive Capacity": "PROPERTY_ATTRIBUTE",
     "Cognitive Condition": "PROPERTY_ATTRIBUTE",
     "Cognitive Constraint": "PROPERTY_ATTRIBUTE",
     "Cognitive Limitation": "PROPERTY_ATTRIBUTE",
     "Cognitive Phenomenon": "EVENT_PROCESS",
+    "Cognitive Skill": "PROPERTY_ATTRIBUTE",
     "Cognitive State": "PROPERTY_ATTRIBUTE",
     "Cognitive Trait": "PROPERTY_ATTRIBUTE",
     "Character Traits": "PROPERTY_ATTRIBUTE",
@@ -1490,24 +1512,22 @@ ENTITY_SUBTYPE_REGISTRY: dict[str, str] = {
     "Quality Benchmark": "PROPERTY_ATTRIBUTE",
     "Quantitative Threshold": "PROPERTY_ATTRIBUTE",
 
-    # 🏗️ System/Structure — Pedagogical & Cognitive (9)
+    # 🏗️ System/Structure — Pedagogical & Cognitive (15)
     "AI System": "SYSTEM_STRUCTURE",
     "Cognitive Architecture": "SYSTEM_STRUCTURE",
     "Cognitive Framework": "SYSTEM_STRUCTURE",
     "Cognitive Model": "SYSTEM_STRUCTURE",
     "Cognitive Subsystem": "SYSTEM_STRUCTURE",
     "Cognitive System": "SYSTEM_STRUCTURE",
+    "Conceptual Framework": "SYSTEM_STRUCTURE",
+    "Decision Framework": "SYSTEM_STRUCTURE",
+    "Educational Framework": "SYSTEM_STRUCTURE",
     "Educational Organization": "SYSTEM_STRUCTURE",
     "Methodology Framework": "SYSTEM_STRUCTURE",
     "Pedagogical Framework": "SYSTEM_STRUCTURE",
+    "Research Framework": "SYSTEM_STRUCTURE",
     "Research Institution": "SYSTEM_STRUCTURE",
     "Technological Influence": "SYSTEM_STRUCTURE",
-
-    # 💡 Abstract Concept — Frameworks (4)
-    "Conceptual Framework": "ABSTRACT_CONCEPT",
-    "Decision Framework": "ABSTRACT_CONCEPT",
-    "Educational Framework": "ABSTRACT_CONCEPT",
-    "Research Framework": "ABSTRACT_CONCEPT",
 
     # 🏗️ System/Structure — Cognitive (1)
     "Cognitive Mechanism": "SYSTEM_STRUCTURE",
@@ -1516,13 +1536,12 @@ ENTITY_SUBTYPE_REGISTRY: dict[str, str] = {
     "Framework Component": "SYSTEM_STRUCTURE",
     "Technology Tool": "SYSTEM_STRUCTURE",
 
-    # ⏱️ Event/Process — Pedagogical & Cognitive (15)
+    # ⏱️ Event/Process — Pedagogical & Cognitive (13)
     "AI Practice": "EVENT_PROCESS",
     "Analytical Process": "EVENT_PROCESS",
     "Behavioral Phenomenon": "EVENT_PROCESS",
     "Cognitive Activity": "EVENT_PROCESS",
-    "Cognitive Process": "ABSTRACT_CONCEPT",
-    "Cognitive Skill": "ABSTRACT_CONCEPT",
+    "Cognitive Process": "EVENT_PROCESS",
     "Cognitive Strategy": "EVENT_PROCESS",
     "Decision Process": "EVENT_PROCESS",
     "Educational Outcome": "EVENT_PROCESS",
@@ -1773,8 +1792,12 @@ def _check_relationship_diversity(
     relationships: list[ConceptRelationship],
     chunk_qn: str,
     causal_threshold: float = 0.60,
+    min_count_for_check: int = 4,
 ) -> bool:
     """Warn if relationship categories are overly skewed toward CAUSAL.
+
+    Only checks skew when there are at least min_count_for_check relationships,
+    as small samples have statistically meaningless skew.
 
     D-8 guardrail: CAUSAL dominance indicates prompt bias or lazy LLM
     categorization. Logs at WARNING level when skew exceeds threshold.
@@ -1787,6 +1810,8 @@ def _check_relationship_diversity(
     if not relationships:
         return False
     total = len(relationships)
+    if total < min_count_for_check:
+        return False
     counts = Counter(r.category for r in relationships)
     max_count = max(counts.values())
     max_ratio = max_count / total
@@ -1870,7 +1895,6 @@ def classify_concept_extraction_error(
 
     # Classification priority: specific to general
 
-    # 1. Quota Exceeded (HTTP 429 with AccountQuotaExceeded, or quota in message)
     if status_code == 429 or "429" in exc_message:
         if error_code == "AccountQuotaExceeded" or "quota" in exc_message_lower:
             error_type = ErrorType.CONCEPT_QUOTA_EXCEEDED
@@ -1890,29 +1914,35 @@ def classify_concept_extraction_error(
         is_recoverable = False
         retry_after = reset_time
 
-    # 2. Timeout errors
     elif isinstance(exc, asyncio.TimeoutError):
         error_type = ErrorType.CONCEPT_TIMEOUT
 
-    # 3. Authentication errors
     elif "auth" in exc_message_lower or "api key" in exc_message_lower:
         error_type = ErrorType.CONCEPT_AUTH_ERROR
         is_recoverable = False
 
-    # 4. Context/token overflow
-    elif "context" in exc_message_lower or "token" in exc_message_lower:
-        error_type = ErrorType.CONCEPT_CONTEXT_OVERFLOW
-        is_recoverable = False
+    elif (
+        "output token" in exc_message_lower
+        or "maximum output" in exc_message_lower
+        or "response limit" in exc_message_lower
+    ):
+        error_type = ErrorType.CONCEPT_OUTPUT_TOKEN_LIMIT
+        is_recoverable = True
 
-    # 5. Network errors
+    elif "context" in exc_message_lower or "token" in exc_message_lower:
+        if "before any response was generated" in exc_message_lower:
+            error_type = ErrorType.CONCEPT_OUTPUT_TOKEN_LIMIT
+            is_recoverable = True
+        else:
+            error_type = ErrorType.CONCEPT_CONTEXT_OVERFLOW
+            is_recoverable = False
+
     elif "connection" in exc_message_lower or "network" in exc_message_lower:
         error_type = ErrorType.CONCEPT_NETWORK_ERROR
 
-    # 6. Parsing errors
     elif "json" in exc_message_lower or "parse" in exc_message_lower:
         error_type = ErrorType.CONCEPT_PARSING_ERROR
 
-    # 7. Generic LLM errors (fallback)
     elif "llm" in exc_message_lower or "model" in exc_message_lower:
         error_type = ErrorType.CONCEPT_LLM_ERROR
 
@@ -1967,6 +1997,12 @@ def get_user_facing_message(error: ExtractionError) -> str:
             "Automatic chunk splitting was attempted. "
             "If this persists, consider reducing chunk size or increasing "
             "DOC_CONCEPT_EXTRACTION_MAX_TOKENS in configuration."
+        ),
+        ErrorType.CONCEPT_OUTPUT_TOKEN_LIMIT: (
+            "LLM output token limit was reached before generating a response. "
+            "Automatic chunk splitting was attempted. "
+            "If this persists, consider reducing chunk size or checking "
+            "the configured model's output token capacity."
         ),
     }
 

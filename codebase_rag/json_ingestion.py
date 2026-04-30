@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -76,6 +77,30 @@ def _get_embedding_cache() -> EmbeddingCache:
     return _embedding_cache
 
 
+def _is_retryable_embedding_error(exc: Exception) -> bool:
+    """Check if an embedding error is transient and worth retrying."""
+    import ssl
+
+    if isinstance(exc, ssl.SSLError):
+        return True
+    if isinstance(exc, (ConnectionError, TimeoutError)):
+        return True
+    try:
+        import httpcore
+
+        if isinstance(exc, (httpcore.ConnectError, httpcore.ReadError, httpcore.WriteError)):
+            return True
+    except Exception:
+        pass
+    exc_type_name = type(exc).__name__
+    if exc_type_name in ("ConnectError", "ReadError", "WriteError", "PoolTimeout"):
+        return True
+    exc_message = str(exc)
+    if "UNEXPECTED_EOF" in exc_message:
+        return True
+    return False
+
+
 def are_json_embeddings_available() -> tuple[bool, str | None]:
     """Check if JSON embeddings are available.
 
@@ -110,12 +135,28 @@ class DatasetReferences:
 
 @dataclass
 class OperationSummary:
-    ingested: int = 0
-    updated: int = 0
+    created: int = 0
+    matched: int = 0
     deleted: int = 0
     skipped: int = 0
     failed: int = 0
     errors: list[str] = field(default_factory=list)
+
+    @property
+    def ingested(self) -> int:
+        return self.created
+
+    @ingested.setter
+    def ingested(self, value: int) -> None:
+        self.created = value
+
+    @property
+    def updated(self) -> int:
+        return self.matched
+
+    @updated.setter
+    def updated(self, value: int) -> None:
+        self.matched = value
 
 
 def _create_json_ingestor(batch_size: int) -> MemgraphIngestor:
@@ -129,38 +170,43 @@ def _create_json_ingestor(batch_size: int) -> MemgraphIngestor:
     )
 
 
-def _get_actual_relationship_count(
-    dataset_ids: list[str],
-) -> int:
-    """Get actual relationship count from database for given dataset IDs.
+def verify_json_ingestion(
+    dataset_id: str,
+    expected_count: int | None = None,
+) -> tuple[bool, str]:
+    """Verify JSON ingestion completed successfully.
 
-    Used for verification after ingestion to detect count discrepancies
-    from symmetric relationship deduplication.
+    Returns:
+        Tuple of (is_complete, message)
     """
-    if not dataset_ids:
-        return 0
     try:
-        with _create_json_ingestor(
-            settings.JSON_MEMGRAPH_BATCH_SIZE
-        ) as graph_connection:
-            if len(dataset_ids) == 1:
-                query = """
-                    MATCH ()-[r]->()
-                    WHERE r.dataset_id = $dataset_id
-                    RETURN count(r) AS actual_count
-                """
-                params = {"dataset_id": dataset_ids[0]}
-            else:
-                query = """
-                    MATCH ()-[r]->()
-                    WHERE r.dataset_id IN $dataset_ids
-                    RETURN count(r) AS actual_count
-                """
-                params = {"dataset_ids": dataset_ids}
-            rows = graph_connection.fetch_all(query, params)
-            return int(rows[0].get("actual_count", 0)) if rows else 0
-    except Exception:
-        return -1  # Indicate error/unavailable
+        with _create_json_ingestor(settings.JSON_MEMGRAPH_BATCH_SIZE) as graph_connection:
+            count_query = """
+                MATCH (n:JsonEntity {dataset_id: $dataset_id})
+                RETURN count(n) AS entity_count
+            """
+            result = graph_connection.fetch_all(count_query, {"dataset_id": dataset_id})
+            entity_count = result[0].get("entity_count", 0) if result else 0
+
+            missing_embeddings_query = """
+                MATCH (n:JsonEntity {dataset_id: $dataset_id})
+                WHERE n.embedding IS NULL
+                RETURN count(n) AS missing_count
+            """
+            result = graph_connection.fetch_all(
+                missing_embeddings_query, {"dataset_id": dataset_id}
+            )
+            missing_count = result[0].get("missing_count", 0) if result else 0
+
+            if expected_count is not None and entity_count != expected_count:
+                return False, f"Expected {expected_count} entities, found {entity_count}"
+
+            if missing_count > 0:
+                return False, f"{missing_count} entities missing embeddings"
+
+            return True, f"Ingestion complete: {entity_count} entities, all indexed"
+    except Exception as exc:
+        return False, f"Verification query failed: {exc}"
 
 
 def _canonical_entity_id(name: str) -> str:
@@ -189,6 +235,29 @@ def _build_unique_id(dataset_id: str, entity_id: str) -> str:
 
 def _escape_identifier(identifier: str) -> str:
     return identifier.replace("`", "``")
+
+
+def _check_merge_success(result: list[dict]) -> tuple[bool, int | None]:
+    """Check if MERGE query executed successfully.
+
+    Cypher MERGE always returns the relationship (created or matched),
+    so we cannot distinguish creation from match from the result alone.
+    This helper only checks whether MERGE succeeded.
+
+    Args:
+        result: Query result from MERGE execution.
+
+    Returns:
+        Tuple of (success, relationship_id).
+        - (True, id) if relationship exists (MERGE succeeded)
+        - (False, None) if query failed or returned no result
+    """
+    if not result:
+        return False, None
+    rel_id = result[0].get("relationship_id")
+    if rel_id is None:
+        return False, None
+    return True, rel_id
 
 
 def sanitize_edge_label(label: str) -> str:
@@ -353,9 +422,16 @@ def _normalize_relationship_category(category: str) -> str:
         "SIMILAR": "COMPARATIVE",
         "SIMILAR-TO": "COMPARATIVE",
         "COMPARABLE": "COMPARATIVE",
+        "COMPARABLE_TO": "COMPARATIVE",
         "CONTRASTS-WITH": "COMPARATIVE",
         "CONTRASTS": "COMPARATIVE",
         "RELATES-TO": "COMPARATIVE",
+        "RELATES_TO": "COMPARATIVE",
+        "SIMILAR_TO": "COMPARATIVE",
+        # Analogical
+        "ANALOGOUS": "ANALOGICAL",
+        "ANALOGOUS_TO": "ANALOGICAL",
+        "ANALOGICAL": "ANALOGICAL",
         # Sequential
         "PRECEDES": "SEQUENTIAL",
         "FOLLOWS": "SEQUENTIAL",
@@ -1055,7 +1131,25 @@ def generate_embeddings_for_entities(
 
         if uncached_texts:
             provider = _get_embedding_provider()
-            generated_embeddings = provider.embed_batch(uncached_texts)
+            generated_embeddings: list[list[float]] | None = None
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    generated_embeddings = provider.embed_batch(uncached_texts)
+                    break
+                except Exception as embed_exc:
+                    if not _is_retryable_embedding_error(embed_exc):
+                        raise
+                    if attempt == max_retries - 1:
+                        raise
+                    backoff = 2**attempt
+                    logger.warning(
+                        f"Batch embedding failed (attempt {attempt + 1}/{max_retries}), "
+                        f"retrying in {backoff}s: {str(embed_exc)[:100]}..."
+                    )
+                    time.sleep(backoff)
+            if generated_embeddings is None:
+                raise RuntimeError("Embedding provider returned no batch embeddings")
             for index, (entity_id, embedding) in enumerate(
                 zip(uncached_ids, generated_embeddings)
             ):
@@ -1643,6 +1737,7 @@ def ingest_relationships(
     summary = OperationSummary()
     existing_relationships: dict[tuple[str, str, str], str | None] = {}
     lookup_cache: dict[str, str | None] = {}
+    newly_created_keys: set[tuple[str, str, str]] = set()
 
     if graph_connection is not None and (not dry_run or skip_existing or incremental):
         try:
@@ -1656,7 +1751,9 @@ def ingest_relationships(
     for relationship in relationships:
         source_ref = str(relationship["source"])
         target_ref = str(relationship["target"])
-        rel_type = sanitize_edge_label(str(relationship["relationship"]))
+        rel_type = _normalize_relationship_category(
+            str(relationship.get("category") or relationship.get("relationship") or "RELATED_TO")
+        )
         operation = str(relationship.get("operation") or "add").lower()
         relationship_last_updated = (
             str(relationship["last_updated"])
@@ -1749,16 +1846,15 @@ def ingest_relationships(
             is_symmetric = bool(relationship.get("symmetric"))
             reverse_key = (target_unique_id, rel_type, source_unique_id)
             reverse_exists = reverse_key in existing_relationships if existing_relationships else False
-            if exists or operation == "update":
-                summary.updated += 1 if exists else 0
-                summary.ingested += 0 if exists else 1
+            if exists:
+                summary.matched += 1
             else:
-                summary.ingested += 1
-            if is_symmetric:
+                summary.created += 1
+            if is_symmetric and source_unique_id != target_unique_id:
                 if reverse_exists:
-                    summary.updated += 1
+                    summary.matched += 1
                 else:
-                    summary.ingested += 1
+                    summary.created += 1
             continue
 
         if graph_connection is None:
@@ -1777,7 +1873,7 @@ def ingest_relationships(
             )
             rel_props["source_id"] = source_unique_id
             rel_props["target_id"] = target_unique_id
-            graph_connection.fetch_all(
+            forward_result = graph_connection.fetch_all(
                 f"""
                 MATCH (a:JsonEntity {{unique_id: $source_id, dataset_id: $dataset_id}}),
                       (b:JsonEntity {{unique_id: $target_id, dataset_id: $dataset_id}})
@@ -1792,9 +1888,19 @@ def ingest_relationships(
                     "properties": rel_props,
                 },
             )
+            forward_success, _ = _check_merge_success(forward_result)
+            if forward_success:
+                if relationship_key in existing_relationships or relationship_key in newly_created_keys:
+                    summary.matched += 1
+                else:
+                    summary.created += 1
+                    newly_created_keys.add(relationship_key)
+            else:
+                summary.failed += 1
+
             is_symmetric = rel_props.get("is_symmetric")
-            if is_symmetric:
-                graph_connection.fetch_all(
+            if is_symmetric and source_unique_id != target_unique_id and forward_success:
+                reverse_result = graph_connection.fetch_all(
                     f"""
                     MATCH (a:JsonEntity {{unique_id: $target_id, dataset_id: $dataset_id}}),
                           (b:JsonEntity {{unique_id: $source_id, dataset_id: $dataset_id}})
@@ -1809,16 +1915,16 @@ def ingest_relationships(
                         "properties": rel_props,
                     },
                 )
-            if exists:
-                summary.updated += 1
-            else:
-                summary.ingested += 1
-            if is_symmetric:
+                reverse_success, _ = _check_merge_success(reverse_result)
                 reverse_key = (target_unique_id, rel_type, source_unique_id)
-                if reverse_key in existing_relationships:
-                    summary.updated += 1
+                if reverse_success:
+                    if reverse_key in existing_relationships or reverse_key in newly_created_keys:
+                        summary.matched += 1
+                    else:
+                        summary.created += 1
+                        newly_created_keys.add(reverse_key)
                 else:
-                    summary.ingested += 1
+                    summary.failed += 1
         except Exception as exc:
             summary.failed += 1
             summary.errors.append(
@@ -1955,6 +2061,8 @@ def _merge_summary_into_result(
         result.entities_skipped += summary.skipped
         result.entities_failed += summary.failed
     else:
+        result.relationships_created += summary.created
+        result.relationships_matched += summary.matched
         result.relationships_ingested += summary.ingested
         result.relationships_updated += summary.updated
         result.relationships_deleted += summary.deleted
@@ -2411,25 +2519,26 @@ def ingest_json_data(
                     is_entity_summary=False,
                 )
 
-        # Verify relationship count against actual database state
-        # (handles symmetric relationship deduplication discrepancy)
-        actual_stored = -1
-        logged_relationships = result.relationships_ingested
-        if result.relationships_ingested > 0 and not dry_run and result.dataset_ids:
-            actual_stored = _get_actual_relationship_count(result.dataset_ids)
-            if actual_stored >= 0 and actual_stored != logged_relationships:
-                logger.warning(
-                    f"Relationship count mismatch: logged {logged_relationships}, "
-                    f"actually stored {actual_stored}. "
-                    f"Possible cause: symmetric relationship reverse edges were "
-                    f"deduplicated by MERGE or already existed in database."
-                )
+        total_rels = result.relationships_created + result.relationships_matched
+        if total_rels > 0:
+            logger.info(
+                f"Relationship summary: {result.relationships_created} created, "
+                f"{result.relationships_matched} matched, {result.relationships_skipped} skipped"
+            )
 
         # Post-ingestion: create indexes and compute PageRank
         if not dry_run and result.entities_ingested > 0:
             _create_json_graph_indexes()
             if compute_pagerank:
                 _compute_json_graph_pagerank()
+
+        if not dry_run and settings.JSON_INGESTION_VERIFY and result.dataset_ids:
+            for ds_id in result.dataset_ids:
+                is_complete, message = verify_json_ingestion(ds_id)
+                if not is_complete:
+                    logger.warning(f"JSON ingestion verification failed for {ds_id}: {message}")
+                else:
+                    logger.info(f"JSON ingestion verification passed for {ds_id}: {message}")
 
         # Log completion with guidance if nothing was ingested
         if result.entities_ingested == 0 and result.files_processed > 0:
@@ -2455,16 +2564,16 @@ def ingest_json_data(
                     f"All entities were skipped (already exist, incremental check, or delete operations)."
                 )
 
-        rel_count_str = str(result.relationships_ingested)
-        if actual_stored >= 0 and actual_stored != result.relationships_ingested:
-            merged = result.relationships_ingested - actual_stored
-            rel_count_str = f"{result.relationships_ingested} ({actual_stored} stored) [{merged} symmetric duplicate{'s' if merged != 1 else ''} merged]"
+        total_rels = result.relationships_created + result.relationships_matched
+        rel_count_str = f"{result.relationships_created} created, {result.relationships_matched} matched"
+        if result.relationships_skipped > 0:
+            rel_count_str += f", {result.relationships_skipped} skipped"
         logger.info(
             "Ingestion completed: "
             f"{result.files_processed} files processed, "
             f"{result.files_skipped} files skipped, "
             f"{result.entities_ingested} entities ingested, "
-            f"{rel_count_str} relationships ingested"
+            f"{rel_count_str} relationships"
         )
         return result
     except Exception as exc:

@@ -1489,8 +1489,7 @@ class DocumentGraphUpdater:
                 logger.debug(f"Skipping unchanged document: {file_path}")
                 return "skipped"
 
-        # Extract content
-        doc = extractor.extract(file_path)
+        doc = extractor.extract(file_path, skip_validation=True)
         resolved_code_references = self._resolve_code_reference_names(
             doc.code_references
         )
@@ -1637,8 +1636,7 @@ class DocumentGraphUpdater:
                 logger.debug(f"Skipping unchanged document: {file_path}")
                 return "skipped"
 
-        # Async extraction
-        doc = await extractor.extract_async(file_path)
+        doc = await extractor.extract_async(file_path, skip_validation=True)
         resolved_code_references = self._resolve_code_reference_names(
             doc.code_references
         )

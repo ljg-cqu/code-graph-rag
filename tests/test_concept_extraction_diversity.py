@@ -92,6 +92,34 @@ class TestCheckRelationshipDiversity:
         is_skewed = _check_relationship_diversity([], "chunk:empty")
         assert is_skewed is False
 
+    def test_small_sample_skipped(self):
+        """3 relationships with 2/3 CAUSAL should NOT trigger due to min_count."""
+        rels = [
+            ConceptRelationship(
+                from_concept="A",
+                to_concept="B",
+                verb="causes",
+                category="CAUSAL",
+                strength=0.8,
+            ),
+            ConceptRelationship(
+                from_concept="A",
+                to_concept="C",
+                verb="enables",
+                category="CAUSAL",
+                strength=0.8,
+            ),
+            ConceptRelationship(
+                from_concept="A",
+                to_concept="D",
+                verb="is-a",
+                category="HIERARCHICAL",
+                strength=0.8,
+            ),
+        ]
+        is_skewed = _check_relationship_diversity(rels, "chunk:test")
+        assert is_skewed is False
+
     def test_threshold_just_above_boundary(self):
         """Just above 60% should trigger skew."""
         rels = [

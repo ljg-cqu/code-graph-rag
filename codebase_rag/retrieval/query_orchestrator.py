@@ -485,7 +485,7 @@ class QueryMethodOrchestrator:
 
         Uses _fetch_all_async() for async-native database access.
         """
-        keywords = plan.expected_entities[:3] if plan and plan.expected_entities else []
+        keywords = [kw.lower() for kw in plan.expected_entities[:3]] if plan and plan.expected_entities else []
         if not keywords:
             return QueryMethodResult(
                 method=QueryMethod.KEYWORD_SEARCH,
@@ -500,9 +500,9 @@ class QueryMethodOrchestrator:
         WHERE labels(n)[0] IN ['Function', 'Class', 'Method', 'Enum', 'Type',
                                 'Union', 'Interface', 'Contract', 'Library']
           AND ANY(kw IN $keywords WHERE
-              n.name CONTAINS kw
-              OR n.qualified_name CONTAINS kw
-              OR n.docstring CONTAINS kw)
+              toLower(n.name) CONTAINS kw
+              OR toLower(n.qualified_name) CONTAINS kw
+              OR toLower(COALESCE(n.docstring, '')) CONTAINS kw)
         RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
                n.name AS name, labels(n)[0] AS type,
                n.path AS file_path, n.start_line AS start_line,
@@ -597,7 +597,7 @@ class QueryMethodOrchestrator:
         """
         from ..cypher_queries import CYPHER_FIND_CALLERS, CYPHER_FIND_IMPORTERS
 
-        keywords = plan.expected_entities[:3] if plan and plan.expected_entities else []
+        keywords = [kw.lower() for kw in plan.expected_entities[:3]] if plan and plan.expected_entities else []
         if not keywords:
             return QueryMethodResult(
                 method=QueryMethod.GRAPH_NAVIGATION,
@@ -611,7 +611,7 @@ class QueryMethodOrchestrator:
         find_nodes_cypher = """
         MATCH (n)
         WHERE labels(n)[0] IN ['Function', 'Class', 'Method']
-          AND ANY(kw IN $keywords WHERE n.name CONTAINS kw OR n.qualified_name CONTAINS kw)
+          AND ANY(kw IN $keywords WHERE toLower(n.name) CONTAINS kw OR toLower(n.qualified_name) CONTAINS kw)
         RETURN id(n) AS node_id, n.qualified_name AS qualified_name,
                n.name AS name, labels(n)[0] AS type,
                n.path AS file_path
