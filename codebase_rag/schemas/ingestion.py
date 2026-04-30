@@ -92,7 +92,7 @@ class Relationship(BaseModel):
     """
     symmetric: bool | None = None
     """
-    When true, creates a bidirectional edge in the graph
+    When true, the relationship is treated as symmetric and traversable in both directions
     """
     inferred: bool | None = None
     """

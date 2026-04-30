@@ -165,7 +165,7 @@ class JsonGraphQueryEngine:
                    n.entity_emoji AS entity_emoji,
                    n.emoji AS emoji,
                    n.description AS description,
-                   n.simple_analogy AS analogy,
+                   n.analogy AS analogy,
                    n.example AS example,
                    COALESCE(n.pagerank_score, 0.1) AS pagerank_score,
                    COALESCE(n.community_id, -1) AS community_id,
@@ -233,7 +233,7 @@ class JsonGraphQueryEngine:
         Returns:
             List of JsonEntityResult.
         """
-        keywords = [w.lower() for w in query.split() if len(w) > 3][:5]
+        keywords = [w.lower() for w in query.split() if len(w) > 1][:5]
 
         if not keywords:
             return []
@@ -251,7 +251,7 @@ class JsonGraphQueryEngine:
             toLower(n.name) CONTAINS kw
             OR toLower(n.unique_id) CONTAINS kw
             OR toLower(COALESCE(n.description, '')) CONTAINS kw
-            OR toLower(COALESCE(n.simple_analogy, '')) CONTAINS kw)
+            OR toLower(COALESCE(n.analogy, '')) CONTAINS kw)
         {category_filter}
         RETURN n.unique_id AS unique_id,
                n.name AS name,
@@ -261,7 +261,7 @@ class JsonGraphQueryEngine:
                n.entity_emoji AS entity_emoji,
                n.emoji AS emoji,
                n.description AS description,
-               n.simple_analogy AS analogy,
+               n.analogy AS analogy,
                n.example AS example,
                COALESCE(n.pagerank_score, 0.1) AS pagerank_score
         LIMIT $limit
@@ -321,18 +321,7 @@ class JsonGraphQueryEngine:
         ]
         rel_pattern = "|".join(rel_types)
 
-        if direction == "outgoing":
-            pattern = f"-[:{rel_pattern}*1..{max_depth}]->"
-        elif direction == "incoming":
-            pattern = f"<-[:{rel_pattern}*1..{max_depth}]-"
-        else:
-            pattern = f"-[:{rel_pattern}*1..{max_depth}]-"
-
-        cypher = f"""
-        MATCH (start:JsonEntity)
-        WHERE start.name CONTAINS $identifier OR start.unique_id CONTAINS $identifier
-        MATCH path = (start){pattern}(related:JsonEntity)
-        RETURN DISTINCT
+        return_fields = """
             related.unique_id AS unique_id,
             related.name AS name,
             related.type AS entity_type,
@@ -341,13 +330,57 @@ class JsonGraphQueryEngine:
             related.entity_emoji AS entity_emoji,
             related.emoji AS emoji,
             related.description AS description,
-            related.simple_analogy AS analogy,
+            related.analogy AS analogy,
             related.example AS example,
             COALESCE(related.pagerank_score, 0.1) AS pagerank_score,
             length(path) AS depth
-        ORDER BY depth ASC, pagerank_score DESC
-        LIMIT $limit
         """
+
+        where_clause = """
+            start.name = $identifier OR start.unique_id = $identifier
+            OR start.name STARTS WITH $identifier OR start.unique_id STARTS WITH $identifier
+        """
+
+        if direction == "both":
+            pattern = f"-[:{rel_pattern}*1..{max_depth}]-"
+            cypher = f"""
+            MATCH (start:JsonEntity)
+            WHERE {where_clause}
+            MATCH path = (start){pattern}(related:JsonEntity)
+            RETURN DISTINCT {return_fields}
+            ORDER BY depth ASC, pagerank_score DESC
+            LIMIT $limit
+            """
+        elif direction == "outgoing":
+            cypher = f"""
+            MATCH (start:JsonEntity)
+            WHERE {where_clause}
+            MATCH path = (start)-[:{rel_pattern}*1..{max_depth}]->(related:JsonEntity)
+            RETURN DISTINCT {return_fields}
+            UNION
+            MATCH (start:JsonEntity)
+            WHERE {where_clause}
+            MATCH path = (start)<-[:{rel_pattern}*1..{max_depth}]-(related:JsonEntity)
+            WHERE ALL(r IN relationships(path) WHERE r.is_symmetric = true)
+            RETURN DISTINCT {return_fields}
+            ORDER BY depth ASC, pagerank_score DESC
+            LIMIT $limit
+            """
+        else:  # incoming
+            cypher = f"""
+            MATCH (start:JsonEntity)
+            WHERE {where_clause}
+            MATCH path = (start)<-[:{rel_pattern}*1..{max_depth}]-(related:JsonEntity)
+            RETURN DISTINCT {return_fields}
+            UNION
+            MATCH (start:JsonEntity)
+            WHERE {where_clause}
+            MATCH path = (start)-[:{rel_pattern}*1..{max_depth}]->(related:JsonEntity)
+            WHERE ALL(r IN relationships(path) WHERE r.is_symmetric = true)
+            RETURN DISTINCT {return_fields}
+            ORDER BY depth ASC, pagerank_score DESC
+            LIMIT $limit
+            """
 
         records = self._fetch_records(
             cypher, {"identifier": entity_identifier, "limit": top_k}
@@ -402,33 +435,67 @@ class JsonGraphQueryEngine:
             verb_filter = "AND r.verb = $verb"
             params["verb"] = verb
 
-        if direction == "outgoing":
-            match_pattern = "(start:JsonEntity)-[r]->(target:JsonEntity)"
-            return_start = "start"
-            return_end = "target"
-        elif direction == "incoming":
-            match_pattern = "(source:JsonEntity)-[r]->(start:JsonEntity)"
-            return_start = "source"
-            return_end = "start"
-        else:
-            match_pattern = "(start:JsonEntity)-[r]-(other:JsonEntity)"
-            return_start = "start"
-            return_end = "other"
-
-        cypher = f"""
-        MATCH {match_pattern}
-        WHERE (start.name CONTAINS $identifier OR start.unique_id CONTAINS $identifier)
-        {category_filter} {verb_filter}
-        RETURN type(r) AS relationship_type,
+        base_where = """(start.name = $identifier OR start.unique_id = $identifier
+           OR start.name STARTS WITH $identifier OR start.unique_id STARTS WITH $identifier)"""
+        return_clause = """RETURN type(r) AS relationship_type,
                COALESCE(r.category, r.relationship_category, "RELATED_TO") AS category,
                COALESCE(r.emoji, r.relationship_emoji, "🔗") AS emoji,
                r.verb AS verb,
-               r.strength AS strength,
-               {return_start}.name AS from_name,
-               {return_start}.type AS from_type,
-               {return_end}.name AS to_name,
-               {return_end}.type AS to_type
-        """
+               r.strength AS strength"""
+
+        if direction == "outgoing":
+            cypher = f"""
+            MATCH (start:JsonEntity)-[r]->(target:JsonEntity)
+            WHERE {base_where}
+            {category_filter} {verb_filter}
+            {return_clause},
+                   start.name AS from_name,
+                   start.type AS from_type,
+                   target.name AS to_name,
+                   target.type AS to_type
+            UNION
+            MATCH (start:JsonEntity)<-[r]-(target:JsonEntity)
+            WHERE {base_where}
+            AND r.is_symmetric = true
+            {category_filter} {verb_filter}
+            {return_clause},
+                   start.name AS from_name,
+                   start.type AS from_type,
+                   target.name AS to_name,
+                   target.type AS to_type
+            """
+        elif direction == "incoming":
+            cypher = f"""
+            MATCH (source:JsonEntity)-[r]->(start:JsonEntity)
+            WHERE {base_where}
+            {category_filter} {verb_filter}
+            {return_clause},
+                   source.name AS from_name,
+                   source.type AS from_type,
+                   start.name AS to_name,
+                   start.type AS to_type
+            UNION
+            MATCH (source:JsonEntity)<-[r]-(start:JsonEntity)
+            WHERE {base_where}
+            AND r.is_symmetric = true
+            {category_filter} {verb_filter}
+            {return_clause},
+                   source.name AS from_name,
+                   source.type AS from_type,
+                   start.name AS to_name,
+                   start.type AS to_type
+            """
+        else:
+            cypher = f"""
+            MATCH (start:JsonEntity)-[r]-(other:JsonEntity)
+            WHERE {base_where}
+            {category_filter} {verb_filter}
+            {return_clause},
+                   start.name AS from_name,
+                   start.type AS from_type,
+                   other.name AS to_name,
+                   other.type AS to_type
+            """
 
         records = self._fetch_records(cypher, params)
 
@@ -471,7 +538,7 @@ class JsonGraphQueryEngine:
                n.entity_emoji AS entity_emoji,
                n.emoji AS emoji,
                n.description AS description,
-               n.simple_analogy AS analogy,
+               n.analogy AS analogy,
                n.example AS example,
                COALESCE(n.pagerank_score, 0.1) AS pagerank_score
         ORDER BY n.pagerank_score DESC
@@ -574,7 +641,8 @@ class JsonGraphQueryEngine:
         if root_entity:
             cypher = f"""
             MATCH path = (root:JsonEntity)-[*1..{max_depth}]->(descendant:JsonEntity)
-            WHERE root.name CONTAINS $identifier OR root.unique_id CONTAINS $identifier
+            WHERE root.name = $identifier OR root.unique_id = $identifier
+               OR root.name STARTS WITH $identifier OR root.unique_id STARTS WITH $identifier
               AND ALL(r IN relationships(path) WHERE r.category IN ['HIERARCHICAL', 'COMPOSITIONAL'])
             RETURN root.name AS root_name,
                    descendant.name AS descendant_name,

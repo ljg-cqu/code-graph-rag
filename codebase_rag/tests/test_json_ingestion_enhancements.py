@@ -595,7 +595,7 @@ class TestRelationshipProperties:
 
 
 class TestSymmetricBidirectionalEdges:
-    def test_symmetric_relationship_creates_reverse_edge(self) -> None:
+    def test_symmetric_relationship_creates_single_edge(self) -> None:
         class _MockGraphConn:
             def __init__(self):
                 self.calls: list[dict] = []
@@ -629,18 +629,15 @@ class TestSymmetricBidirectionalEdges:
             {},
             graph_connection=graph_conn,
         )
-        assert summary.ingested == 2
-        # Two MERGE calls: one forward, one reverse
+        assert summary.ingested == 1
+        # Single MERGE call for forward edge only
         merge_calls = [
             c for c in graph_conn.calls if "MERGE (a)-[r:" in c["query"]
         ]
-        assert len(merge_calls) == 2
-        # First call is forward
+        assert len(merge_calls) == 1
+        # The call is the forward edge
         assert merge_calls[0]["params"]["source_id"] == "test-dataset::sys1"
         assert merge_calls[0]["params"]["target_id"] == "test-dataset::sys2"
-        # Second call is reverse (params retain original names; Cypher swaps them)
-        assert merge_calls[1]["params"]["source_id"] == "test-dataset::sys1"
-        assert merge_calls[1]["params"]["target_id"] == "test-dataset::sys2"
 
     def test_non_symmetric_relationship_creates_single_edge(self) -> None:
         class _MockGraphConn:

@@ -308,7 +308,7 @@ def test_ingest_json_data_dry_run_with_sample_json() -> None:
     assert result.entities_processed == 4
     assert result.relationships_processed == 4
     assert result.entities_ingested == 4
-    assert result.relationships_ingested == 5
+    assert result.relationships_ingested == 4
     assert result.errors == []
 
 

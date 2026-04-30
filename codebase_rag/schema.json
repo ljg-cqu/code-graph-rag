@@ -94,7 +94,7 @@
           },
           "symmetric": {
             "type": "boolean",
-            "description": "When true, creates a bidirectional edge in the graph"
+            "description": "When true, the relationship is treated as symmetric and traversable in both directions"
           },
           "inferred": {
             "type": "boolean",

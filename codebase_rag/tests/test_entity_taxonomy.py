@@ -535,7 +535,9 @@ class TestSubtypeRegistryIntegrity:
             "Cognitive Condition": "PROPERTY_ATTRIBUTE",
             "Cognitive Constraint": "PROPERTY_ATTRIBUTE",
             "Cognitive Limitation": "PROPERTY_ATTRIBUTE",
+            "Cognitive Mechanism": "PROPERTY_ATTRIBUTE",
             "Cognitive Trait": "PROPERTY_ATTRIBUTE",
+            "Framework Component": "PROPERTY_ATTRIBUTE",
             "Character Traits": "PROPERTY_ATTRIBUTE",
             "Educational Metric": "PROPERTY_ATTRIBUTE",
             "Evaluative Criteria": "PROPERTY_ATTRIBUTE",
@@ -581,6 +583,7 @@ class TestSubtypeRegistryIntegrity:
             "Researcher": "AGENT_ROLE",
             # 💡 Abstract Concept
             "Capability": "ABSTRACT_CONCEPT",
+            "Conceptual Framework": "ABSTRACT_CONCEPT",
             "Psychological Theory": "ABSTRACT_CONCEPT",
             # 🧱 Concrete Entity
             "Software Tool": "CONCRETE_ENTITY",
@@ -720,10 +723,10 @@ class TestJsonEntitySubtypeRegistry:
         assert category == "ABSTRACT_CONCEPT"
         assert emoji == "💡"
 
-    def test_cognitive_mechanism_maps_to_system_structure(self) -> None:
+    def test_cognitive_mechanism_maps_to_property_attribute(self) -> None:
         category, _, emoji = resolve_entity_category(None, "Cognitive Mechanism", "")
-        assert category == "SYSTEM_STRUCTURE"
-        assert emoji == "🏗️"
+        assert category == "PROPERTY_ATTRIBUTE"
+        assert emoji == "📏"
 
     def test_cognitive_phenomenon_maps_to_event_process(self) -> None:
         category, _, emoji = resolve_entity_category(None, "Cognitive Phenomenon", "")
@@ -745,10 +748,10 @@ class TestJsonEntitySubtypeRegistry:
         assert category == "ABSTRACT_CONCEPT"
         assert emoji == "💡"
 
-    def test_conceptual_framework_maps_to_system_structure(self) -> None:
+    def test_conceptual_framework_maps_to_abstract_concept(self) -> None:
         category, _, emoji = resolve_entity_category(None, "Conceptual Framework", "")
-        assert category == "SYSTEM_STRUCTURE"
-        assert emoji == "🏗️"
+        assert category == "ABSTRACT_CONCEPT"
+        assert emoji == "💡"
 
     def test_decision_framework_maps_to_system_structure(self) -> None:
         category, _, emoji = resolve_entity_category(None, "Decision Framework", "")
@@ -765,15 +768,15 @@ class TestJsonEntitySubtypeRegistry:
         assert category == "SYSTEM_STRUCTURE"
         assert emoji == "🏗️"
 
-    def test_framework_component_maps_to_system_structure(self) -> None:
+    def test_framework_component_maps_to_property_attribute(self) -> None:
         category, _, emoji = resolve_entity_category(None, "Framework Component", "")
-        assert category == "SYSTEM_STRUCTURE"
-        assert emoji == "🏗️"
+        assert category == "PROPERTY_ATTRIBUTE"
+        assert emoji == "📏"
 
-    def test_framework_component_camelcase_maps_to_system_structure(self) -> None:
+    def test_framework_component_camelcase_maps_to_property_attribute(self) -> None:
         category, _, emoji = resolve_entity_category(None, "FrameworkComponent", "")
-        assert category == "SYSTEM_STRUCTURE"
-        assert emoji == "🏗️"
+        assert category == "PROPERTY_ATTRIBUTE"
+        assert emoji == "📏"
 
     def test_technology_tool_maps_to_system_structure(self) -> None:
         category, _, emoji = resolve_entity_category(None, "Technology Tool", "")

@@ -92,7 +92,7 @@ class TestIngestRelationshipsCounting:
     def test_symmetric_relationship_properties_include_source_and_target_ids(
         self, mock_graph, dataset_refs
     ):
-        """Symmetric relationships include source_id and target_id in both MERGE calls."""
+        """Symmetric relationships include source_id and target_id in the single MERGE call."""
         relationships = [
             {
                 "source": "entity_a",
@@ -114,16 +114,15 @@ class TestIngestRelationshipsCounting:
                 graph_connection=mock_graph,
             )
 
-        assert summary.ingested == 2
-        assert mock_graph.fetch_all.call_count == 2
-        for call in mock_graph.fetch_all.call_args_list:
-            args, _kwargs = call
-            params = args[1]
-            assert params["properties"].get("source_id") == "ds::entity_a"
-            assert params["properties"].get("target_id") == "ds::entity_b"
+        assert summary.ingested == 1
+        assert mock_graph.fetch_all.call_count == 1
+        args, _kwargs = mock_graph.fetch_all.call_args
+        params = args[1]
+        assert params["properties"].get("source_id") == "ds::entity_a"
+        assert params["properties"].get("target_id") == "ds::entity_b"
 
-    def test_symmetric_relationship_both_edges_ingested(self, mock_graph, dataset_refs):
-        """A symmetric relationship with no existing edges counts as 2 ingested."""
+    def test_symmetric_relationship_single_edge_ingested(self, mock_graph, dataset_refs):
+        """A symmetric relationship with no existing edges counts as 1 ingested."""
         relationships = [
             {
                 "source": "entity_a",
@@ -145,15 +144,15 @@ class TestIngestRelationshipsCounting:
                 graph_connection=mock_graph,
             )
 
-        assert summary.ingested == 2
+        assert summary.ingested == 1
         assert summary.updated == 0
         assert summary.failed == 0
-        assert mock_graph.fetch_all.call_count == 2
+        assert mock_graph.fetch_all.call_count == 1
 
-    def test_symmetric_forward_exists_reverse_new(self, mock_graph, dataset_refs):
-        """Symmetric relationship where forward exists but reverse is new.
+    def test_symmetric_forward_exists_no_reverse(self, mock_graph, dataset_refs):
+        """Symmetric relationship where forward exists; no reverse edge is created.
 
-        Should count as 1 updated (forward) + 1 ingested (reverse).
+        Should count as 1 updated (forward) + 0 ingested.
         """
         relationships = [
             {
@@ -179,15 +178,16 @@ class TestIngestRelationshipsCounting:
                 graph_connection=mock_graph,
             )
 
-        assert summary.ingested == 1
+        assert summary.ingested == 0
         assert summary.updated == 1
         assert summary.failed == 0
-        assert mock_graph.fetch_all.call_count == 2
+        assert mock_graph.fetch_all.call_count == 1
 
-    def test_symmetric_both_edges_exist(self, mock_graph, dataset_refs):
-        """Symmetric relationship where both forward and reverse exist.
+    def test_symmetric_both_edges_exist_single_updated(self, mock_graph, dataset_refs):
+        """Symmetric relationship where both edges previously existed.
 
-        Should count as 2 updated.
+        Only the forward edge is updated; reverse is not created.
+        Should count as 1 updated.
         """
         relationships = [
             {
@@ -215,12 +215,12 @@ class TestIngestRelationshipsCounting:
             )
 
         assert summary.ingested == 0
-        assert summary.updated == 2
+        assert summary.updated == 1
         assert summary.failed == 0
-        assert mock_graph.fetch_all.call_count == 2
+        assert mock_graph.fetch_all.call_count == 1
 
-    def test_dry_run_symmetric_counts_both_edges(self, dataset_refs):
-        """Dry run with symmetric relationship counts both edges."""
+    def test_dry_run_symmetric_counts_single_edge(self, dataset_refs):
+        """Dry run with symmetric relationship counts single edge."""
         relationships = [
             {
                 "source": "entity_a",
@@ -242,7 +242,7 @@ class TestIngestRelationshipsCounting:
                 dry_run=True,
             )
 
-        assert summary.ingested == 2
+        assert summary.ingested == 1
         assert summary.updated == 0
         assert summary.skipped == 0
         assert summary.failed == 0
@@ -251,7 +251,7 @@ class TestIngestRelationshipsCounting:
         """Dry run with symmetric relationship where reverse edge exists.
 
         skip_existing=True is used so that existing_relationships is fetched
-        for the dry run, allowing accurate reverse-edge detection.
+        for the dry run. Only the forward edge is counted; no reverse edge is created.
         """
         relationships = [
             {
@@ -280,7 +280,7 @@ class TestIngestRelationshipsCounting:
             )
 
         assert summary.ingested == 1
-        assert summary.updated == 1
+        assert summary.updated == 0
         assert summary.skipped == 0
         assert summary.failed == 0
 
@@ -346,10 +346,10 @@ class TestIngestRelationshipsCounting:
                 graph_connection=mock_graph,
             )
 
-        assert summary.ingested == 3
+        assert summary.ingested == 2
         assert summary.updated == 0
         assert summary.failed == 0
-        assert mock_graph.fetch_all.call_count == 3
+        assert mock_graph.fetch_all.call_count == 2
 
     def test_failed_lookup_does_not_count(self, dataset_refs):
         """Unresolved references count as failed, not ingested."""
@@ -718,7 +718,7 @@ class TestRelationshipEdgeLabels:
         assert params["properties"]["category"] == "ANALOGICAL"
 
     def test_symmetric_relationship_uses_canonical_types(self, mock_graph, dataset_refs):
-        """Symmetric relationships use canonical edge labels for both directions."""
+        """Symmetric relationships use canonical edge labels for the single stored edge."""
         relationships = [
             {
                 "source": "entity_a",
@@ -741,8 +741,8 @@ class TestRelationshipEdgeLabels:
                 graph_connection=mock_graph,
             )
 
-        assert summary.ingested == 2
-        assert mock_graph.fetch_all.call_count == 2
-        for call in mock_graph.fetch_all.call_args_list:
-            cypher = call[0][0]
-            assert "-[r:`ANALOGICAL` {" in cypher
+        assert summary.ingested == 1
+        assert mock_graph.fetch_all.call_count == 1
+        args, _kwargs = mock_graph.fetch_all.call_args
+        cypher = args[0]
+        assert "-[r:`ANALOGICAL` {" in cypher

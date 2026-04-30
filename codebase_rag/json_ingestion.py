@@ -1843,18 +1843,10 @@ def ingest_relationships(
             continue
 
         if dry_run:
-            is_symmetric = bool(relationship.get("symmetric"))
-            reverse_key = (target_unique_id, rel_type, source_unique_id)
-            reverse_exists = reverse_key in existing_relationships if existing_relationships else False
             if exists:
                 summary.matched += 1
             else:
                 summary.created += 1
-            if is_symmetric and source_unique_id != target_unique_id:
-                if reverse_exists:
-                    summary.matched += 1
-                else:
-                    summary.created += 1
             continue
 
         if graph_connection is None:
@@ -1898,33 +1890,6 @@ def ingest_relationships(
             else:
                 summary.failed += 1
 
-            is_symmetric = rel_props.get("is_symmetric")
-            if is_symmetric and source_unique_id != target_unique_id and forward_success:
-                reverse_result = graph_connection.fetch_all(
-                    f"""
-                    MATCH (a:JsonEntity {{unique_id: $target_id, dataset_id: $dataset_id}}),
-                          (b:JsonEntity {{unique_id: $source_id, dataset_id: $dataset_id}})
-                    MERGE (a)-[r:`{_escape_identifier(rel_type)}` {{dataset_id: $dataset_id}}]->(b)
-                    SET r += $properties
-                    RETURN id(r) AS relationship_id
-                    """,
-                    {
-                        "dataset_id": dataset_id,
-                        "target_id": target_unique_id,
-                        "source_id": source_unique_id,
-                        "properties": rel_props,
-                    },
-                )
-                reverse_success, _ = _check_merge_success(reverse_result)
-                reverse_key = (target_unique_id, rel_type, source_unique_id)
-                if reverse_success:
-                    if reverse_key in existing_relationships or reverse_key in newly_created_keys:
-                        summary.matched += 1
-                    else:
-                        summary.created += 1
-                        newly_created_keys.add(reverse_key)
-                else:
-                    summary.failed += 1
         except Exception as exc:
             summary.failed += 1
             summary.errors.append(

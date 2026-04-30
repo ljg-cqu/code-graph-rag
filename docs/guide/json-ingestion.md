@@ -194,7 +194,7 @@ Relationships support rich metadata for precise semantic queries and trust scori
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `symmetric` | `boolean` | When `true`, a bidirectional edge is created automatically (e.g., `contrasts_with`) |
+| `symmetric` | `boolean` | When `true`, the relationship is treated as symmetric and traversable in both directions (e.g., `contrasts_with`). A single edge is stored with `is_symmetric: true` |
 | `inferred` | `boolean` | When `true`, the relationship was inferred rather than explicitly stated |
 | `explanation` | `string` | Natural language description of why the relationship exists |
 

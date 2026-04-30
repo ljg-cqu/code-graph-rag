@@ -1494,11 +1494,12 @@ ENTITY_SUBTYPE_REGISTRY: dict[str, str] = {
     "Brand": "ABSTRACT_CONCEPT",
     "Moat": "ABSTRACT_CONCEPT",
 
-    # 📏 Property/Attribute — Pedagogical & Cognitive (16)
+    # 📏 Property/Attribute — Pedagogical & Cognitive (18)
     "Cognitive Capacity": "PROPERTY_ATTRIBUTE",
     "Cognitive Condition": "PROPERTY_ATTRIBUTE",
     "Cognitive Constraint": "PROPERTY_ATTRIBUTE",
     "Cognitive Limitation": "PROPERTY_ATTRIBUTE",
+    "Cognitive Mechanism": "PROPERTY_ATTRIBUTE",
     "Cognitive Phenomenon": "EVENT_PROCESS",
     "Cognitive Skill": "PROPERTY_ATTRIBUTE",
     "Cognitive State": "PROPERTY_ATTRIBUTE",
@@ -1507,19 +1508,19 @@ ENTITY_SUBTYPE_REGISTRY: dict[str, str] = {
     "Educational Metric": "PROPERTY_ATTRIBUTE",
     "Evaluative Criteria": "PROPERTY_ATTRIBUTE",
     "Evaluative Measure": "PROPERTY_ATTRIBUTE",
+    "Framework Component": "PROPERTY_ATTRIBUTE",
     "Knowledge Classification": "PROPERTY_ATTRIBUTE",
     "Performance Metric": "PROPERTY_ATTRIBUTE",
     "Quality Benchmark": "PROPERTY_ATTRIBUTE",
     "Quantitative Threshold": "PROPERTY_ATTRIBUTE",
 
-    # 🏗️ System/Structure — Pedagogical & Cognitive (15)
+    # 🏗️ System/Structure — Pedagogical & Cognitive (14)
     "AI System": "SYSTEM_STRUCTURE",
     "Cognitive Architecture": "SYSTEM_STRUCTURE",
     "Cognitive Framework": "SYSTEM_STRUCTURE",
     "Cognitive Model": "SYSTEM_STRUCTURE",
     "Cognitive Subsystem": "SYSTEM_STRUCTURE",
     "Cognitive System": "SYSTEM_STRUCTURE",
-    "Conceptual Framework": "SYSTEM_STRUCTURE",
     "Decision Framework": "SYSTEM_STRUCTURE",
     "Educational Framework": "SYSTEM_STRUCTURE",
     "Educational Organization": "SYSTEM_STRUCTURE",
@@ -1529,11 +1530,7 @@ ENTITY_SUBTYPE_REGISTRY: dict[str, str] = {
     "Research Institution": "SYSTEM_STRUCTURE",
     "Technological Influence": "SYSTEM_STRUCTURE",
 
-    # 🏗️ System/Structure — Cognitive (1)
-    "Cognitive Mechanism": "SYSTEM_STRUCTURE",
-
-    # 📨 Information/Expression — Framework Components & Tools (2)
-    "Framework Component": "SYSTEM_STRUCTURE",
+    # 🏗️ System/Structure — Framework Components & Tools (1)
     "Technology Tool": "SYSTEM_STRUCTURE",
 
     # ⏱️ Event/Process — Pedagogical & Cognitive (13)
@@ -1567,8 +1564,9 @@ ENTITY_SUBTYPE_REGISTRY: dict[str, str] = {
     "Research Organization": "AGENT_ROLE",
     "Researcher": "AGENT_ROLE",
 
-    # 💡 Abstract Concept — Pedagogical & Cognitive (5)
+    # 💡 Abstract Concept — Pedagogical & Cognitive (6)
     "Capability": "ABSTRACT_CONCEPT",
+    "Conceptual Framework": "ABSTRACT_CONCEPT",
     "Foundational Concept": "ABSTRACT_CONCEPT",
     "Psychological Theory": "ABSTRACT_CONCEPT",
     "Mental Model": "ABSTRACT_CONCEPT",
@@ -1598,12 +1596,12 @@ ENTITY_SUBTYPE_REGISTRY: dict[str, str] = {
     "ProgressionStage": "EVENT_PROCESS",
 
     # 📏 Property/Attribute
+    "FrameworkComponent": "PROPERTY_ATTRIBUTE",
     "SafetyBoundary": "PROPERTY_ATTRIBUTE",
 
     # 📨 Information Expression
     "GovernanceRule": "INFORMATION_EXPRESSION",
     "Reference": "INFORMATION_EXPRESSION",
-    "FrameworkComponent": "SYSTEM_STRUCTURE",
 
     # 🧱 Concrete Entity
     "Tool": "CONCRETE_ENTITY",
