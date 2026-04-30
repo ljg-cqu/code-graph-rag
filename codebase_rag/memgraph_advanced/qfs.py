@@ -57,6 +57,10 @@ class CommunityQFS:
             "procedure" in message and "not found" in message
         )
 
+    @staticmethod
+    def _is_no_communities_error(error: Exception) -> bool:
+        return "no communities detected" in str(error).lower()
+
     def __init__(self, ingestor: QueryProtocol | None = None):
         self._ingestor = ingestor
         self.provider = get_provider_from_config(settings.active_orchestrator_config)
@@ -134,6 +138,11 @@ class CommunityQFS:
                 if self._is_missing_procedure_error(exc):
                     logger.info(
                         "Skipping community summaries (community detection is not supported in your Memgraph edition)"
+                    )
+                    return []
+                if self._is_no_communities_error(exc):
+                    logger.info(
+                        "Skipping community summaries (no communities detected)"
                     )
                     return []
                 raise

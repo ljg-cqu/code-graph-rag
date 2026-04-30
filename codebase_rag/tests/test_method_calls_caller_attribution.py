@@ -27,14 +27,6 @@ def _get_function_caller_calls(mock_ingestor: MagicMock) -> list:
     ]
 
 
-def _get_module_caller_calls(mock_ingestor: MagicMock) -> list:
-    return [
-        c
-        for c in get_relationships(mock_ingestor, cs.RelationshipType.CALLS)
-        if c.args[0][0] == cs.NodeLabel.MODULE
-    ]
-
-
 def _caller_qn(call: MagicMock) -> str:
     return call.args[0][2]
 

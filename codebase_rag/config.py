@@ -492,6 +492,26 @@ class AppConfig(BaseSettings):
     ALGORITHM_ENABLE_COMMUNITY_DETECTION: bool = True
     ALGORITHM_COMMUNITY_ALGORITHM: str = "leiden"
 
+    # Docstring Inference Configuration
+    DOCSTRING_INFERENCE_ENABLED: bool = Field(
+        default=False,
+        validation_alias="CGR_DOCSTRING_INFERENCE_ENABLED",
+    )
+    DOCSTRING_INFERENCE_BATCH_SIZE: int = Field(
+        default=50, gt=0,
+        validation_alias="CGR_DOCSTRING_INFERENCE_BATCH_SIZE",
+    )
+    DOCSTRING_INFERENCE_MAX_PER_RUN: int = Field(
+        default=500, gt=0,
+        validation_alias="CGR_DOCSTRING_INFERENCE_MAX_PER_RUN",
+    )
+    DOCSTRING_INFERENCE_PRIORITY: Literal[
+        "high-pagerank", "alphabetical"
+    ] = Field(
+        default="high-pagerank",
+        validation_alias="CGR_DOCSTRING_INFERENCE_PRIORITY",
+    )
+
     # Unified vector settings
     VECTOR_SEARCH_TOP_K: int = 5
     VECTOR_EMBEDDING_BATCH_SIZE: int = 50

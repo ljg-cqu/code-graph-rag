@@ -79,7 +79,6 @@ class CallProcessor:
 
             self._process_calls_in_functions(root_node, module_qn, language, queries)
             self._process_calls_in_classes(root_node, module_qn, language, queries)
-            self._process_module_level_calls(root_node, module_qn, language, queries)
 
         except Exception as e:
             logger.error(ls.CALL_PROCESSING_FAILED, path=file_path, error=e)
@@ -200,17 +199,6 @@ class CallProcessor:
                 self._process_methods_in_class(
                     body_node, class_qn, module_qn, language, queries
                 )
-
-    def _process_module_level_calls(
-        self,
-        root_node: Node,
-        module_qn: str,
-        language: cs.SupportedLanguage,
-        queries: dict[cs.SupportedLanguage, LanguageQueries],
-    ) -> None:
-        self._ingest_function_calls(
-            root_node, module_qn, cs.NodeLabel.MODULE, module_qn, language, queries
-        )
 
     def _get_call_target_name(self, call_node: Node) -> str | None:
         if func_child := call_node.child_by_field_name(cs.TS_FIELD_FUNCTION):

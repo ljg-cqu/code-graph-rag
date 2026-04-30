@@ -886,3 +886,17 @@ NO_RELEVANT_FILES = (
     "No relevant files found for query mode {mode}. "
     "Consider switching query mode or indexing the repository."
 )
+
+# (H) Docstring inference logs
+DOCSTRING_INFERENCE_START = "Starting docstring inference for {count} functions"
+DOCSTRING_INFERENCE_FUNCTION = "Inferring docstring for {name} ({qn})"
+DOCSTRING_INFERENCE_SUCCESS = "Generated docstring for {name}"
+DOCSTRING_INFERENCE_SOURCE_ERROR = "Failed to read source for {name}: {error}"
+DOCSTRING_INFERENCE_LLM_ERROR = "LLM error for {name}: {error}"
+DOCSTRING_INFERENCE_QUOTA_EXHAUSTED = "Quota exhausted for {provider}, stopping inference"
+DOCSTRING_INFERENCE_BATCH_COMPLETE = (
+    "Docstring inference batch complete: {succeeded} succeeded, {failed} failed"
+)
+DOCSTRING_INFERENCE_COMPLETE = (
+    "Docstring inference complete: {processed} processed, {succeeded} succeeded, {failed} failed"
+)

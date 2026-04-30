@@ -2189,7 +2189,8 @@ def extract_concepts(
         cgr extract-concepts --workspace myproj # Use specific workspace
         cgr extract-concepts --retry-dlq        # Retry DLQ context-overflow chunks
     """
-    from .document.concept_extraction import _load_learned_verbs
+    from pathlib import Path
+
     from .document.concept_runner import ConceptExtractionRunner
 
     target_repo_path = repo_path or settings.TARGET_REPO_PATH
@@ -2202,7 +2203,6 @@ def extract_concepts(
 
     if promote_learned_verbs:
         import json
-        from pathlib import Path
 
         from codebase_rag.document.concept_extraction import _learned_verbs_path
 
@@ -2443,6 +2443,91 @@ def delete_dataset_command(
     except Exception as e:
         app_context.console.print(style(f"Delete dataset failed: {e}", cs.Color.RED))
         logger.exception("Delete dataset failed")
+        raise typer.Exit(1) from e
+
+
+@app.command(
+    name=ch.CLICommandName.INFER_DOCSTRINGS,
+    help=ch.CMD_INFER_DOCSTRINGS,
+)
+def infer_docstrings_command(
+    batch_size: int = typer.Option(
+        50, "--batch-size", min=1, help="Number of functions to process per batch."
+    ),
+    limit: int = typer.Option(
+        500,
+        "--limit",
+        min=1,
+        help="Maximum number of functions to process in this run.",
+    ),
+    priority: str = typer.Option(
+        "high-pagerank",
+        "--priority",
+        help="Priority ordering: high-pagerank (default) or alphabetical.",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Show count without making changes."
+    ),
+) -> None:
+    """Infer docstrings for functions lacking them."""
+    from .services.docstring_inference import DocstringInferer
+
+    if priority not in {"high-pagerank", "alphabetical"}:
+        _error(f"Invalid priority '{priority}'. Use 'high-pagerank' or 'alphabetical'.")
+        raise typer.Exit(1)
+    typed_priority: Literal["high-pagerank", "alphabetical"] = priority  # type: ignore[assignment]
+
+    if dry_run:
+        from .services.docstring_inference import _build_functions_query
+        from .services.graph_service import MemgraphIngestor
+
+        query = _build_functions_query(typed_priority)
+        try:
+            with MemgraphIngestor(
+                host=settings.MEMGRAPH_HOST,
+                port=settings.MEMGRAPH_PORT,
+                username=settings.MEMGRAPH_USERNAME,
+                password=settings.MEMGRAPH_PASSWORD,
+            ) as ingestor:
+                records = ingestor.fetch_all(query, {"limit": limit})
+                _info(
+                    style(
+                        f"Would process {len(records)} functions without docstrings",
+                        cs.Color.CYAN,
+                    )
+                )
+        except Exception as e:
+            _error(f"Failed to query functions: {e}")
+            raise typer.Exit(1) from e
+        return
+
+    _info(style("Starting docstring inference...", cs.Color.CYAN))
+    try:
+        result = asyncio.run(
+            DocstringInferer().infer_for_functions(
+                limit=limit,
+                batch_size=batch_size,
+                priority=typed_priority,
+            )
+        )
+        _success(
+            f"Docstring inference complete: {result.processed} processed, "
+            f"{result.succeeded} succeeded, {result.failed} failed"
+        )
+        if result.errors:
+            _warning(f"Encountered {len(result.errors)} errors:")
+            for error in result.errors[:10]:
+                app_context.console.print(style(f"  - {error}", cs.Color.RED))
+            if len(result.errors) > 10:
+                app_context.console.print(
+                    style(
+                        f"  ... and {len(result.errors) - 10} more errors",
+                        cs.Color.RED,
+                    )
+                )
+    except Exception as e:
+        _error(f"Docstring inference failed: {e}")
+        logger.exception("Docstring inference failed")
         raise typer.Exit(1) from e
 
 

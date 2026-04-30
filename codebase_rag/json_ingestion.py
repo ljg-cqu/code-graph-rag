@@ -1006,7 +1006,7 @@ def _load_json_files_with_errors(
                     json_files.append((path, data))
                 elif guidance:
                     skip_count += 1
-                    logger.debug(f"Skipping {path}: {guidance}")
+                    logger.info(f"Skipping {path}: {guidance}")
         except json.JSONDecodeError as exc:
             skip_count += 1
             logger.debug(cs.JSON_INGEST_SKIP_PARSE_ERROR.format(path=path, error=exc))
@@ -1053,7 +1053,7 @@ def _load_json_files_with_errors(
             purpose_counts: dict[str, int] = {}
             for fp, guidance, purpose in skipped_files_with_guidance:
                 purpose_counts[purpose.value] = purpose_counts.get(purpose.value, 0) + 1
-                logger.debug(f"Skipping {fp}: {guidance}")
+                logger.info(f"Skipping {fp}: {guidance}")
 
             if purpose_counts:
                 summary = ", ".join(f"{count} {purpose.replace('_', ' ')}"

@@ -24,6 +24,10 @@ class DynamicGraphAlgorithms:
             "procedure" in message and "not found" in message
         )
 
+    @staticmethod
+    def _is_no_communities_error(error: Exception) -> bool:
+        return "no communities detected" in str(error).lower()
+
     def __init__(
         self,
         use_dynamic: bool | None = None,
@@ -226,5 +230,14 @@ class DynamicGraphAlgorithms:
                         "updated_communities": 0,
                         "total_nodes_updated": 0,
                         "method": "unavailable",
+                    }
+                if self._is_no_communities_error(exc):
+                    logger.info(
+                        "No communities detected during recalculation"
+                    )
+                    return {
+                        "updated_communities": 0,
+                        "total_nodes_updated": 0,
+                        "method": "no_communities",
                     }
                 raise

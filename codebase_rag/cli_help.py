@@ -25,6 +25,8 @@ class CLICommandName(StrEnum):
     DELETE_DATASET = "delete-dataset"
     # Data migration command
     MIGRATE_DATA = "migrate-data"
+    # Docstring inference command
+    INFER_DOCSTRINGS = "infer-docstrings"
 
 
 APP_DESCRIPTION = (
@@ -67,6 +69,10 @@ CMD_DELETE_DATASET = (
     "Delete all nodes, relationships, and vector entries for a specific dataset ID"
 )
 CMD_MIGRATE_DATA = "Run data model migrations for existing graph data"
+CMD_INFER_DOCSTRINGS = (
+    "Infer docstrings for functions lacking them using an LLM. "
+    "Processes most important functions first (by PageRank)."
+)
 
 CMD_LANGUAGE_GROUP = "CLI for managing language grammars"
 CMD_LANGUAGE_ADD = "Add a new language grammar to the project."

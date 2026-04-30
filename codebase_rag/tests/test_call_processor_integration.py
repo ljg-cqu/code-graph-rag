@@ -163,45 +163,6 @@ def process():
         format_calls = [t for t in call_targets if "format_string" in t]
         assert len(format_calls) >= 1
 
-    def test_processes_module_level_calls(
-        self,
-        temp_repo: Path,
-        mock_ingestor: MagicMock,
-        parsers_and_queries: tuple,
-    ) -> None:
-        parsers, queries = parsers_and_queries
-        if cs.SupportedLanguage.PYTHON not in parsers:
-            pytest.skip("Python parser not available")
-
-        test_file = temp_repo / "test_module.py"
-        test_file.write_text(
-            encoding="utf-8",
-            data="""
-def setup():
-    pass
-
-setup()
-""",
-        )
-
-        updater = GraphUpdater(
-            ingestor=mock_ingestor,
-            repo_path=temp_repo,
-            parsers=parsers,
-            queries=queries,
-        )
-        updater.run()
-
-        calls = [
-            c
-            for c in mock_ingestor.ensure_relationship_batch.call_args_list
-            if c.args[1] == cs.RelationshipType.CALLS
-        ]
-
-        caller_types = [c.args[0][0] for c in calls]
-        module_callers = [t for t in caller_types if t == cs.NodeLabel.MODULE]
-        assert len(module_callers) >= 1
-
 
 class TestProcessCallsInFileJavaScript:
     def test_processes_function_calls_js(
@@ -819,43 +780,3 @@ def main():
             if c.args[1] == cs.RelationshipType.CALLS
         ]
         assert len(calls) >= 1
-
-    def test_handles_init_py_module_qn(
-        self,
-        temp_repo: Path,
-        mock_ingestor: MagicMock,
-        parsers_and_queries: tuple,
-    ) -> None:
-        parsers, queries = parsers_and_queries
-        if cs.SupportedLanguage.PYTHON not in parsers:
-            pytest.skip("Python parser not available")
-
-        pkg_dir = temp_repo / "mypackage"
-        pkg_dir.mkdir()
-        (pkg_dir / "__init__.py").write_text(
-            encoding="utf-8",
-            data="""
-def package_func():
-    pass
-
-package_func()
-""",
-        )
-
-        updater = GraphUpdater(
-            ingestor=mock_ingestor,
-            repo_path=temp_repo,
-            parsers=parsers,
-            queries=queries,
-        )
-        updater.run()
-
-        calls = [
-            c
-            for c in mock_ingestor.ensure_relationship_batch.call_args_list
-            if c.args[1] == cs.RelationshipType.CALLS
-        ]
-
-        caller_qns = [c.args[0][2] for c in calls]
-        package_callers = [qn for qn in caller_qns if "mypackage" in qn]
-        assert len(package_callers) >= 1
