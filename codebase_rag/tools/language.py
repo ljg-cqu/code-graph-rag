@@ -332,6 +332,15 @@ def _update_config_file(language_name: str, spec: LanguageSpec) -> bool:
 
 
 def _write_language_config(config_entry: str, language_name: str) -> bool:
+    # Prevent duplicate entries: if language already exists in LANGUAGE_SPECS, skip
+    for existing_spec in LANGUAGE_SPECS.values():
+        if existing_spec.language == language_name:
+            click.echo(
+                f"Note: Language '{language_name}' is already configured in "
+                f"{cs.LANG_CONFIG_FILE}."
+            )
+            return True
+
     config_content = pathlib.Path(cs.LANG_CONFIG_FILE).read_text(encoding="utf-8")
     closing_brace_pos = config_content.rfind("}")
 

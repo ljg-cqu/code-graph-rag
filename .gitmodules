@@ -1,5 +1,6 @@
 [submodule "grammars/tree-sitter-autohotkey"]
 	path = grammars/tree-sitter-autohotkey
 	url = https://github.com/alfredomtx/tree-sitter-autohotkey
-	# Pin to latest stable commit (2024-05-20) to prevent supply chain attacks
-	commit = 7d5e8a71e98b0e4b3c2a1d0f9e8d7c6b5a4f3e2d
+[submodule "grammars/tree-sitter-solidity"]
+	path = grammars/tree-sitter-solidity
+	url = https://github.com/JoranHonig/tree-sitter-solidity
