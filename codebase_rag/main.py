@@ -1120,6 +1120,18 @@ async def _run_agent_response_loop(
                 )
                 deferred_results.approvals.update(approval_results.approvals)
 
+            # Add tool calls to message_history for deferred tool calls.
+            # This ensures tool call IDs are available when deferred_results is passed
+            # back to the agent in the next iteration. Without this, pydantic_ai raises
+            # "Tool call results were provided, but the message history does not contain
+            # any unprocessed tool calls" because it can't find the matching tool call IDs.
+            if response.output.calls:
+                from .compat.pydantic_ai import ModelRequest
+
+                if HAS_PYDANTIC_AI:
+                    for call in response.output.calls:
+                        message_history.append(ModelRequest(parts=[call]))
+
             new_msgs = response.new_messages()
             message_history.extend(new_msgs)
             _update_state_from_tool_returns(new_msgs, state)
