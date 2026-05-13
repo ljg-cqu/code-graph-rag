@@ -687,7 +687,7 @@ class SubAgentOrchestrator:
         result_aggregator.set_total_execution_time(time.time() - start_time)
         self.running.set(False)
         logger.info(
-            f"Sequential execution completed: {result_aggregator.completed_count}/{len(subtasks)} succeeded"
+            f"Sequential execution completed: {result_aggregator.metadata['completed_subtasks']}/{len(subtasks)} succeeded"
         )
         return result_aggregator
 
